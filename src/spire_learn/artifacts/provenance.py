@@ -9,19 +9,19 @@ def _git(root: Path) -> dict[str, object]:
     root = Path(root).resolve()
     try:
         top = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            ["git", "--no-optional-locks", "-C", str(root), "rev-parse", "--show-toplevel"],
             check=True, capture_output=True, text=True,
         ).stdout.strip()
         if Path(top).resolve() != root:
             return {"revision": None, "head_state": "unavailable", "dirty": None}
         head = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+            ["git", "--no-optional-locks", "-C", str(root), "rev-parse", "--verify", "HEAD"],
             capture_output=True, text=True,
         )
         if head.returncode:
             return {"revision": None, "head_state": "unborn", "dirty": None}
         status = subprocess.run(
-            ["git", "-C", str(root), "status", "--porcelain"],
+            ["git", "--no-optional-locks", "-C", str(root), "status", "--porcelain"],
             check=True, capture_output=True, text=True,
         ).stdout
         return {"revision": head.stdout.strip(), "head_state": "present", "dirty": bool(status)}

@@ -41,20 +41,7 @@ class RunWriter:
         root.mkdir(parents=True, exist_ok=True)
         run_dir = root / run_id
         run_dir.mkdir()
-        try:
-            return cls(run_dir)
-        except BaseException:
-            # Only remove files created by this failed constructor; never touch an existing run.
-            for name in ("episodes.jsonl", "metrics.jsonl", "manifest_updates.jsonl"):
-                try:
-                    (run_dir / name).unlink()
-                except FileNotFoundError:
-                    pass
-            try:
-                run_dir.rmdir()
-            except OSError:
-                pass
-            raise
+        return cls(run_dir)
 
     @staticmethod
     def _write_json(path: Path, value: object) -> None:

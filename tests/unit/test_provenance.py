@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from spire_learn.artifacts.provenance import collect_provenance
 
@@ -19,6 +20,23 @@ class ProvenanceTests(unittest.TestCase):
             self.assertEqual(value["learner"]["head_state"], "unborn")
             self.assertIsNone(value["gym_checkout"])
             self.assertIsNone(value["native_build_info"])
+
+    def test_git_subprocesses_disable_optional_locks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "learner"
+            root.mkdir()
+            subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+            real_run = subprocess.run
+            commands = []
+
+            def inspect_run(argv, *args, **kwargs):
+                commands.append(argv)
+                return real_run(argv, *args, **kwargs)
+
+            with patch("spire_learn.artifacts.provenance.subprocess.run", side_effect=inspect_run):
+                collect_provenance(learner_root=root, gym_checkout=None)
+            self.assertGreaterEqual(len(commands), 2)
+            self.assertTrue(all(command[:2] == ["git", "--no-optional-locks"] for command in commands))
 
     def test_non_repository_does_not_borrow_parent_repository(self):
         with tempfile.TemporaryDirectory() as temporary:

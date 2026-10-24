@@ -30,8 +30,6 @@ def to_json_value(value: object) -> object:
         return {name: to_json_value(getattr(value, name)) for name in (
             "execution", "status", "started", "outcome", "steps", "reward_sum", "stop_reason",
             "final_resources", "primary_failure", "secondary_errors", "observed_descriptor", "native_build_info")}
-    if isinstance(value, Transition):
-        return transition_to_json(value)
     if isinstance(value, Mapping):
         result = {}
         for key, item in value.items():
@@ -50,14 +48,15 @@ def canonical_fingerprint(value: object) -> str:
 
 
 def transition_to_json(transition: Transition) -> dict[str, object]:
-    def observation(value):
-        return to_json_value(value)
-    return {
+    public_value = {
         "schema_id": "spire-learn-transition-v1",
-        "source": observation(transition.source), "action": transition.action, "reward": transition.reward,
+        "source": transition.source, "action": transition.action, "reward": transition.reward,
         "terminated": transition.terminated, "truncated": transition.truncated,
-        "successor": observation(transition.successor),
-        "replacement": None if transition.replacement is None else observation(transition.replacement),
+        "successor": transition.successor,
+        "replacement": transition.replacement,
         "route": {name: getattr(transition.route, name) for name in (
             "execution_id", "slot", "episode_id", "decision_id", "episode_start")},
     }
+    encoded = to_json_value(public_value)
+    assert isinstance(encoded, dict)
+    return encoded

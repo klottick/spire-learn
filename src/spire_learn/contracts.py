@@ -56,6 +56,9 @@ class Candidate:
     target: int | None
     features: tuple[tuple[str, int], ...]
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "features", tuple(tuple(feature) for feature in self.features))
+
 
 @dataclass(frozen=True)
 class PublicDecision:
@@ -64,6 +67,11 @@ class PublicDecision:
     mask: tuple[bool, ...]
     schema_fingerprint: str
     action_mapping_id: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "observation", frozen_mapping(self.observation))
+        object.__setattr__(self, "candidates", tuple(self.candidates))
+        object.__setattr__(self, "mask", tuple(self.mask))
 
 
 @dataclass(frozen=True)
@@ -105,6 +113,12 @@ class Transition:
     replacement: Observation | None
     state_after_source: object | None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", frozen_mapping(self.source))
+        object.__setattr__(self, "successor", frozen_mapping(self.successor))
+        if self.replacement is not None:
+            object.__setattr__(self, "replacement", frozen_mapping(self.replacement))
+
 
 @dataclass(frozen=True)
 class CaseExecution:
@@ -141,3 +155,34 @@ class CaseResult:
     secondary_errors: tuple[Failure, ...] = ()
     observed_descriptor: Mapping[str, object] | None = None
     native_build_info: Mapping[str, object] | None = None
+
+    def __post_init__(self) -> None:
+        resources = dict(self.final_resources)
+        if any(not isinstance(key, str) or (value is not None and type(value) is not int) for key, value in resources.items()):
+            raise ContractError("final_resources must map strings to integers or None")
+        object.__setattr__(self, "final_resources", MappingProxyType(resources))
+        object.__setattr__(self, "secondary_errors", tuple(self.secondary_errors))
+        if self.observed_descriptor is not None:
+            object.__setattr__(self, "observed_descriptor", _freeze_json_mapping(self.observed_descriptor))
+        if self.native_build_info is not None:
+            object.__setattr__(self, "native_build_info", _freeze_json_mapping(self.native_build_info))
+
+
+def _freeze_json(value: object) -> object:
+    if value is None or type(value) in (str, int, bool):
+        return value
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ContractError("metadata floats must be finite")
+        return value
+    if isinstance(value, Mapping):
+        return _freeze_json_mapping(value)
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_json(item) for item in value)
+    raise ContractError("metadata must contain JSON-compatible values")
+
+
+def _freeze_json_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
+    if any(not isinstance(key, str) for key in value):
+        raise ContractError("metadata mapping keys must be strings")
+    return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})

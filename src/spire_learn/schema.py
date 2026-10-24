@@ -10,6 +10,13 @@ from types import MappingProxyType
 from .contracts import ArrayValue, Candidate, ContractError, Observation
 
 
+_NUMERIC_DTYPES = frozenset({
+    "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64",
+    "float16", "float32", "float64",
+})
+_ACTION_TENSOR_KEYS = ("action_mask", "action_kind", "action_source", "action_target", "action_features")
+
+
 @dataclass(frozen=True)
 class TensorSpec:
     key: str
@@ -20,6 +27,11 @@ class TensorSpec:
     category: str | None
     mask: str | None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "shape", tuple(self.shape))
+        object.__setattr__(self, "fields", tuple(self.fields))
+        object.__setattr__(self, "axes", tuple(self.axes))
+
 
 @dataclass(frozen=True)
 class ObservationSchema:
@@ -29,6 +41,10 @@ class ObservationSchema:
     action_count: int
     tensors: tuple[TensorSpec, ...]
     vocabularies: Mapping[str, tuple[str, ...]]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "tensors", tuple(self.tensors))
+        object.__setattr__(self, "vocabularies", MappingProxyType({key: tuple(values) for key, values in self.vocabularies.items()}))
 
 
 def _mapping(value: object, label: str) -> Mapping[str, object]:
@@ -77,12 +93,16 @@ def parse_descriptor(raw: Mapping[str, object], *, allowed_schema_ids: frozenset
             raise ContractError("tensor descriptor is missing required fields")
         key = _string(item.get("key"), "tensor key")
         dtype = _string(item.get("dtype"), f"{key}.dtype")
+        if dtype not in _NUMERIC_DTYPES:
+            raise ContractError(f"{key}.dtype must be a supported numeric dtype")
         shape_raw, fields_raw, axes_raw = item.get("shape"), item.get("fields"), item.get("axes")
         if not isinstance(shape_raw, (list, tuple)) or any(type(d) is not int or d < 0 for d in shape_raw):
             raise ContractError(f"{key}.shape must contain non-negative integer dimensions")
         if not isinstance(fields_raw, (list, tuple)) or any(not isinstance(f, str) or not f for f in fields_raw):
             raise ContractError(f"{key}.fields must contain strings")
-        fields, axes, shape = tuple(fields_raw), tuple(axes_raw) if isinstance(axes_raw, (list, tuple)) else (), tuple(shape_raw)
+        if not isinstance(axes_raw, (list, tuple)):
+            raise ContractError(f"{key}.axes must be a list or tuple")
+        fields, axes, shape = tuple(fields_raw), tuple(axes_raw), tuple(shape_raw)
         if len(set(fields)) != len(fields):
             raise ContractError(f"duplicate field name in tensor {key}")
         if len(axes) != len(shape) or any(not isinstance(axis, str) or not axis for axis in axes):
@@ -104,86 +124,107 @@ def parse_descriptor(raw: Mapping[str, object], *, allowed_schema_ids: frozenset
             raise ContractError(f"duplicate tensor key: {key}")
         keys.add(key)
         tensors.append(TensorSpec(key, dtype, shape, fields, axes, category, mask))
-    if any(t.mask is not None and t.mask not in keys for t in tensors):
-        raise ContractError("tensor mask references must name declared tensors")
+    for tensor in tensors:
+        if tensor.mask is None:
+            continue
+        parts = tensor.mask.split(":")
+        if len(parts) > 2 or not parts[0] or (len(parts) == 2 and not parts[1]):
+            raise ContractError(f"malformed mask reference on {tensor.key}")
+        if parts[0] not in keys:
+            raise ContractError(f"mask reference on {tensor.key} names an unknown tensor")
+        if len(parts) == 2 and parts[1] not in tensor.fields:
+            raise ContractError(f"mask qualifier on {tensor.key} must name one of its fields")
+    _validate_action_descriptors({tensor.key: tensor for tensor in tensors}, action_count)
     return ObservationSchema(schema_id, content_id, fingerprint, action_count, tuple(tensors), MappingProxyType(vocabularies))
 
 
+def _validate_action_descriptors(tensors: Mapping[str, TensorSpec], action_count: int) -> None:
+    missing = set(_ACTION_TENSOR_KEYS).difference(tensors)
+    if missing:
+        raise ContractError(f"descriptor is missing required action tensors: {', '.join(sorted(missing))}")
+    mask, kind, source, target, features = (tensors[key] for key in _ACTION_TENSOR_KEYS)
+    simple = (
+        (mask, "int8", ("candidate",), (), None),
+        (kind, "int64", ("candidate",), (), "action"),
+        (source, "int64", ("candidate",), ("hand_row",), None),
+        (target, "int64", ("candidate",), ("enemy_row",), None),
+    )
+    for spec, dtype, axes, fields, category in simple:
+        if spec.dtype != dtype or spec.shape != (action_count,) or spec.axes != axes or spec.fields != fields or spec.category != category:
+            raise ContractError(f"{spec.key} does not match the required public action tensor contract")
+    if mask.mask is not None:
+        raise ContractError("action_mask must not reference another mask")
+    if kind.mask != "action_mask":
+        raise ContractError("action_kind must reference action_mask")
+    if features.dtype != "int64" or set(features.axes) != {"candidate", "field"} or len(features.axes) != 2:
+        raise ContractError("action_features must use int64 candidate and field axes only")
+    if features.shape[features.axes.index("candidate")] != action_count or features.shape[features.axes.index("field")] != len(features.fields):
+        raise ContractError("action_features shape must match candidate count and named fields")
+    if features.category is not None:
+        raise ContractError("action_features must not declare a category vocabulary")
+
+
 def candidates_for(observation: Observation, schema: ObservationSchema) -> tuple[Candidate, ...]:
-    mask_spec = next((tensor for tensor in schema.tensors if tensor.key == "action_mask"), None)
-    if mask_spec is None:
-        raise ContractError("descriptor has no action_mask tensor")
-    mask_value = observation.get(mask_spec.key)
-    if not isinstance(mask_value, ArrayValue) or len(mask_value.values) != schema.action_count:
+    specs = {tensor.key: tensor for tensor in schema.tensors}
+    _validate_action_descriptors(specs, schema.action_count)
+    values: dict[str, ArrayValue] = {}
+    for key in _ACTION_TENSOR_KEYS:
+        spec = specs[key]
+        value = observation.get(key)
+        if not isinstance(value, ArrayValue) or value.shape != spec.shape or value.dtype != spec.dtype:
+            raise ContractError(f"observation tensor {key} must match descriptor dtype and shape")
+        values[key] = value
+    mask_value = values["action_mask"]
+    if len(mask_value.values) != schema.action_count:
         raise ContractError("action mask width must match action_space.n")
-    if mask_value.shape != mask_spec.shape:
-        raise ContractError("action mask shape differs from descriptor")
     mask: list[bool] = []
     for value in mask_value.values:
         if type(value) not in (int, bool) or value not in (0, 1):
             raise ContractError("action mask values must be binary")
         mask.append(bool(value))
-    tensors: dict[str, ArrayValue] = {}
-    for spec in schema.tensors:
-        value = observation.get(spec.key)
-        if value is None:
-            continue
-        if not isinstance(value, ArrayValue) or value.shape != spec.shape:
-            raise ContractError(f"observation tensor {spec.key} does not match descriptor shape")
-        tensors[spec.key] = value
+    kind_spec, source_spec, target_spec, feature_spec = (specs[key] for key in _ACTION_TENSOR_KEYS[1:])
+    kind_values = values["action_kind"].values
+    source_values = values["action_source"].values
+    target_values = values["action_target"].values
+    feature_values = values["action_features"].values
+    action_vocabulary = schema.vocabularies[kind_spec.category]
     candidates: list[Candidate] = []
-    for spec in schema.tensors:
-        if spec.category is None or "candidate" not in spec.axes or spec.key not in tensors:
+    for index, legal in enumerate(mask):
+        if not legal:
             continue
-        vocab = schema.vocabularies[spec.category]
-        values = tensors[spec.key].values
-        if len(values) != schema.action_count:
-            raise ContractError(f"categorical tensor {spec.key} width must match action count")
-        for index, legal in enumerate(mask):
-            if not legal:
-                continue
-            code = values[index]
-            if type(code) is not int or not 0 <= code < len(vocab):
-                raise ContractError(f"category code out of range in {spec.key}")
-        for index, legal in enumerate(mask):
-            if not legal:
-                continue
-            code = values[index]
-            features: list[tuple[str, int]] = []
-            source = target = None
-            for feature_spec in schema.tensors:
-                feature_value = tensors.get(feature_spec.key)
-                if feature_value is None or "candidate" not in feature_spec.axes:
-                    continue
-                candidate_axis = feature_spec.axes.index("candidate")
-                width = feature_spec.shape[candidate_axis]
-                if width != schema.action_count:
-                    raise ContractError(f"candidate-axis count differs from action count in {feature_spec.key}")
-                for field in feature_spec.fields:
-                    if field in ("source", "target"):
-                        field_index = feature_spec.fields.index(field)
-                        if "field" in feature_spec.axes and "candidate" in feature_spec.axes:
-                            offset = _flat_index(feature_spec.shape, feature_spec.axes, index, field_index)
-                            raw = feature_value.values[offset]
-                            if type(raw) is not int:
-                                raise ContractError(f"{field} must be an integer")
-                            if field == "source": source = raw
-                            else: target = raw
-                    elif field not in ("kind",):
-                        field_index = feature_spec.fields.index(field)
-                        if "field" in feature_spec.axes and "candidate" in feature_spec.axes and feature_spec.shape[feature_spec.axes.index("field")] == len(feature_spec.fields):
-                            raw = feature_value.values[_flat_index(feature_spec.shape, feature_spec.axes, index, field_index)]
-                            if type(raw) is not int:
-                                raise ContractError(f"feature {field} must be an integer")
-                            features.append((field, raw))
-            candidates.append(Candidate(index, vocab[code], source, target, tuple(features)))
-    if not any(t.category is not None and "candidate" in t.axes for t in schema.tensors):
-        raise ContractError("descriptor has no categorical candidate tensor")
+        code = kind_values[index]
+        if type(code) is not int or not 0 <= code < len(action_vocabulary):
+            raise ContractError("action kind code is outside the action vocabulary")
+        kind = action_vocabulary[code]
+        if kind == "padding":
+            raise ContractError("a legal candidate cannot have padding kind")
+        source = _optional_row(source_values[index], source_spec.key)
+        target = _optional_row(target_values[index], target_spec.key)
+        features = tuple(
+            (field, _feature_value(feature_values, feature_spec, index, field_index))
+            for field_index, field in enumerate(feature_spec.fields)
+        )
+        candidates.append(Candidate(index, kind, source, target, features))
     return tuple(candidates)
+
+
+def _optional_row(value: int | float, key: str) -> int | None:
+    if type(value) is not int or value < -1:
+        raise ContractError(f"{key} row index must be -1 or a non-negative integer")
+    return None if value == -1 else value
+
+
+def _feature_value(values: tuple[int | float, ...], spec: TensorSpec, candidate: int, field: int) -> int:
+    raw = values[_flat_index(spec.shape, spec.axes, candidate, field)]
+    if type(raw) is not int:
+        raise ContractError(f"action feature {spec.fields[field]} must be an integer")
+    return raw
 
 
 def _flat_index(shape: tuple[int, ...], axes: tuple[str, ...], candidate: int, field: int) -> int:
     """Return the row-major offset for named candidate/field coordinates."""
+    if set(axes) != {"candidate", "field"} or len(axes) != 2:
+        raise ContractError("cannot interpret unsupported candidate tensor axes")
     coordinates = [0] * len(shape)
     coordinates[axes.index("candidate")] = candidate
     coordinates[axes.index("field")] = field
@@ -199,12 +240,3 @@ class EnvironmentContract:
     content_ids: frozenset[str]
     reward_contract_id: str
     reward_evidence: str
-
-
-def fixture_contract() -> EnvironmentContract:
-    return EnvironmentContract(
-        frozenset({"spire-learn-fixture-v1"}),
-        frozenset({"spire-learn-fixture-content-v1"}),
-        "fixture-protocol-v1",
-        "Authored protocol fixtures only; not evidence of game reward semantics.",
-    )

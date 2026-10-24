@@ -1,7 +1,8 @@
 import unittest
 
-from tests.support import FakeArray, FakeClock, ScriptedAgent, ScriptedEnv, case_execution, case_result, public_decision
+from tests.support import FakeArray, FakeClock, ScriptedAgent, ScriptedEnv, case_execution, case_result, observation, public_decision, tiny_descriptor
 from spire_learn.contracts import Choice
+from spire_learn.schema import candidates_for, parse_descriptor
 
 
 class SupportTests(unittest.TestCase):
@@ -28,3 +29,9 @@ class SupportTests(unittest.TestCase):
         self.assertEqual(agent.act(public_decision(), None), Choice(1))
         self.assertEqual(case_execution().expected_schema_id, "spire-learn-fixture-v1")
         self.assertEqual(case_result().outcome, "victory")
+
+    def test_observation_action_metadata_widths_follow_mask(self):
+        obs = observation(mask=(1,), kinds=(2,))
+        schema = parse_descriptor(tiny_descriptor(action_count=1), allowed_schema_ids=frozenset({"spire-learn-fixture-v1"}))
+        self.assertEqual(len(obs["action_features"].values), 3)
+        self.assertEqual([candidate.kind for candidate in candidates_for(obs, schema)], ["play_card"])

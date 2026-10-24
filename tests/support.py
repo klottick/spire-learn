@@ -19,7 +19,9 @@ def tiny_descriptor(*, action_count: int = 3) -> dict[str, object]:
         "tensors": [
             {"key": "action_mask", "dtype": "int8", "shape": [action_count], "fields": [], "axes": ["candidate"], "category": None, "mask": None},
             {"key": "action_kind", "dtype": "int64", "shape": [action_count], "fields": [], "axes": ["candidate"], "category": "action", "mask": "action_mask"},
-            {"key": "action_features", "dtype": "int64", "shape": [action_count, 1], "fields": ["hp"], "axes": ["candidate", "field"], "category": None, "mask": None},
+            {"key": "action_source", "dtype": "int64", "shape": [action_count], "fields": ["hand_row"], "axes": ["candidate"], "category": None, "mask": None},
+            {"key": "action_target", "dtype": "int64", "shape": [action_count], "fields": ["enemy_row"], "axes": ["candidate"], "category": None, "mask": None},
+            {"key": "action_features", "dtype": "int64", "shape": [action_count, 3], "fields": ["printed_damage", "printed_block", "cost"], "axes": ["candidate", "field"], "category": None, "mask": None},
             {"key": "player", "dtype": "int64", "shape": [], "fields": ["hp"], "axes": [], "category": None, "mask": None},
         ],
         "vocabularies": {"action": ["padding", "end_turn", "play_card"], "outcome": ["unknown", "victory", "death"]},
@@ -29,12 +31,32 @@ def tiny_descriptor(*, action_count: int = 3) -> dict[str, object]:
 def observation(*, mask: tuple[int, ...] = (1, 1, 0), kinds: tuple[int, ...] = (1, 2, 0), hp: int = 10) -> Observation:
     if len(mask) != len(kinds):
         raise ValueError("mask and kinds widths must match")
+    sources = tuple(0 if index == 1 else -1 for index in range(len(mask)))
+    targets = tuple(0 if index == 1 else -1 for index in range(len(mask)))
+    feature_values = tuple(
+        value
+        for index in range(len(mask))
+        for value in ((7, 0, 1) if index == 1 else (0, 0, 0))
+    )
     return frozen_mapping({
         "action_mask": ArrayValue("int8", (len(mask),), mask),
         "action_kind": ArrayValue("int64", (len(kinds),), kinds),
-        "action_features": ArrayValue("int64", (len(mask), 1), (hp,) * len(mask)),
+        "action_source": ArrayValue("int64", (len(mask),), sources),
+        "action_target": ArrayValue("int64", (len(mask),), targets),
+        "action_features": ArrayValue("int64", (len(mask), 3), feature_values),
         "player": ArrayValue("int64", (), (hp,)),
     })
+
+
+def fixture_contract():
+    from spire_learn.schema import EnvironmentContract
+
+    return EnvironmentContract(
+        frozenset({"spire-learn-fixture-v1"}),
+        frozenset({"spire-learn-fixture-content-v1"}),
+        "fixture-protocol-v1",
+        "Authored protocol fixtures only; not evidence of game reward semantics.",
+    )
 
 
 @dataclass(frozen=True)

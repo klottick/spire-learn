@@ -45,3 +45,6 @@ events.out.tfevents.*
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# Local Beads tracker state
+/.beads/

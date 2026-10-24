@@ -1,0 +1,34 @@
+{
+  "copied_on": "2026-10-23",
+  "source_repository": "https://github.com/klottick/spire-gym",
+  "source_checkout": "/home/klottick/repos/spire-lab",
+  "source_head": "61c1d042b454a82addafa8ad08b46a939d5704bc",
+  "source_checkout_dirty": true,
+  "note": "Exact working-tree copies; hashes identify copied bytes, not necessarily committed HEAD content. No originals modified. Not a learner spec or a fresh gym verification.",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "04fb7812e6a475faf88281570adc0fe4f6789783090fd1e9d737b0a4da68e40a"
+    },
+    {
+      "path": "docs/combat-environments.md",
+      "sha256": "f0fa7d722d82065d6c87b7bdcebc8c52ffce116000adeb312b337f4044e92d1c"
+    },
+    {
+      "path": "docs/scope.md",
+      "sha256": "d2e4a66b745c4d643fb875124e3ec0eb2f6727fea6ee73dcc1e965226cf6da73"
+    },
+    {
+      "path": "docs/intentional-deviations.md",
+      "sha256": "355db1b21ca441366e1b6698a2279d83252a39a26773fdbadf67e24b2a8b4618"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-10-11-spire-lab-ml-first-design.md",
+      "sha256": "df187244b32c02105582410ae7336d7383ace89fdb6160c8645185d4c322e037"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-10-16-project-randomness-design.md",
+      "sha256": "0b7d82eed8d088cff301a4249ca8c120fbc6dd2ce73fd04593269e86bbe3358d"
+    }
+  ]
+}

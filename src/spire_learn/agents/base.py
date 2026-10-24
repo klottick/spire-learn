@@ -17,6 +17,11 @@ def _legal_indices(public: PublicDecision) -> tuple[int, ...]:
     if any(type(legal) is not bool for legal in public.mask):
         raise ContractError("decision mask entries must be booleans")
     indices = tuple(index for index, legal in enumerate(public.mask) if legal)
+    for candidate in public.candidates:
+        if type(candidate.index) is not int or not 0 <= candidate.index < len(public.mask):
+            raise ContractError("candidate index must be an in-range integer")
+        if candidate.kind == "padding":
+            raise ContractError("padding cannot be a decision candidate")
     candidate_indices = tuple(candidate.index for candidate in public.candidates)
     if (len(set(candidate_indices)) != len(candidate_indices)
             or set(candidate_indices) != set(indices)):

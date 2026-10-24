@@ -1,5 +1,6 @@
 import random
 import unittest
+from dataclasses import replace
 
 from spire_learn.agents.base import resolve_decision, validate_result
 from spire_learn.agents.baselines import PlayFirstPolicy, RandomPolicy
@@ -43,6 +44,36 @@ class BaselineTests(unittest.TestCase):
         # must still fail based on decision identity, not merely action legality.
         with self.assertRaises(ContractError):
             validate_result(req, DecisionResult("older-turn", Choice(0)))
+
+    def test_true_mask_padding_candidate_is_rejected_at_every_boundary(self):
+        req = request()
+        padding = replace(req.public.candidates[0], kind="padding")
+        invalid_public = replace(req.public, candidates=(padding, req.public.candidates[1]))
+        invalid_request = replace(req, public=invalid_public)
+
+        for policy in (RandomPolicy(19), PlayFirstPolicy()):
+            with self.subTest(policy=type(policy).__name__), self.assertRaises(ContractError):
+                policy.act(invalid_public, None)
+        with self.assertRaises(ContractError):
+            validate_result(invalid_request, DecisionResult("decision", Choice(0)))
+
+    def test_candidate_indices_must_be_exact_integers(self):
+        public = public_decision(mask=(1, 1, 0), kinds=(1, 2, 0))
+        for malformed_index in (True, 1.0):
+            candidate = replace(public.candidates[1], index=malformed_index)
+            malformed = replace(public, candidates=(public.candidates[0], candidate))
+            with self.subTest(index=malformed_index), self.assertRaises(ContractError):
+                RandomPolicy(4).act(malformed, None)
+
+    def test_rejected_random_decision_does_not_advance_policy_stream(self):
+        invalid = request()
+        padding = replace(invalid.public.candidates[0], kind="padding")
+        invalid_public = replace(invalid.public, candidates=(padding, invalid.public.candidates[1]))
+        policy, fresh = RandomPolicy(71), RandomPolicy(71)
+        with self.assertRaises(ContractError):
+            policy.act(invalid_public, None)
+        valid = request().public
+        self.assertEqual(policy.act(valid, None), fresh.act(valid, None))
 
     def test_policy_receives_no_route_or_seed(self):
         class Spy:

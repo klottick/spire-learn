@@ -1,0 +1,47 @@
+# Python environments, caches and packaging
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+
+# Generated ML artifacts (small authored fixtures/configs belong elsewhere)
+/artifacts/
+/checkpoints/
+/datasets/
+/data/
+/rollouts/
+/runs/
+/outputs/
+/logs/
+/wandb/
+/mlruns/
+/lightning_logs/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+events.out.tfevents.*
+
+# Secrets and machine-local files
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*

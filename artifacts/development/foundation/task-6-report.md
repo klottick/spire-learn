@@ -1,20 +1,22 @@
 # Task 6 implementation report — core only
 
-**Status:** fix round 1 `DONE_WITH_CONCERNS` for pure core; actual runtime `BLOCKED`. Task 6 is **not complete**. Stopped at approved-plan Step 5 authority gate; Steps 6–7 were not run and no integration test file was added.
+**Status:** fix round 2 core changes committed, awaiting review; actual runtime `BLOCKED`. Task 6 is **not complete**. Stopped at approved-plan Step 5 authority gate; Steps 6–7 were not run and no integration test file was added.
 
 ## Scope delivered
 
 - Corrected array-like shape validation to require exact nested `tolist()` rank/shape; immutable `ArrayValue` remains flat but is revalidated against dtype-specific integer ranges, float finiteness and range. `FakeArray.tolist()` now mirrors declared shape.
+- Round 2: float dtypes accept only finite built-in `float` values that round-trip losslessly through stdlib `struct` formats for their declared width; no integer acceptance or silent rounding. `make_single` is annotated with `CaseExecution`; construction/reset responsibilities remain unchanged.
 - Corrected metadata lookup to already-loaded `spire_lab._native`; build info is recursively copied/frozen. With no injected classifier types, exact documented exception exports are resolved only from that already-loaded module; missing/malformed exports and arbitrary `RuntimeError` remain unmapped.
-- Added 5 regression tests (12 core tests total). Test-only fixture descriptor and generic `FakeArray` are from `tests/support.py`.
+- Added six regression tests over two rounds (13 core tests total). Test-only fixture descriptor and generic `FakeArray` are from `tests/support.py`.
 - RED evidence for regressions: focused run before implementation failed shape, dtype, loaded-export classification, and build-info cases (exit 1; 6 failures, 2 errors); corrected assertions and implementation then passed.
+- Round 2 RED: `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_native_contract.NativeContractTests.test_float_arrays_require_exact_representable_float_primitives -v` — expected failures for Python float32 `0.1`, integer `1`, underflow `1e-50`, and immutable float32 `0.1` (4 failures, exit 1). After fix, focused core passed.
 
 ## Verification
 
-- `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_native_contract -v` — 12 tests, PASS, exit 0.
-- `PYTHONPATH=src python3.12 -B -m unittest discover -v` — 115 tests, PASS, exit 0.
+- `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_native_contract -v` — 13 tests, PASS, exit 0.
+- `PYTHONPATH=src python3.12 -B -m unittest discover -v` — 116 tests, PASS, exit 0.
 - `PYTHONPATH=src python3.12 -B -c 'import sys; import spire_learn.envs.native; blocked={"numpy","gymnasium","torch","torchrl","spire_lab"}; loaded=sorted(blocked.intersection(sys.modules)); print("blocked modules loaded:", loaded); assert not loaded'` — prints `blocked modules loaded: []`, exit 0.
-- `git diff --check` — PASS, exit 0.
+- `git diff --check` — PASS, zero output, exit 0.
 - No optional runtime, Gym, NumPy, factory, packing, simulator, or integration function was invoked.
 
 ## Read-only public API evidence; runtime remains unverified

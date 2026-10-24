@@ -1,6 +1,8 @@
 """Pure adapter contract tests; no simulator or optional imports."""
 
 import sys
+import math
+import struct
 from types import ModuleType
 import unittest
 from unittest.mock import patch
@@ -88,6 +90,37 @@ class NativeContractTests(unittest.TestCase):
         raw["action_mask"] = ArrayValue("int8", (3,), (128, 0, 0))
         with self.assertRaises(ContractError):
             self.native.native_snapshot(raw, self.schema)
+
+    def test_float_arrays_require_exact_representable_float_primitives(self):
+        for dtype, format_code, values in (
+            ("float16", "e", (struct.unpack("=e", struct.pack("=e", 0.1))[0], 2**-24)),
+            ("float32", "f", (struct.unpack("=f", struct.pack("=f", 0.1))[0], 2**-149)),
+            ("float64", "d", (0.1, -0.0)),
+        ):
+            descriptor = tiny_descriptor()
+            next(t for t in descriptor["tensors"] if t["key"] == "player")["dtype"] = dtype
+            schema = parse_descriptor(descriptor, allowed_schema_ids=frozenset({"spire-learn-fixture-v1"}))
+            for value in values:
+                raw = {k: FakeArray(v.dtype, v.shape, v.values) for k, v in observation().items()}
+                raw["player"] = FakeArray(dtype, (), (value,))
+                snapshot = self.native.native_snapshot(raw, schema)
+                self.assertEqual(snapshot["player"].values, (value,))
+                if value == 0.0 and math.copysign(1.0, value) < 0:
+                    self.assertLess(math.copysign(1.0, snapshot["player"].values[0]), 0)
+
+        descriptor = tiny_descriptor()
+        next(t for t in descriptor["tensors"] if t["key"] == "player")["dtype"] = "float32"
+        schema = parse_descriptor(descriptor, allowed_schema_ids=frozenset({"spire-learn-fixture-v1"}))
+        for value in (0.1, 1, 1e-50, float("inf"), float("nan")):
+            with self.subTest(value=value):
+                raw = {k: FakeArray(v.dtype, v.shape, v.values) for k, v in observation().items()}
+                raw["player"] = FakeArray("float32", (), (value,))
+                with self.assertRaises(ContractError):
+                    self.native.native_snapshot(raw, schema)
+        raw = {k: ArrayValue(v.dtype, v.shape, v.values) for k, v in observation().items()}
+        raw["player"] = ArrayValue("float32", (), (0.1,))
+        with self.assertRaises(ContractError):
+            self.native.native_snapshot(raw, schema)
 
     def test_validate_actions_rejects_bool_float_and_negative(self):
         from spire_learn.envs.native import validate_actions

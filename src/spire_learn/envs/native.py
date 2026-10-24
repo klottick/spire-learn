@@ -9,9 +9,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import math
+import struct
 from types import MappingProxyType
 
-from ..contracts import ArrayValue, ContractError, Failure, Observation, frozen_mapping
+from ..contracts import ArrayValue, CaseExecution, ContractError, Failure, Observation, frozen_mapping
 from ..schema import EnvironmentContract, ObservationSchema
 
 
@@ -88,16 +89,16 @@ def _validate_dtype_values(dtype: str, values: tuple[int | float, ...], key: str
         if any(type(value) is not int or not lower <= value <= upper for value in values):
             raise ContractError(f"{key} values do not fit {dtype}")
         return
-    max_finite = {"float16": 65504.0, "float32": 3.4028234663852886e38, "float64": 1.7976931348623157e308}[dtype]
+    format_code = {"float16": "e", "float32": "f", "float64": "d"}[dtype]
     for value in values:
-        if type(value) not in (int, float):
-            raise ContractError(f"{key} values must be numeric primitives")
+        if type(value) is not float or not math.isfinite(value):
+            raise ContractError(f"{key} values must be finite float primitives")
         try:
-            numeric = float(value)
-        except (OverflowError, ValueError) as exc:
-            raise ContractError(f"{key} value is outside {dtype} range") from exc
-        if not math.isfinite(numeric) or abs(numeric) > max_finite:
-            raise ContractError(f"{key} value is outside {dtype} range")
+            round_trip = struct.unpack(f"={format_code}", struct.pack(f"={format_code}", value))[0]
+        except (OverflowError, struct.error) as exc:
+            raise ContractError(f"{key} value is not representable as {dtype}") from exc
+        if round_trip != value or (value == 0.0 and math.copysign(1.0, round_trip) != math.copysign(1.0, value)):
+            raise ContractError(f"{key} value is not exactly representable as {dtype}")
 
 
 def normalize_public_info(info: Mapping[str, object], schema: ObservationSchema) -> Mapping[str, object]:
@@ -147,7 +148,7 @@ def pack_actions(actions: Sequence[int]) -> object:
     return numpy.asarray(validated, dtype=numpy.dtype("=i8"))
 
 
-def make_single(case: object) -> object:
+def make_single(case: CaseExecution) -> object:
     from spire_lab.gymnasium import CombatEnv
 
     return CombatEnv(catalog=None, partition=case.partition, record_replay=False)

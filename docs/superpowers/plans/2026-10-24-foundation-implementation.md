@@ -105,6 +105,7 @@ Use these names/signatures across tasks. Do not invent helpers in later tasks. C
 - `load_config(path: Path, *, expected_mode: str) -> RunConfig` strictly validates TOML, unknown fields and bool/numeric types; resolves relative paths from config and permits explicitly supplied absolute paths. Required root keys: `mode`, `profile`, `agent`, `cases`, `output_root`, `max_wall_seconds`, `traces`. Evaluate requires positive `per_case_decisions`, forbids `max_batch_steps` and `[probe]`; probe modes require positive `max_batch_steps` and `[probe] num_envs, workers`, forbid `per_case_decisions`, and require `num_envs >= 2`. `max_wall_seconds` is positive finite for all modes. Config partition/schema are assertions, not overrides.
 - `validate_expectations(config: RunConfig, manifest: CaseManifest) -> None` performs static config/manifest split, partition and expected-schema/fingerprint conflict checks before environment factory.
 - `to_probe_config(config: RunConfig, manifest: CaseManifest) -> ProbeConfig` requires probe settings, exactly `num_envs` explicit executions in manifest, one partition and selection split; scenario IDs and both seeds come from manifest. No probe TOML seed arrays or partition override.
+- Task 4b binding erratum: `bind_case_expectations(config, execution) -> CaseExecution` rejects declared conflicts (including asserted partition) and returns a copy filling only missing schema ID/fingerprint assertions. Task 9 must pass these bound cases to `run_case`; `validate_expectations` alone does not return the bound cases. Probe conversion also binds, without synthesizing or overriding execution identity/seeds/partition.
 - `Budget(max_wall_seconds: float, clock: Callable[[], float])`; `exhausted() -> bool`, `remaining() -> float`; clock is injectable. Per-case accepted step limits are distinct from vector batch-step limits.
 
 ### Environment contract — Task 1 schema, Task 6 native adapter
@@ -233,6 +234,7 @@ with tempfile.TemporaryDirectory() as directory:
 
 - [ ] **Step 6 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_config -v`; expected failure.
 - [ ] **Step 7 — Implement** TOML root fields, `ProbeSettings` and `ProbeConfig` stdlib dataclasses in `experiments/config.py`, and `[probe] num_envs, workers`; probe modes require that table and `num_envs>=2`; evaluate rejects it. `to_probe_config` takes exactly B explicit manifest executions and constructs `ProbeConfig`; no seed/partition fields in probe TOML. Config expected values are static assertions only. Task 7 imports `ProbeConfig` from this module.
+- Task 4b Task 9 consumer pointer: scheduler must pass `bind_case_expectations` results to `run_case`, not only validate the original manifest.
 - [ ] **Step 8 — Green config:** repeat command; static mismatch errors occur before env factory (tested in Task 9); runtime descriptor mismatch is a separate post-construction check.
 - [ ] **Step 9 — Red budget:** `test_budget_remaining_and_expiry` uses FakeClock to assert remaining at start/cap, exhaustion and zero-clamped remaining after expiry; no batch/slot counters are assigned to Budget.
 - [ ] **Step 9a — Test assertion:**

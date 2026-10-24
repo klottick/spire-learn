@@ -131,6 +131,13 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_expectations(cfg, conflict)
 
+    def test_validate_expectations_rejects_execution_split_mismatch(self):
+        cfg = self.load(config_text())
+        manifest = CaseManifest(Path('cases.json'), 'selection',
+                                (self.execution(split='final'),))
+        with self.assertRaisesRegex(ValueError, 'split'):
+            validate_expectations(cfg, manifest)
+
     def test_probe_conversion_requires_selection_exact_count_and_single_partition(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "probe.toml"
@@ -146,6 +153,19 @@ class ConfigTests(unittest.TestCase):
                     CaseManifest(Path("x"), "selection", (executions[0], self.execution(execution_id="b", partition="other")))):
             with self.assertRaises(ValueError):
                 to_probe_config(cfg, bad)
+
+    def test_probe_conversion_rejects_execution_split_mismatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'probe.toml'
+            path.write_text(config_text(mode='"probe-vector"').replace(
+                'per_case_decisions = 5', '') +
+                '\nmax_batch_steps=4\n[probe]\nnum_envs=2\nworkers=1\n')
+            cfg = load_config(path, expected_mode='probe-vector')
+        executions = (self.execution(execution_id='a', split='final'),
+                      self.execution(execution_id='b', split='final', environment_seed=24))
+        manifest = CaseManifest(Path('cases.json'), 'selection', executions)
+        with self.assertRaisesRegex(ValueError, 'split'):
+            to_probe_config(cfg, manifest)
 
     def test_import_does_not_load_runtime_probe_or_native_modules(self):
         import sys

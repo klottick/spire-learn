@@ -154,6 +154,8 @@ def bind_case_expectations(config: RunConfig, execution: CaseExecution) -> CaseE
 
 def validate_expectations(config: RunConfig, manifest: CaseManifest) -> None:
     """Check config assertions against every execution before environment setup."""
+    if any(execution.split != manifest.split for execution in manifest.executions):
+        raise ValueError("execution split disagrees with manifest split")
     if config.expected_partition is not None and any(
         execution.partition != config.expected_partition for execution in manifest.executions
     ):
@@ -168,6 +170,7 @@ def to_probe_config(config: RunConfig, manifest: CaseManifest) -> ProbeConfig:
         raise ValueError("probe configuration required")
     if manifest.split != "selection":
         raise ValueError("probes require a selection manifest")
+    validate_expectations(config, manifest)
     if len(manifest.executions) != config.probe.num_envs:
         raise ValueError("manifest execution count must equal probe.num_envs")
     partitions = {execution.partition for execution in manifest.executions}

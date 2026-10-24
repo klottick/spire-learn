@@ -75,6 +75,32 @@ class CasesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_splits((CaseManifest(Path('cases.json'), 'train', (execution,)),))
 
+    def test_validate_splits_allows_repeated_case_within_one_manifest(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self.write(Path(d), case='repeat', execution='e1')
+            data = json.loads(path.read_text())
+            data['cases'][0]['executions'].append(
+                {'execution_id': 'e2', 'environment_seed': 1, 'policy_seed': 3}
+            )
+            path.write_text(json.dumps(data))
+            manifest = load_cases(path)
+            self.assertIsNone(validate_splits((manifest,)))
+
+    def test_manifest_owns_executions_input(self):
+        execution = CaseExecution('e', 'c', 'selection', 'p', 's', 1, 2)
+        source = [execution]
+        manifest = CaseManifest(Path('cases.json'), 'selection', source)
+        source.clear()
+        self.assertEqual(manifest.executions, (execution,))
+
+    def test_validate_splits_rejects_case_id_repeated_across_manifests(self):
+        first = CaseExecution('e1', 'same', 'selection', 'p', 's1', 1, 2)
+        second = CaseExecution('e2', 'same', 'selection', 'p', 's2', 2, 3)
+        manifests = (CaseManifest(Path('a'), 'selection', (first,)),
+                     CaseManifest(Path('b'), 'selection', (second,)))
+        with self.assertRaisesRegex(ValueError, 'duplicate case_id'):
+            validate_splits(manifests)
+
     def test_same_scenario_different_seed_is_not_overlap(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

@@ -19,6 +19,9 @@ class CaseManifest:
     split: str
     executions: tuple[CaseExecution, ...]
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "executions", tuple(self.executions))
+
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
@@ -103,14 +106,17 @@ def validate_splits(manifests: Sequence[CaseManifest]) -> None:
     for manifest in manifests:
         if manifest.split not in _SPLITS:
             raise ValueError(f"invalid manifest split: {manifest.split}")
+        manifest_case_ids = {execution.case_id for execution in manifest.executions}
+        duplicate_case_ids = case_ids & manifest_case_ids
+        if duplicate_case_ids:
+            duplicate_case_id = min(duplicate_case_ids)
+            raise ValueError(f"duplicate case_id across manifests: {duplicate_case_id}")
+        case_ids.update(manifest_case_ids)
         for execution in manifest.executions:
             if execution.split != manifest.split:
                 raise ValueError("execution split disagrees with manifest split")
-            if execution.case_id in case_ids:
-                raise ValueError(f"duplicate case_id across manifests: {execution.case_id}")
             if execution.execution_id in execution_ids:
                 raise ValueError(f"duplicate execution_id across manifests: {execution.execution_id}")
-            case_ids.add(execution.case_id)
             execution_ids.add(execution.execution_id)
             key = (execution.scenario_id, execution.environment_seed)
             previous_split = identities.get(key)

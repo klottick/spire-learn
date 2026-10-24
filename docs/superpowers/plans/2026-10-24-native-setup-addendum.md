@@ -1,17 +1,25 @@
-# Task 6 Native Setup Implementation Plan Addendum — Review Draft
+# Task 6 Native Setup Implementation Plan Addendum — Stage A Preflight Authority
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:subagent-driven-development` or `superpowers:executing-plans`
 > only after explicit user approval of this exact addendum. Do not spawn nested
 > workers.
 
-**Status: DRAFT FOR REVIEW ONLY — NOT APPROVED, NOT EXECUTABLE AUTHORITY.**
-Task 6 (`spire_learn-d8l.7`) remains **blocked / incomplete**. This addendum
-proposes only an isolated CPU native-conformance setup for the existing Task 6
-gate. Do not execute any command below unless the user explicitly approves this
-written addendum after parent self-review. It authorizes no install, build,
-runtime import, integration test, Docker image pull/build, service change, or
-cleanup by its mere existence.
+**Status: Stage A CPU-only Task 1 preflight approved, including the exact narrow
+fixture-overlay exception recorded below. Task 6 (`spire_learn-d8l.7`) remains
+incomplete. This approval authorizes only Task 1 source/container preflight and
+its conditional pull/use of the two exact pinned images. It does not authorize
+Task 2 wheel build, Task 3 package download/install, Task 4 integration tests, or
+any Task 7/TorchRL/GPU/training/shared-service work.**
+
+Approval record (local record time `2026-10-24T21:16:02+00:00`; user message in
+the parent session): “yes, as long as that decision is fine long term”. The
+approved scope is the Stage A CPU-only Task 1 preflight with only the fixture
+directory overlay exception below. All other pins, source mounts, and gates in
+this addendum remain unchanged. Conditional image pulls are permitted only after
+all source, resource, storage, Docker and mount preflight checks pass. No Task 2
+build, package installation, runtime import, integration test, service change,
+or cleanup is authorized here.
 
 ## Goal
 
@@ -118,6 +126,24 @@ Task 6 report is `artifacts/development/foundation/task-6-report.md`.
   build inputs read-only. No Docker socket, credentials, home, checkout root,
   GPU, privileged mode, or extra capabilities. If mount protections cannot be
   proven before build, stop without starting a build.
+- **Approved narrow fixture overlay exception:** the otherwise approved
+  read-only `$GYM/crates/spire-env` mount remains unchanged. In the disposable
+  Task 1 source-preflight container, use the same source projection intended for
+  the release-build container, and at the matching container path
+  `/gym/crates/spire-env/src/tests/fixtures`, place an empty kernel tmpfs mount
+  with read-only mode (Docker CLI form: `--tmpfs
+  /gym/crates/spire-env/src/tests/fixtures:ro,size=64k,mode=755`). This obscures
+  only the existing fixture directory inside that disposable container; do not
+  bind/copy host fixture files or change the Gym checkout. Prove the overlay is
+  empty and read-only from container mount metadata, directory listing and
+  ownership/mode inspection; do not write a canary to Gym. The approved source
+  crate mounts remain read-only. The overlay is only for the release-build
+  source projection; future `cargo test` must use the original checkout fixtures
+  without this overlay. If a normal release source/API or build script begins
+  requiring these test fixtures, stop for review rather than approximating or
+  supplying fixture content. Cost if this source-based assumption is wrong:
+  build inputs would be hidden and the release build would fail, requiring
+  review; Gym source and upstream tests remain unchanged.
 - Define `$GYM` as the absolute read-only Gym checkout path, `$WORK` as the
   absolute unique ignored learner runtime root mounted at `/work`, and `$UID` /
   `$GID` as the invoking non-root host user's numeric IDs. Use a fresh
@@ -172,8 +198,11 @@ Task 6 report is `artifacts/development/foundation/task-6-report.md`.
   `$GYM/Cargo.toml`, `$GYM/Cargo.lock`, `$GYM/pyproject.toml`; directories
   `crates/spire-core`, `crates/spire-env`, `crates/spire-python`,
   `crates/spire-cli`; and `python/spire_lab`, each mounted at the same path
-  under `/gym` and read-only. Add top-level README/license only if packaging
-  demonstrably requires them; stop for any other unreviewed source input.
+  under `/gym` and read-only. Apply only the approved empty read-only tmpfs
+  overlay at `/gym/crates/spire-env/src/tests/fixtures` described above; this is
+  not a host mount or a Gym filesystem change. Add top-level README/license only
+  if packaging demonstrably requires them; stop for any other unreviewed source
+  input.
 - **Container checks:** pull only the two pinned images after approval; verify
   linux/amd64 identity. Check existing builder Rust >=1.89 and runtime Python
   3.12.15/glibc >=2.28; Rust is required only in builder. Use root-read-only plus read-only source mounts and,
@@ -376,6 +405,11 @@ runtime behavior):
 - PEP 440 local version matching: https://peps.python.org/pep-0440/
 - Registry digests: read-only GHCR/Docker registry metadata for the exact image
   digests recorded above. Reconfirm digest/platform only after authorization.
+- Docker Engine tmpfs mount syntax and behavior:
+  https://docs.docker.com/engine/storage/tmpfs/ (read-only `ro`, `size`, and
+  `mode` options; a mount obscures the underlying directory in the container).
+  This public documentation does not replace verification of the actual local
+  container mount metadata and empty directory.
 
 Context7 quota was exhausted during evidence collection; official project
 documentation and public registry metadata were used as fallback. Candidate
@@ -384,20 +418,20 @@ preflight/runtime checks, not asserted results.
 
 ## Approval checklist — Stage A only
 
-Explicit approval must affirm this written addendum and authorize only:
+- [x] Task 1 source/container preflight; conditionally pull/use only the two
+  exact pinned linux/amd64 images after all preflight checks; retain outputs in
+  the new ignored runtime root subject to storage/resource/network bounds.
+- [x] Exact approved empty read-only tmpfs overlay at
+  `/gym/crates/spire-env/src/tests/fixtures` in the disposable release-build
+  container only; no host fixture mount/copy and no Gym filesystem change.
+- [ ] Task 2 Maturin wheel build — **not authorized by this Stage A decision**.
+- [ ] Task 3 CPU wheel downloads, dependency resolution/install, or venv —
+  **not authorized by this Stage A decision**.
+- [ ] Task 4 opt-in Task 6 conformance tests — **not authorized by this Stage A
+  decision**.
+- [ ] Task 5 Task 6 acceptance/closeout — remains subject to review and is not
+  authorized by this decision.
 
-- [ ] Pull/use the two exact pinned linux/amd64 images and the stated new ignored
-  runtime output/cache scope, subject to storage/resource/network bounds.
-- [ ] The narrowly listed read-only Gym input mounts and the single Maturin
-  wheel build; no source changes or additional inputs.
-- [ ] Hash-verified CPU Torch wheel download, audited binary dependency closure,
-  generated local runtime lock, and isolated CPU venv in the approved runtime.
-- [ ] The two opt-in single-environment Task 6 scenario conformances, exact
-  test file scope and offline bounded command above.
-- [ ] Retain generated outputs for review; no auto-prune or broad cleanup.
-- [ ] Preserve existing approved-plan Beads/local-commit bookkeeping authority
-  for later accepted closeout; no such writes/commits are performed by drafting.
-
-Any unchecked item, altered pin/mount/command/scope, failed preflight, or request
-to extend budget requires stop and fresh explicit approval. **No approval has
-been recorded; this draft is not authority to execute.**
+No GPU, CUDA, TorchRL, Task 7, training, or shared services are authorized.
+Any different source/mount, pin, command, or scope requires fresh explicit
+approval. Failed preflight stops before Task 2. Task 6 remains incomplete.

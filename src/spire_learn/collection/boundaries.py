@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+import math
 
 from ..contracts import ContractError, Observation, Route, Transition
 
@@ -16,15 +17,42 @@ class BoundaryResult:
     episode_started: bool
 
 
+def _validate_route(route: Route) -> None:
+    if not isinstance(route, Route) or type(route.slot) is not int or route.slot < 0:
+        raise ContractError("route must be a Route with a non-negative integer slot")
+
+
+def _validate_action_reward(action: int, reward: float) -> None:
+    if type(action) is not int or action < 0:
+        raise ContractError("action must be a non-negative integer")
+    if type(reward) not in (int, float):
+        raise ContractError("reward must be a finite int or float primitive")
+    try:
+        finite = math.isfinite(reward)
+    except OverflowError as error:
+        raise ContractError("reward is outside the finite numeric range") from error
+    if not finite:
+        raise ContractError("reward must be finite")
+
+
+def _transition(**values: object) -> Transition:
+    try:
+        return Transition(**values)  # type: ignore[arg-type]
+    except TypeError as error:
+        raise ContractError("transition observations must be valid mappings") from error
+
+
 def route_single_step(
     *, route: Route, source: Observation, action: int, reward: float,
     terminated: bool, truncated: bool, successor: Observation,
     state_after_source: object | None,
 ) -> BoundaryResult:
+    _validate_route(route)
+    _validate_action_reward(action, reward)
     if type(terminated) is not bool or type(truncated) is not bool:
         raise ContractError("terminated and truncated flags must be bool values")
     ended = terminated or truncated
-    transition = Transition(
+    transition = _transition(
         route=route, source=source, action=action, reward=reward,
         terminated=terminated, truncated=truncated, successor=successor,
         replacement=None, state_after_source=state_after_source,
@@ -53,8 +81,15 @@ def route_vector_step(
             raise ContractError("all vector boundary rows must have equal width")
     except TypeError as error:
         raise ContractError("vector boundary inputs must be sized sequences") from error
+    if width == 0:
+        raise ContractError("vector boundary batches must be non-empty")
     if not callable(reset_state):
         raise ContractError("reset_state must be callable")
+
+    for index, route in enumerate(routes):
+        _validate_route(route)
+        if route.slot != index:
+            raise ContractError("vector route slots must match their full-batch row indices")
 
     prepared: list[tuple[Transition, Observation, bool, int]] = []
     for index in range(width):
@@ -74,9 +109,8 @@ def route_vector_step(
             if present or info_present or final is not None:
                 raise ContractError("live rows cannot contain final boundary data")
             successor, replacement = main_observations[index], None
-        if type(actions[index]) is not int:
-            raise ContractError("actions must be integer values")
-        transition = Transition(
+        _validate_action_reward(actions[index], rewards[index])
+        transition = _transition(
             route=routes[index], source=sources[index], action=actions[index],
             reward=rewards[index], terminated=term, truncated=trunc,
             successor=successor, replacement=replacement,

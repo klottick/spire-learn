@@ -14,6 +14,7 @@ _NUMERIC_DTYPES = frozenset({
     "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64",
     "float16", "float32", "float64",
 })
+_SIGNED_INTEGER_DTYPES = frozenset({"int8", "int16", "int32", "int64"})
 _ACTION_TENSOR_KEYS = ("action_mask", "action_kind", "action_source", "action_target", "action_features")
 
 
@@ -144,20 +145,23 @@ def _validate_action_descriptors(tensors: Mapping[str, TensorSpec], action_count
         raise ContractError(f"descriptor is missing required action tensors: {', '.join(sorted(missing))}")
     mask, kind, source, target, features = (tensors[key] for key in _ACTION_TENSOR_KEYS)
     simple = (
-        (mask, "int8", ("candidate",), (), None),
-        (kind, "int64", ("candidate",), (), "action"),
-        (source, "int64", ("candidate",), ("hand_row",), None),
-        (target, "int64", ("candidate",), ("enemy_row",), None),
+        (mask, "int8", ("candidate",), ("legal",), None),
+        (kind, _SIGNED_INTEGER_DTYPES, ("candidate",), ("kind",), "action"),
+        (source, _SIGNED_INTEGER_DTYPES, ("candidate",), ("hand_row",), None),
+        (target, _SIGNED_INTEGER_DTYPES, ("candidate",), ("enemy_row",), None),
     )
     for spec, dtype, axes, fields, category in simple:
-        if spec.dtype != dtype or spec.shape != (action_count,) or spec.axes != axes or spec.fields != fields or spec.category != category:
+        dtype_matches = spec.dtype == dtype if isinstance(dtype, str) else spec.dtype in dtype
+        if not dtype_matches or spec.shape != (action_count,) or spec.axes != axes or spec.fields != fields or spec.category != category:
             raise ContractError(f"{spec.key} does not match the required public action tensor contract")
     if mask.mask is not None:
         raise ContractError("action_mask must not reference another mask")
-    if kind.mask != "action_mask":
-        raise ContractError("action_kind must reference action_mask")
-    if features.dtype != "int64" or set(features.axes) != {"candidate", "field"} or len(features.axes) != 2:
-        raise ContractError("action_features must use int64 candidate and field axes only")
+    if any(spec.mask != "action_mask" for spec in (kind, source, target, features)):
+        raise ContractError("action kind/source/target/features tensors must reference action_mask")
+    if features.dtype not in _SIGNED_INTEGER_DTYPES or set(features.axes) != {"candidate", "field"} or len(features.axes) != 2:
+        raise ContractError("action_features must use a supported signed integer dtype and candidate/field axes only")
+    if not features.fields:
+        raise ContractError("action_features must declare named feature fields")
     if features.shape[features.axes.index("candidate")] != action_count or features.shape[features.axes.index("field")] != len(features.fields):
         raise ContractError("action_features shape must match candidate count and named fields")
     if features.category is not None:

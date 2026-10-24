@@ -15,6 +15,60 @@ class DescriptorSchemaTests(unittest.TestCase):
         self.assertIsNone(next(t for t in schema.tensors if t.key == "action_mask").mask)
         self.assertEqual(next(t for t in schema.tensors if t.key == "action_kind").mask, "action_mask")
 
+    def test_native_style_int32_action_metadata_is_accepted(self):
+        descriptor = tiny_descriptor(action_count=32)
+        tensor_by_key = {tensor["key"]: tensor for tensor in descriptor["tensors"]}
+        tensor_by_key["action_mask"]["fields"] = ["legal"]
+        tensor_by_key["action_kind"].update(dtype="int32", fields=["kind"])
+        tensor_by_key["action_source"].update(dtype="int32", mask="action_mask")
+        tensor_by_key["action_target"].update(dtype="int32", mask="action_mask")
+        tensor_by_key["action_features"].update(
+            dtype="int32", shape=[32, 4],
+            fields=["cost", "printed_damage", "printed_block", "printed_vulnerable"],
+            mask="action_mask",
+        )
+        raw = observation(mask=(1, 1) + (0,) * 30, kinds=(1, 2) + (0,) * 30)
+        native_observation = dict(raw)
+        for key in ("action_kind", "action_source", "action_target"):
+            value = native_observation[key]
+            native_observation[key] = ArrayValue("int32", value.shape, value.values)
+        features = tuple(value for index in range(32) for value in ((1, 7, 0, 0) if index == 1 else (0, 0, 0, 0)))
+        native_observation["action_features"] = ArrayValue("int32", (32, 4), features)
+
+        schema = parse_descriptor(descriptor, allowed_schema_ids=frozenset({"spire-learn-fixture-v1"}))
+        candidates = candidates_for(native_observation, schema)
+        self.assertEqual(schema.action_count, 32)
+        self.assertEqual(candidates[1].kind, "play_card")
+        self.assertEqual((candidates[1].source, candidates[1].target), (0, 0))
+        self.assertEqual(candidates[1].features, (("cost", 1), ("printed_damage", 7), ("printed_block", 0), ("printed_vulnerable", 0)))
+
+    def test_declared_int64_action_metadata_is_accepted_and_observation_dtype_must_match(self):
+        descriptor = tiny_descriptor(action_count=32)
+        tensors = {tensor["key"]: tensor for tensor in descriptor["tensors"]}
+        tensors["action_mask"]["fields"] = ["legal"]
+        tensors["action_kind"].update(dtype="int64", fields=["kind"])
+        tensors["action_source"].update(dtype="int64", fields=["hand_row"], mask="action_mask")
+        tensors["action_target"].update(dtype="int64", fields=["enemy_row"], mask="action_mask")
+        tensors["action_features"].update(
+            dtype="int64", shape=[32, 4],
+            fields=["cost", "printed_damage", "printed_block", "printed_vulnerable"],
+            mask="action_mask",
+        )
+        raw = observation(mask=(1, 1) + (0,) * 30, kinds=(1, 2) + (0,) * 30)
+        matching = dict(raw)
+        for key in ("action_kind", "action_source", "action_target"):
+            value = matching[key]
+            matching[key] = ArrayValue("int64", value.shape, value.values)
+        features = tuple(value for index in range(32) for value in ((1, 7, 0, 0) if index == 1 else (0, 0, 0, 0)))
+        matching["action_features"] = ArrayValue("int64", (32, 4), features)
+        schema = parse_descriptor(descriptor, allowed_schema_ids=frozenset({"spire-learn-fixture-v1"}))
+        self.assertEqual(candidates_for(matching, schema)[1].features[1], ("printed_damage", 7))
+
+        mismatched = dict(matching)
+        mismatched["action_kind"] = ArrayValue("int32", (32,), matching["action_kind"].values)
+        with self.assertRaises(ContractError):
+            candidates_for(mismatched, schema)
+
     def test_rejects_unknown_schema_and_malformed_descriptor(self):
         descriptor = tiny_descriptor()
         with self.assertRaises(ContractError):
@@ -24,6 +78,8 @@ class DescriptorSchemaTests(unittest.TestCase):
             lambda d: d["tensors"].append(d["tensors"][0]),
             lambda d: d["tensors"][1].update(shape=[9]),
             lambda d: d["tensors"][1].update(axes=["candidate", "field"]),
+            lambda d: d["tensors"][1].update(fields=[]),
+            lambda d: d["tensors"][2].update(fields=["source"]),
             lambda d: d["tensors"][1].update(fields=["a", "a"]),
             lambda d: d["tensors"][1].update(category="missing"),
         ):
@@ -36,8 +92,8 @@ class DescriptorSchemaTests(unittest.TestCase):
         schema = parse_descriptor(tiny_descriptor(), allowed_schema_ids=frozenset({"spire-learn-fixture-v1"}))
         found = candidates_for(observation(), schema)
         self.assertEqual([(c.index, c.kind) for c in found], [(0, "end_turn"), (1, "play_card")])
-        self.assertEqual(found[0].features, (("printed_damage", 0), ("printed_block", 0), ("cost", 0)))
-        self.assertEqual(found[1].features, (("printed_damage", 7), ("printed_block", 0), ("cost", 1)))
+        self.assertEqual(found[0].features, (("cost", 0), ("printed_damage", 0), ("printed_block", 0), ("printed_vulnerable", 0)))
+        self.assertEqual(found[1].features, (("cost", 1), ("printed_damage", 7), ("printed_block", 0), ("printed_vulnerable", 0)))
         self.assertIsNone(found[0].source)
         self.assertIsNone(found[0].target)
         self.assertEqual((found[1].source, found[1].target), (0, 0))
@@ -123,7 +179,7 @@ class DescriptorSchemaTests(unittest.TestCase):
         obs["other_category"] = ArrayValue("int64", (3,), (1, 2, 1))
         result = candidates_for(obs, schema)
         self.assertEqual([(c.index, c.kind) for c in result], [(0, "end_turn"), (1, "play_card")])
-        self.assertEqual(result[1].features, (("printed_damage", 7), ("printed_block", 0), ("cost", 1)))
+        self.assertEqual(result[1].features, (("cost", 1), ("printed_damage", 7), ("printed_block", 0), ("printed_vulnerable", 0)))
 
     def test_rejects_legal_padding_kind_and_consumed_dtype_mismatch(self):
         schema = parse_descriptor(tiny_descriptor(), allowed_schema_ids=frozenset({"spire-learn-fixture-v1"}))
@@ -141,6 +197,6 @@ class DescriptorSchemaTests(unittest.TestCase):
             parse_descriptor(descriptor, allowed_schema_ids=frozenset({"spire-learn-fixture-v1"}))
         schema = parse_descriptor(tiny_descriptor(), allowed_schema_ids=frozenset({"spire-learn-fixture-v1"}))
         obs = dict(observation())
-        obs["action_source"] = ArrayValue("int64", (3,), (-2, 0, -1))
+        obs["action_source"] = ArrayValue("int32", (3,), (-2, 0, -1))
         with self.assertRaises(ContractError):
             candidates_for(obs, schema)

@@ -17,18 +17,18 @@ def tiny_descriptor(*, action_count: int = 3) -> dict[str, object]:
         "fingerprint": "a" * 64,
         "action_space": {"n": action_count},
         "tensors": [
-            {"key": "action_mask", "dtype": "int8", "shape": [action_count], "fields": [], "axes": ["candidate"], "category": None, "mask": None},
-            {"key": "action_kind", "dtype": "int64", "shape": [action_count], "fields": [], "axes": ["candidate"], "category": "action", "mask": "action_mask"},
-            {"key": "action_source", "dtype": "int64", "shape": [action_count], "fields": ["hand_row"], "axes": ["candidate"], "category": None, "mask": None},
-            {"key": "action_target", "dtype": "int64", "shape": [action_count], "fields": ["enemy_row"], "axes": ["candidate"], "category": None, "mask": None},
-            {"key": "action_features", "dtype": "int64", "shape": [action_count, 3], "fields": ["printed_damage", "printed_block", "cost"], "axes": ["candidate", "field"], "category": None, "mask": None},
+            {"key": "action_mask", "dtype": "int8", "shape": [action_count], "fields": ["legal"], "axes": ["candidate"], "category": None, "mask": None},
+            {"key": "action_kind", "dtype": "int32", "shape": [action_count], "fields": ["kind"], "axes": ["candidate"], "category": "action", "mask": "action_mask"},
+            {"key": "action_source", "dtype": "int32", "shape": [action_count], "fields": ["hand_row"], "axes": ["candidate"], "category": None, "mask": "action_mask"},
+            {"key": "action_target", "dtype": "int32", "shape": [action_count], "fields": ["enemy_row"], "axes": ["candidate"], "category": None, "mask": "action_mask"},
+            {"key": "action_features", "dtype": "int32", "shape": [action_count, 4], "fields": ["cost", "printed_damage", "printed_block", "printed_vulnerable"], "axes": ["candidate", "field"], "category": None, "mask": "action_mask"},
             {"key": "player", "dtype": "int64", "shape": [], "fields": ["hp"], "axes": [], "category": None, "mask": None},
         ],
         "vocabularies": {"action": ["padding", "end_turn", "play_card"], "outcome": ["unknown", "victory", "death"]},
     }
 
 
-def observation(*, mask: tuple[int, ...] = (1, 1, 0), kinds: tuple[int, ...] = (1, 2, 0), hp: int = 10) -> Observation:
+def observation(*, mask: tuple[int, ...] = (1, 1, 0), kinds: tuple[int, ...] = (1, 2, 0), hp: int = 10, integer_dtype: str = "int32") -> Observation:
     if len(mask) != len(kinds):
         raise ValueError("mask and kinds widths must match")
     sources = tuple(0 if index == 1 else -1 for index in range(len(mask)))
@@ -36,14 +36,14 @@ def observation(*, mask: tuple[int, ...] = (1, 1, 0), kinds: tuple[int, ...] = (
     feature_values = tuple(
         value
         for index in range(len(mask))
-        for value in ((7, 0, 1) if index == 1 else (0, 0, 0))
+        for value in ((1, 7, 0, 0) if index == 1 else (0, 0, 0, 0))
     )
     return frozen_mapping({
         "action_mask": ArrayValue("int8", (len(mask),), mask),
-        "action_kind": ArrayValue("int64", (len(kinds),), kinds),
-        "action_source": ArrayValue("int64", (len(mask),), sources),
-        "action_target": ArrayValue("int64", (len(mask),), targets),
-        "action_features": ArrayValue("int64", (len(mask), 3), feature_values),
+        "action_kind": ArrayValue(integer_dtype, (len(kinds),), kinds),
+        "action_source": ArrayValue(integer_dtype, (len(mask),), sources),
+        "action_target": ArrayValue(integer_dtype, (len(mask),), targets),
+        "action_features": ArrayValue(integer_dtype, (len(mask), 4), feature_values),
         "player": ArrayValue("int64", (), (hp,)),
     })
 

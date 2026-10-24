@@ -2,11 +2,21 @@ import unittest
 from dataclasses import replace
 
 from spire_learn.contracts import ArrayValue, ContractError
-from spire_learn.schema import candidates_for, parse_descriptor
+from spire_learn.schema import TensorSpec, candidates_for, parse_descriptor
 from tests.support import fixture_contract, observation, tiny_descriptor
 
 
 class DescriptorSchemaTests(unittest.TestCase):
+    @staticmethod
+    def _descriptor_with_context_categories(categories):
+        descriptor = tiny_descriptor()
+        descriptor["vocabularies"].update({"character": ["unknown", "ironclad"], "enemy": ["unknown", "cultist"]})
+        descriptor["tensors"].extend([
+            {"key": "context", "dtype": "int32", "shape": [4], "fields": ["character", "ascension", "act", "next_encounter"], "axes": ["field"], "category": categories, "mask": "context_mask"},
+            {"key": "context_mask", "dtype": "int8", "shape": [4], "fields": ["character", "ascension", "act", "next_encounter"], "axes": ["field"], "category": None, "mask": None},
+        ])
+        return descriptor
+
     def test_action_kind_vocabulary_is_not_candidate_count(self):
         descriptor = tiny_descriptor(action_count=32)
         schema = parse_descriptor(descriptor, allowed_schema_ids=frozenset({"spire-learn-fixture-v1"}))
@@ -68,6 +78,46 @@ class DescriptorSchemaTests(unittest.TestCase):
         mismatched["action_kind"] = ArrayValue("int32", (32,), matching["action_kind"].values)
         with self.assertRaises(ContractError):
             candidates_for(mismatched, schema)
+
+    def test_field_specific_context_categories_are_immutable_and_validated(self):
+        categories = ["character", None, None, "enemy"]
+        descriptor = self._descriptor_with_context_categories(categories)
+        schema = parse_descriptor(descriptor, allowed_schema_ids=frozenset({"spire-learn-fixture-v1"}))
+        context_spec = next(tensor for tensor in schema.tensors if tensor.key == "context")
+        self.assertEqual(context_spec.category, ("character", None, None, "enemy"))
+        categories[0] = None
+        self.assertEqual(context_spec.category, ("character", None, None, "enemy"))
+        direct_categories = ["character", None]
+        direct_spec = TensorSpec("direct", "int32", (2,), ("character", "ascension"), ("field",), direct_categories, None)
+        direct_categories[0] = None
+        self.assertEqual(direct_spec.category, ("character", None))
+
+        invalid_categories = (
+            ["character", None, "enemy"],
+            ["character", None, None, "missing"],
+            ["character", None, None, True],
+        )
+        for invalid in invalid_categories:
+            bad = self._descriptor_with_context_categories(invalid)
+            with self.subTest(category=invalid), self.assertRaises(ContractError):
+                parse_descriptor(bad, allowed_schema_ids=frozenset({"spire-learn-fixture-v1"}))
+        no_field_axis = self._descriptor_with_context_categories(["character", None, None, "enemy"])
+        next(tensor for tensor in no_field_axis["tensors"] if tensor["key"] == "context")["axes"] = ["context"]
+        with self.assertRaises(ContractError):
+            parse_descriptor(no_field_axis, allowed_schema_ids=frozenset({"spire-learn-fixture-v1"}))
+
+    def test_discrete_action_space_type_and_zero_start_are_required(self):
+        for changes in (
+            {"type": "MultiDiscrete"},
+            {"start": 1},
+            {"start": True},
+            {"start": None},
+        ):
+            descriptor = tiny_descriptor()
+            descriptor["action_space"].update({"type": "Discrete", "start": 0})
+            descriptor["action_space"].update(changes)
+            with self.subTest(action_space=descriptor["action_space"]), self.assertRaises(ContractError):
+                parse_descriptor(descriptor, allowed_schema_ids=frozenset({"spire-learn-fixture-v1"}))
 
     def test_rejects_unknown_schema_and_malformed_descriptor(self):
         descriptor = tiny_descriptor()

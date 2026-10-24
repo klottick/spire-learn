@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 import re
 from types import MappingProxyType
+from typing import TypeAlias
 
 from .contracts import ArrayValue, Candidate, ContractError, Observation
 
@@ -16,6 +17,7 @@ _NUMERIC_DTYPES = frozenset({
 })
 _SIGNED_INTEGER_DTYPES = frozenset({"int8", "int16", "int32", "int64"})
 _ACTION_TENSOR_KEYS = ("action_mask", "action_kind", "action_source", "action_target", "action_features")
+CategorySpec: TypeAlias = str | tuple[str | None, ...] | None
 
 
 @dataclass(frozen=True)
@@ -25,13 +27,19 @@ class TensorSpec:
     shape: tuple[int, ...]
     fields: tuple[str, ...]
     axes: tuple[str, ...]
-    category: str | None
+    category: CategorySpec
     mask: str | None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "shape", tuple(self.shape))
         object.__setattr__(self, "fields", tuple(self.fields))
         object.__setattr__(self, "axes", tuple(self.axes))
+        if isinstance(self.category, list):
+            object.__setattr__(self, "category", tuple(self.category))
+        if isinstance(self.category, tuple) and any(value is not None and (not isinstance(value, str) or not value) for value in self.category):
+            raise ContractError("per-field category entries must be vocabulary names or None")
+        if self.category is not None and not isinstance(self.category, (str, tuple)):
+            raise ContractError("category must be a vocabulary name, per-field category sequence, or None")
 
 
 @dataclass(frozen=True)
@@ -60,6 +68,34 @@ def _string(value: object, label: str) -> str:
     return value
 
 
+def _parse_category(
+    raw: object,
+    key: str,
+    fields: tuple[str, ...],
+    axes: tuple[str, ...],
+    shape: tuple[int, ...],
+    vocabularies: Mapping[str, tuple[str, ...]],
+) -> CategorySpec:
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        if raw not in vocabularies:
+            raise ContractError(f"{key}.category must name a declared vocabulary")
+        return raw
+    if not isinstance(raw, (list, tuple)):
+        raise ContractError(f"{key}.category must be a vocabulary name or per-field sequence")
+    if "field" not in axes:
+        raise ContractError(f"{key}.category sequences require a named field axis")
+    field_index = axes.index("field")
+    if len(raw) != len(fields) or len(raw) != shape[field_index]:
+        raise ContractError(f"{key}.category sequence must match its named fields")
+    categories = tuple(raw)
+    for category in categories:
+        if category is not None and (not isinstance(category, str) or category not in vocabularies):
+            raise ContractError(f"{key}.category entries must name declared vocabularies or be None")
+    return categories
+
+
 def parse_descriptor(raw: Mapping[str, object], *, allowed_schema_ids: frozenset[str]) -> ObservationSchema:
     root = _mapping(raw, "descriptor")
     schema_id = _string(root.get("schema_id"), "schema_id")
@@ -73,6 +109,10 @@ def parse_descriptor(raw: Mapping[str, object], *, allowed_schema_ids: frozenset
     action_count = action_space.get("n")
     if type(action_count) is not int or action_count <= 0:
         raise ContractError("action_space.n must be a positive integer")
+    if action_space.get("type") != "Discrete":
+        raise ContractError("action_space.type must be Discrete")
+    if type(action_space.get("start")) is not int or action_space["start"] != 0:
+        raise ContractError("action_space.start must be the integer zero")
     raw_vocabularies = _mapping(root.get("vocabularies"), "vocabularies")
     vocabularies: dict[str, tuple[str, ...]] = {}
     for key, values in raw_vocabularies.items():
@@ -110,9 +150,8 @@ def parse_descriptor(raw: Mapping[str, object], *, allowed_schema_ids: frozenset
             raise ContractError(f"{key}.axes must name every tensor dimension")
         if len(set(axes)) != len(axes):
             raise ContractError(f"{key}.axes must be unique")
-        category, mask = item.get("category"), item.get("mask")
-        if category is not None and (not isinstance(category, str) or category not in vocabularies):
-            raise ContractError(f"{key}.category must name a declared vocabulary")
+        category = _parse_category(item.get("category"), key, fields, axes, shape, vocabularies)
+        mask = item.get("mask")
         if mask is not None and (not isinstance(mask, str) or not mask):
             raise ContractError(f"{key}.mask must be a descriptor reference or None")
         if "field" in axes:

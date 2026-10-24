@@ -15,7 +15,7 @@ def tiny_descriptor(*, action_count: int = 3) -> dict[str, object]:
         "schema_id": "spire-learn-fixture-v1",
         "content_id": "spire-learn-fixture-content-v1",
         "fingerprint": "a" * 64,
-        "action_space": {"n": action_count},
+        "action_space": {"type": "Discrete", "n": action_count, "start": 0},
         "tensors": [
             {"key": "action_mask", "dtype": "int8", "shape": [action_count], "fields": ["legal"], "axes": ["candidate"], "category": None, "mask": None},
             {"key": "action_kind", "dtype": "int32", "shape": [action_count], "fields": ["kind"], "axes": ["candidate"], "category": "action", "mask": "action_mask"},

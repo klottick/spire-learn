@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import math
 from types import MappingProxyType
 
-from ..contracts import ArrayValue, ContractError, Failure, Observation, SetupBlocked, frozen_mapping
+from ..contracts import ArrayValue, ContractError, Failure, Observation, frozen_mapping
 from ..schema import EnvironmentContract, ObservationSchema
 
 
@@ -62,15 +62,12 @@ def native_snapshot(raw: Mapping[str, object], schema: ObservationSchema) -> Obs
             raise ContractError(f"{key} dtype or shape does not match descriptor")
         if dtype not in {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float16", "float32", "float64"}:
             raise ContractError(f"{key} has unsupported dtype")
-        if len(flat) != math.prod(shape) or any(type(v) not in (int, float) or (type(v) is float and not math.isfinite(v)) for v in flat):
-            raise ContractError(f"{key} contains invalid numeric values")
+        _validate_dtype_values(dtype, flat, key)
         values[key] = ArrayValue(dtype, tuple(shape), tuple(flat))
     return frozen_mapping(values)
 
 
 def _flatten(value: object, shape: tuple[int, ...]) -> tuple[int | float, ...]:
-    if isinstance(value, (list, tuple)) and len(value) == math.prod(shape) and all(type(v) in (int, float) for v in value):
-        return tuple(value)
     if not shape:
         return (value,) if type(value) in (int, float) else ()
     if not isinstance(value, (list, tuple)) or len(value) != shape[0]:
@@ -80,6 +77,27 @@ def _flatten(value: object, shape: tuple[int, ...]) -> tuple[int | float, ...]:
             raise ContractError("array values must be numeric primitives")
         return tuple(value)
     return tuple(item for row in value for item in _flatten(row, shape[1:]))
+
+
+def _validate_dtype_values(dtype: str, values: tuple[int | float, ...], key: str) -> None:
+    integer_bits = {"int8": 8, "int16": 16, "int32": 32, "int64": 64,
+                    "uint8": 8, "uint16": 16, "uint32": 32, "uint64": 64}
+    if dtype in integer_bits:
+        bits = integer_bits[dtype]
+        lower, upper = ((-(1 << (bits - 1)), (1 << (bits - 1)) - 1) if dtype.startswith("int") else (0, (1 << bits) - 1))
+        if any(type(value) is not int or not lower <= value <= upper for value in values):
+            raise ContractError(f"{key} values do not fit {dtype}")
+        return
+    max_finite = {"float16": 65504.0, "float32": 3.4028234663852886e38, "float64": 1.7976931348623157e308}[dtype]
+    for value in values:
+        if type(value) not in (int, float):
+            raise ContractError(f"{key} values must be numeric primitives")
+        try:
+            numeric = float(value)
+        except (OverflowError, ValueError) as exc:
+            raise ContractError(f"{key} value is outside {dtype} range") from exc
+        if not math.isfinite(numeric) or abs(numeric) > max_finite:
+            raise ContractError(f"{key} value is outside {dtype} range")
 
 
 def normalize_public_info(info: Mapping[str, object], schema: ObservationSchema) -> Mapping[str, object]:
@@ -103,6 +121,17 @@ def normalize_public_info(info: Mapping[str, object], schema: ObservationSchema)
 
 def native_failure(error: BaseException, *, error_types: NativeErrorTypes | None = None) -> Failure | None:
     if error_types is None:
+        import sys
+
+        module = sys.modules.get("spire_lab._native")
+        if module is None:
+            return None
+        names = ("CombatInputError", "CombatStateError", "CombatSetupError", "CombatFaultError")
+        resolved = tuple(getattr(module, name, None) for name in names)
+        if any(not isinstance(value, type) or not issubclass(value, Exception) for value in resolved):
+            return None
+        error_types = NativeErrorTypes(*resolved)
+    if any(not isinstance(value, type) or not issubclass(value, Exception) for value in (error_types.input, error_types.state, error_types.setup, error_types.fault)):
         return None
     kinds = ((error_types.input, "invalid_action"), (error_types.state, "environment_state"), (error_types.setup, "setup_error"), (error_types.fault, "simulator_fault"))
     for error_type, kind in kinds:
@@ -133,9 +162,25 @@ def make_vector(num_envs: int, partition: str, workers: int = 1) -> object:
 def public_build_info() -> Mapping[str, object] | None:
     import sys
 
-    module = sys.modules.get("spire_lab.public_native")
+    module = sys.modules.get("spire_lab._native")
     getter = getattr(module, "build_info", None) if module is not None else None
     if not callable(getter):
         return None
     value = getter()
-    return MappingProxyType(dict(value)) if isinstance(value, Mapping) else None
+    return _freeze_public_metadata(value) if isinstance(value, Mapping) else None
+
+
+def _freeze_public_metadata(value: object) -> object:
+    if value is None or type(value) in (str, bool, int):
+        return value
+    if type(value) is float:
+        if math.isfinite(value):
+            return value
+        raise ContractError("build metadata floats must be finite")
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise ContractError("build metadata keys must be strings")
+        return MappingProxyType({key: _freeze_public_metadata(item) for key, item in value.items()})
+    if isinstance(value, (tuple, list)):
+        return tuple(_freeze_public_metadata(item) for item in value)
+    raise ContractError("build metadata must contain JSON-compatible values")

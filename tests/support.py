@@ -72,8 +72,15 @@ class FakeArray:
         self.shape = shape
         self._values = values
 
-    def tolist(self) -> list[int | float]:
-        return list(self._values)
+    def tolist(self) -> object:
+        iterator = iter(self._values)
+
+        def build(shape: tuple[int, ...]) -> object:
+            if not shape:
+                return next(iterator)
+            return [build(shape[1:]) for _ in range(shape[0])]
+
+        return build(self.shape)
 
 
 class ScriptedEnv:

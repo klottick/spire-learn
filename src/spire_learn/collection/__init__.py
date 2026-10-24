@@ -1,0 +1,1 @@
+"""Pure collection-boundary utilities."""

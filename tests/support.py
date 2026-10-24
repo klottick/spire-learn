@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from spire_learn.contracts import (
     ArrayValue, CaseExecution, CaseResult, Choice, Observation, PublicDecision,
+    Route,
     frozen_mapping,
 )
 from spire_learn.schema import candidates_for, parse_descriptor
@@ -164,3 +165,24 @@ def public_decision(*, mask: tuple[int, ...] = (1, 1, 0), kinds: tuple[int, ...]
     obs = observation(mask=mask, kinds=kinds)
     schema = parse_descriptor(tiny_descriptor(action_count=len(mask)), allowed_schema_ids=frozenset({"spire-learn-fixture-v1"}))
     return PublicDecision(obs, candidates_for(obs, schema), tuple(bool(v) for v in mask), "a" * 64, "spire-learn-fixture-actions-v1")
+
+
+def vector_step_fixture() -> dict[str, object]:
+    """Two-row routing fixture with distinct old-final and reset observations."""
+    return {
+        "routes": (
+            Route("fixture", 0, "episode-0", "decision-0", True),
+            Route("fixture", 1, "episode-1", "decision-1", True),
+        ),
+        "sources": (observation(hp=12), observation(hp=11)),
+        "actions": (0, 1),
+        "rewards": (1.0, 0.0),
+        "terminated": (True, False),
+        "truncated": (False, False),
+        "main_observations": (observation(hp=10, mask=(0, 1, 0)), observation(hp=9)),
+        "final_observations": (observation(hp=10), None),
+        "final_presence": (True, False),
+        "final_info_presence": (True, False),
+        "states_after_source": (7, 9),
+        "reset_state": lambda slot: 0 if slot == 0 else None,
+    }

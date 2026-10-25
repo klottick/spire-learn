@@ -1,0 +1,30 @@
+{
+  "schema": "spire-learn-cases-v1",
+  "split": "selection",
+  "cases": [
+    {
+      "case_id": "starter-cultist-a0-v1",
+      "scenario_id": "starter-cultist-a0-v1",
+      "partition": "selection",
+      "executions": [
+        {
+          "execution_id": "selection-smoke-cultist-env7-policy101",
+          "environment_seed": 7,
+          "policy_seed": 101
+        }
+      ]
+    },
+    {
+      "case_id": "starter-jaw-worm-a0-v1",
+      "scenario_id": "starter-jaw-worm-a0-v1",
+      "partition": "selection",
+      "executions": [
+        {
+          "execution_id": "selection-smoke-jaw-worm-env11-policy103",
+          "environment_seed": 11,
+          "policy_seed": 103
+        }
+      ]
+    }
+  ]
+}

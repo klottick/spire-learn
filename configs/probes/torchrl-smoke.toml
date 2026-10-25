@@ -1,0 +1,12 @@
+mode = "probe-torchrl"
+profile = "smoke"
+agent = "random"
+cases = "../cases/selection-smoke.json"
+output_root = "../../runs/probes/torchrl-smoke"
+max_batch_steps = 128
+max_wall_seconds = 60
+traces = false
+
+[probe]
+num_envs = 2
+workers = 1

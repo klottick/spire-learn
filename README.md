@@ -21,15 +21,23 @@ contract; planned gym capabilities are not implemented learner support.
 
 ## Current state
 
-This is a local, dependency-free starter scaffold, not a working learner. No ML
-framework, algorithm, architecture, training budget or evaluation corpus is
-selected by creating it. Historical PPO and two-policy proposals are references,
-not an implementation commitment. No training or playing-strength result exists.
+This is a local, dependency-light evaluation scaffold, not a trained learner. A
+fixed-case evaluator and bounded CPU/native probes are present, but no learning
+framework, training algorithm, learned architecture, or playing-strength result
+has been selected or produced. The two-case selection smoke config is diagnostic,
+not a benchmark corpus or permission to run. The native evaluation smoke remains
+unrun and M1 is incomplete; see the [development and evaluation checks](docs/development.md)
+for current evidence and qualifications. Historical PPO and two-policy proposals
+remain references, not implementation commitments.
 
-Python **3.12** matches the gym's current Python package requirement. No packages
-have been installed and the gym is not yet a declared dependency. Its GitHub repo
-name is `spire-gym`, but its existing Python distribution/import names remain
-`spire-lab` / `spire_lab`; do not assume a PyPI package named `spire-gym` exists.
+Python **3.12** matches the gym's current Python package requirement. Spire Learn
+declares no runtime dependencies, and this project has not installed packages
+into the host Python. Separate protected CPU runtime environments used for the
+recorded native/probe evidence do contain qualified locked dependencies; see the
+[development guide](docs/development.md). The gym is not a declared dependency.
+Its GitHub repo name is `spire-gym`, but its Python distribution/import names
+remain `spire-lab` / `spire_lab`; do not assume a PyPI package named `spire-gym`
+exists.
 
 From this directory, check the package without installing anything:
 
@@ -54,7 +62,7 @@ when actual experiments are introduced.
 
 ## Distribution
 
-This bootstrap has no remote, commits or publication. A license for new learner
-code has not been selected. Copied gym documentation retains its upstream
-attribution/license, recorded in the reference index. Original game code, binaries,
-assets and private verification artifacts do not belong in this repository.
+Local Git history exists. A license for new learner code has not been selected.
+Copied gym documentation retains its upstream attribution/license, recorded in
+the reference index. Original game code, binaries, assets and private verification
+artifacts do not belong in this repository.

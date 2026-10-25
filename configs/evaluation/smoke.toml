@@ -1,0 +1,9 @@
+mode = "evaluate"
+profile = "smoke"
+agent = "random"
+cases = "../cases/selection-smoke.json"
+output_root = "../../runs/evaluation/smoke"
+per_case_decisions = 128
+max_wall_seconds = 60
+traces = false
+expected_partition = "selection"

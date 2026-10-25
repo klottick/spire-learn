@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 from spire_learn.contracts import CaseExecution
-from spire_learn.experiments.cases import CaseManifest
+from spire_learn.experiments.cases import CaseManifest, load_cases
 from spire_learn.experiments.config import (
     bind_case_expectations,
     load_config,
@@ -43,6 +43,57 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.cases.parent, cfg.output_root.parent)
         self.assertEqual(cfg.max_wall_seconds, 10.0)
         self.assertEqual(cfg.per_case_decisions, 5)
+
+    def test_authored_evaluation_profiles_use_exact_mode_specific_caps(self):
+        expected = (
+            ("smoke", 128, 60.0),
+            ("development", 1024, 600.0),
+            ("overnight", 4096, 28800.0),
+        )
+        for profile, decisions, wall_seconds in expected:
+            with self.subTest(profile=profile):
+                config = load_config(
+                    Path("configs/evaluation") / f"{profile}.toml",
+                    expected_mode="evaluate",
+                )
+                self.assertEqual(
+                    (config.mode, config.profile, config.agent,
+                     config.per_case_decisions, config.max_wall_seconds),
+                    ("evaluate", profile, "random", decisions, wall_seconds),
+                )
+                self.assertEqual(
+                    config.cases,
+                    Path("configs/cases/selection-smoke.json").resolve(),
+                )
+
+    def test_authored_probe_settings_derive_executions_from_selection_manifest(self):
+        manifest_path = Path("configs/cases/selection-smoke.json").resolve()
+        manifest = load_cases(manifest_path)
+        for mode in ("probe-vector", "probe-torchrl"):
+            with self.subTest(mode=mode):
+                config = load_config(
+                    Path("configs/probes") / f"{mode.removeprefix('probe-')}-smoke.toml",
+                    expected_mode=mode,
+                )
+                probe = to_probe_config(config, manifest)
+                self.assertIsNone(config.per_case_decisions)
+                self.assertEqual(
+                    (config.mode, config.profile, config.agent,
+                     config.max_batch_steps, config.max_wall_seconds,
+                     config.probe.num_envs, config.probe.workers),
+                    (mode, "smoke", "random", 128, 60.0, 2, 1),
+                )
+                self.assertEqual(probe.executions, manifest.executions)
+                self.assertEqual(
+                    tuple(
+                        (item.scenario_id, item.environment_seed, item.policy_seed)
+                        for item in probe.executions
+                    ),
+                    (
+                        ("starter-cultist-a0-v1", 7, 101),
+                        ("starter-jaw-worm-a0-v1", 11, 103),
+                    ),
+                )
 
     def test_relative_paths_use_config_parent_not_current_working_directory(self):
         with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as cwd:

@@ -21,6 +21,29 @@ class CasesTests(unittest.TestCase):
             manifest = load_cases(self.write(Path(d), env=0, policy=10**80))
             self.assertEqual((manifest.executions[0].environment_seed, manifest.executions[0].policy_seed), (0, 10**80))
 
+    def test_authored_selection_smoke_cases_are_unique_and_exact(self):
+        manifest = load_cases(Path("configs/cases/selection-smoke.json"))
+        self.assertEqual(manifest.split, "selection")
+        self.assertEqual(
+            tuple(
+                (item.case_id, item.scenario_id, item.partition,
+                 item.environment_seed, item.policy_seed)
+                for item in manifest.executions
+            ),
+            (
+                ("starter-cultist-a0-v1", "starter-cultist-a0-v1", "selection", 7, 101),
+                ("starter-jaw-worm-a0-v1", "starter-jaw-worm-a0-v1", "selection", 11, 103),
+            ),
+        )
+        self.assertEqual(
+            len({item.case_id for item in manifest.executions}),
+            len(manifest.executions),
+        )
+        self.assertEqual(
+            len({item.execution_id for item in manifest.executions}),
+            len(manifest.executions),
+        )
+
     def test_bool_and_negative_seeds_rejected(self):
         with tempfile.TemporaryDirectory() as d:
             path = self.write(Path(d)); data = json.loads(path.read_text())

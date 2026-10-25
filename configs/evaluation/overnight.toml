@@ -1,0 +1,9 @@
+mode = "evaluate"
+profile = "overnight"
+agent = "random"
+cases = "../cases/selection-smoke.json"
+output_root = "../../runs/evaluation/overnight"
+per_case_decisions = 4096
+max_wall_seconds = 28800
+traces = false
+expected_partition = "selection"

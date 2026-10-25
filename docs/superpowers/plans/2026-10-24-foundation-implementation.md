@@ -372,8 +372,8 @@ self.assertEqual(env.close_calls, 1)
 
 **Interfaces:** `summarize`, `EvaluationReport`, `evaluate`, `main` signatures and exit policy from ledger.
 
-- [ ] **Step 1 — Red report test:** name it `test_status_and_outcome_counts_reconcile`; create terminal victory/death, truncation, budget stop, fault, setup error and not-started records. Assert scheduled reconciliation, disjoint started statuses, faults absent from outcomes, win rate `wins/(wins+deaths)`, coverage `terminal/started`, null rates for zero denominators, and secondary error count.
-- [ ] **Step 1a — Test assertion:**
+- [x] **Step 1 — Red report test:** name it `test_status_and_outcome_counts_reconcile`; create terminal victory/death, truncation, budget stop, fault, setup error and not-started records. Assert scheduled reconciliation, disjoint started statuses, faults absent from outcomes, win rate `wins/(wins+deaths)`, coverage `terminal/started`, null rates for zero denominators, and secondary error count.
+- [x] **Step 1a — Test assertion:**
 
 ```python
 fault = case_result(execution=case_execution(execution_id="fault"), status="simulator_fault",
@@ -387,24 +387,29 @@ self.assertEqual(summary["completed_game_win_rate"], 1.0)
 self.assertEqual(summary["terminal_completion_coverage"], 0.5)
 ```
 
-- [ ] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_report -v`; expected failure.
-- [ ] **Step 3 — Implement report:** only recognized verified public outcomes count; reject duplicate execution IDs.
-- [ ] **Step 3a — Green report:** repeat the command; expect exact counts/rates above and `ValueError` for duplicate result IDs.
-- [ ] **Step 4 — Red runner tests in `tests/unit/test_runner.py`:** `test_evaluation_uses_fresh_policy_seed_per_execution`, `test_final_split_requires_explicit_opt_in`, `test_deadline_marks_remaining_cases_not_started`, `test_static_partition_mismatch_precedes_factory`, `test_runtime_fingerprint_mismatch_constructs_then_closes_without_reset`, `test_writer_error_preserves_prior_case_and_stops_without_retry`, `test_single_scheduler_never_counts_vector_replacements`.
-- [ ] **Step 5 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_runner -v`; expected failure.
-- [ ] **Step 6 — Implement runner:** static `validate_expectations(config, manifest)` before factory; actual descriptor check after factory/before reset. Inject `fixture_contract()` in runner tests with `ScriptedEnv`; production CLI always supplies `NATIVE_CONTRACT`, never fixture IDs from config/flags. `run_case` populates observed descriptor and available public build info; append that recorded discovery via writer update. Persist each case once. On writer error retain current result in memory and mark future executions not_started with artifact-failure reason; best-effort stderr/return report if disk is unavailable, do not pretend summary artifact was written. Count secondary failures and set exit 1 even if natural terminal outcome is retained.
-- [ ] **Step 7 — Green runner:** repeat command; assert exact factory/reset/close counts for static versus runtime mismatch, retained primary/outcome and no action retry.
-- [ ] **Step 8 — Red CLI tests:** create `test_import_and_help_do_not_import_optional_dependencies`, `test_validate_only_has_no_run_side_effects`, `test_final_flag_is_evaluation_only`, `test_exit_codes_distinguish_blocked_and_incomplete`. `main(['--help'])` returns 0 by catching argparse's help `SystemExit(0)`; malformed args return 2. Subprocesses set `PYTHONPATH=src` so source tree, not installed package, is tested.
-- [ ] **Step 9 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_cli -v`; expected failure.
-- [ ] **Step 10 — Implement CLI:** implement CLI and keep `__main__` main-guard-only; CLI production evaluation always uses `NATIVE_CONTRACT`.
-- [ ] **Step 10a — Verify CLI:** run `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_cli -v`; then run full core suite `PYTHONPATH=src python3.12 -B -m unittest discover -s tests/unit -v`; expected all unit tests pass without optional packages.
+- [x] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_report -v`; expected failure.
+- [x] **Step 3 — Implement report:** only recognized verified public outcomes count; reject duplicate execution IDs.
+- [x] **Step 3a — Green report:** repeat the command; expect exact counts/rates above and `ValueError` for duplicate result IDs.
+- [x] **Step 4 — Red runner tests in `tests/unit/test_runner.py`:** `test_evaluation_uses_fresh_policy_seed_per_execution`, `test_final_split_requires_explicit_opt_in`, `test_deadline_marks_remaining_cases_not_started`, `test_static_partition_mismatch_precedes_factory`, `test_runtime_fingerprint_mismatch_constructs_then_closes_without_reset`, `test_writer_error_preserves_prior_case_and_stops_without_retry`, `test_single_scheduler_never_counts_vector_replacements`.
+- [x] **Step 5 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_runner -v`; expected failure.
+- [x] **Step 6 — Implement runner:** static `validate_expectations(config, manifest)` before factory; actual descriptor check after factory/before reset. Inject `fixture_contract()` in runner tests with `ScriptedEnv`; production CLI always supplies `NATIVE_CONTRACT`, never fixture IDs from config/flags. `run_case` populates observed descriptor and available public build info; append that recorded discovery via writer update. Persist each case once. On writer error retain current result in memory and mark future executions not_started with artifact-failure reason; best-effort stderr/return report if disk is unavailable, do not pretend summary artifact was written. Count secondary failures and set exit 1 even if natural terminal outcome is retained.
+- [x] **Step 7 — Green runner:** repeat command; assert exact factory/reset/close counts for static versus runtime mismatch, retained primary/outcome and no action retry.
+- [x] **Step 8 — Red CLI tests:** create `test_import_and_help_do_not_import_optional_dependencies`, `test_validate_only_has_no_run_side_effects`, `test_final_flag_is_evaluation_only`, `test_exit_codes_distinguish_blocked_and_incomplete`. `main(['--help'])` returns 0 by catching argparse's help `SystemExit(0)`; malformed args return 2. Subprocesses set `PYTHONPATH=src` so source tree, not installed package, is tested.
+- [x] **Step 9 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_cli -v`; expected failure.
+- [x] **Step 10 — Implement CLI:** implement CLI and keep `__main__` main-guard-only; CLI production evaluation always uses `NATIVE_CONTRACT`.
+- [x] **Step 10a — Verify CLI:** run `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_cli -v`; then run full core suite `PYTHONPATH=src python3.12 -B -m unittest discover -s tests/unit -v`; expected all unit tests pass without optional packages.
+Core accepted in `b6fa739` after parent and independent spec/quality review.
+Retained default evidence:262 total253passed9 gated skips; focused3/19/11.
+Native evaluation below is separately unrun/unapproved, so Task9 acceptance
+remains pending that gate.
+
 - [ ] **Step 11 — Integration only after authority:** run `SPIRE_LEARN_RUN_NATIVE_INTEGRATION=1 PYTHONPATH=src "$PYTHON312" -B -m unittest tests.integration.test_evaluation -v`; smoke cases cap at 128 decisions. Verify tests were discovered/executed, artifacts reconcile, no final split and no exact wall-time claim. Missing flag/setup is blocked, not green.
 
 ## Task 10: Authored Configs and Documentation
 
 **Depends on:** Tasks 1–9. **Files:** `configs/cases/selection-smoke.json`, `configs/evaluation/smoke.toml`, `configs/evaluation/development.toml`, `configs/evaluation/overnight.toml`, `configs/probes/vector-smoke.toml`, `configs/probes/torchrl-smoke.toml`, `docs/development.md`; conditional `README.md` modification.
 
-- [ ] **Step 1 — Red config tests:** in `tests/unit/test_config.py`, assert profiles parse with exact mode-specific caps and probe settings derive from manifest executions. Example assertion:
+- [x] **Step 1 — Red config tests:** in `tests/unit/test_config.py`, assert profiles parse with exact mode-specific caps and probe settings derive from manifest executions. Example assertion:
 
 ```python
 config = load_config(Path("configs/evaluation/smoke.toml"), expected_mode="evaluate")
@@ -412,13 +417,18 @@ self.assertEqual((config.profile, config.per_case_decisions, config.max_wall_sec
                  ("smoke", 128, 60.0))
 ```
 
-- [ ] **Step 2 — Run red config tests:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_config tests.unit.test_cases -v`; expect missing authored config files to fail.
-- [ ] **Step 3 — Add selection fixture:** exact scenarios `starter-cultist-a0-v1` (env 7/policy 101), `starter-jaw-worm-a0-v1` (env 11/policy 103), split selection, unique IDs. Diagnostic examples, not benchmark/authorization.
-- [ ] **Step 4 — Add evaluation profiles:** smoke 128 decisions/60 sec, development 1024/600, overnight 4096/28800; explicit mode/agent/manifest/output/profile. Proposed ceilings, not permission to run.
-- [ ] **Step 5 — Add probe examples:** each references same two-execution manifest; root `max_batch_steps=128`, `max_wall_seconds=60`; `[probe]` contains only `num_envs=2`, `workers=1`. No seed arrays or partition override; separate vector/TorchRL mode files.
-- [ ] **Step 6 — Green config tests:** repeat the command and expect pass; evaluation forbids probe fields, probes forbid per-case cap.
-- [ ] **Step 7 — Document** core tests, authorized integration gates/commands using `PYTHONPATH=src "$PYTHON312"`, flags, artifacts, provenance and RNG/TIME qualifications; no implicit install/run instructions.
-- [ ] **Step 8 — README:** only change if actual evidence supports precise status; no learner strength claim. If integration blocked, say incomplete/blocked.
+- [x] **Step 2 — Run red config tests:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_config tests.unit.test_cases -v`; expect missing authored config files to fail.
+- [x] **Step 3 — Add selection fixture:** exact scenarios `starter-cultist-a0-v1` (env 7/policy 101), `starter-jaw-worm-a0-v1` (env 11/policy 103), split selection, unique IDs. Diagnostic examples, not benchmark/authorization.
+- [x] **Step 4 — Add evaluation profiles:** smoke 128 decisions/60 sec, development 1024/600, overnight 4096/28800; explicit mode/agent/manifest/output/profile. Proposed ceilings, not permission to run.
+- [x] **Step 5 — Add probe examples:** each references same two-execution manifest; root `max_batch_steps=128`, `max_wall_seconds=60`; `[probe]` contains only `num_envs=2`, `workers=1`. No seed arrays or partition override; separate vector/TorchRL mode files.
+- [x] **Step 6 — Green config tests:** repeat the command and expect pass; evaluation forbids probe fields, probes forbid per-case cap.
+- [x] **Step 7 — Document** core tests, authorized integration gates/commands using `PYTHONPATH=src "$PYTHON312"`, flags, artifacts, provenance and RNG/TIME qualifications; no implicit install/run instructions.
+- [x] **Step 8 — README:** only change if actual evidence supports precise status; no learner strength claim. If integration blocked, say incomplete/blocked.
+Core configs/docs accepted after parent source/evidence review and independent
+Task10 specification/quality PASS.265 total256passed9 gated skips;29 focused;
+five CLI validation checks and27-module optional-import isolation passed.
+Final acceptance below still requires the unrun native evaluation and broad review.
+
 - [ ] **Step 9 — Acceptance review:** require core suite, actual single and vector evidence, reconciled artifacts, and TorchRL compatible/adaptable evidence or separately approved, tested PyTorch fallback. Blocked integration is not acceptance. Inspect changed/untracked paths.
 - [ ] **Step 10 — Final execution report:** record actual acceptance evidence and remaining blockers for M1; no automatic next milestone or implementation authorization.
 

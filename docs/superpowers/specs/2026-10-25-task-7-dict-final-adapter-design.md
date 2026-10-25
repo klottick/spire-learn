@@ -1,6 +1,6 @@
 # Task 7 dictionary final-observation reader revision
 
-**Status: Proposed; NOT approved for implementation or another runtime run.**
+**Status: User-approved on 2026-10-25 ("I approve all changes").**
 This is a narrow revision of M1 §7 after the first actual framework probe reported
 incompatible. No framework adoption, training or broader native experiment follows
 from approving it. Luna workers remain max reasoning, with substantive parent review.
@@ -42,7 +42,8 @@ The separate setup96vs32 draw-budget breach remains a historical qualification.
 3. **Retain the current incompatible result.** Make no changes or new calls;
    Task7/collector-contract freeze/M1 remain incomplete.
 
-The recommendation is the parent's proposal, not a user-selected architecture.
+The user approved the recommended reader revision and companion bounded plan.
+This does not select a broader training architecture or the fallback option.
 
 ## Proposed behavior
 
@@ -78,7 +79,7 @@ The recommendation is the parent's proposal, not a user-selected architecture.
 
 ## Approval envelope
 
-Approval would authorize only the companion plan's code/tests plus one new
+Approval authorizes only the companion plan's code/tests plus one new
 protected offline validation shard: three framework-reader checks using authored
 numeric data (zero `spire_lab`/native-binding imports, environments, actions or
 diagnostic draws; the stdlib learner adapter remains importable), followed

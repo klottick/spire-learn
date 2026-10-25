@@ -4,7 +4,8 @@
 > task after explicit user approval. Luna max reasoning, no nested workers.
 > Canonical workspace remains artifacts/development/foundation; main authorized.
 
-**Status:** Proposed, not executable until user approval of this design/plan.
+**Status:** User-approved on 2026-10-25 ("I approve all changes"); execution may
+proceed within the exact scope and gated runtime limits below.
 **Goal:** Test a bounded public Dict-final reader adaptation against the observed
 TorchRL terminal mapping mismatch, without modifying Gym or installed packages.
 **Architecture:** A new lazy optional reader module supplies a known-spec
@@ -14,12 +15,13 @@ The existing guarded diagnostic probe verifies actual same-call mapping.
 TensorDict0.14.3/Gymnasium1.4.0/NumPy2.5.4 and own Gym0.1.0 only.
 **Spec:** [Proposed narrow design](../specs/2026-10-25-task-7-dict-final-adapter-design.md)
 and approved foundation design§7. Original plan Task7 says incompatible results
-stop for a user-approved revision; this document requests that revision.
+stop for a user-approved revision; the user has now approved this revision.
 
 ## Global constraints
 
-- Do not implement or run this proposal before explicit approval; no automatic
-  rerun of the failed cohort. Retain incompatible run and setup96/32 qualification.
+- Explicit approval covers this revision and its gated new validation shard;
+  no automatic rerun of the failed cohort. Retain incompatible run and setup96/32
+  qualification.
 - Public observations/masks only; seeds/route IDs/private diagnostics never actors.
   No game rules, copied Gym code/fixtures, native edits or opaque-state copying.
 - Keep `probes/vector.py`, public contracts and installed venv/wheels unchanged.

@@ -314,8 +314,8 @@ self.assertIsNone(native_failure(RuntimeError("not a typed simulator fault"), er
 
 **Interfaces:** `ProbeConfig` imported from `experiments.config` plus report/verdict/probe functions from ledger; no dependency from config back into probes.
 
-- [ ] **Step 1 — Red pure tests:** create `test_probe_verdict_requires_boundary_evidence`, `test_native_and_torchrl_require_distinct_check_sets`, and `test_probe_report_counts_batches_slots_and_replacements`. Missing required checks are blocked; runtime unavailable is blocked; failed required checks incompatible; all required passes compatible absent adaptation proof.
-- [ ] **Step 1a — Test assertion:**
+- [x] **Step 1 — Red pure tests:** create `test_probe_verdict_requires_boundary_evidence`, `test_native_and_torchrl_require_distinct_check_sets`, and `test_probe_report_counts_batches_slots_and_replacements`. Missing required checks are blocked; runtime unavailable is blocked; failed required checks incompatible; all required passes compatible absent adaptation proof.
+- [x] **Step 1a — Test assertion:**
 
 ```python
 self.assertEqual(probe_verdict({}, required=NATIVE_CHECKS, runtime_available=True), "blocked")
@@ -326,14 +326,16 @@ self.assertEqual(probe_verdict(checks, required=NATIVE_CHECKS, runtime_available
                                 adaptation_verified=True), "incompatible")
 ```
 
-- [ ] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_probes -v`; expected failure.
-- [ ] **Step 3 — Implement pure report/verdict:** implement separate native/TorchRL required check sets and `probe_report_to_json` explicit field mapping (including safe `Failure` encoding). Reports persist via `writer.write_metric` with `spire-learn-probe-v1` and appear in final summary; native verdict does not imply TorchRL verdict.
-- [ ] **Step 3a — Verify pure report/verdict:** run `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_probes -v`; assert native check set and TorchRL check set separately, mapping output fields and failure encoding.
-- [ ] **Step 4 — Runtime probe only after gate:** use exactly B manifest executions from `to_probe_config`, full-width native-endian int64 actions, legal current masks, batch cap and wall cap. Compare raw delivered public data with final/reset rows and masks; observe actual mixed ended/live row, old context and replacement state. If not observed within cap, report incomplete/blocked, do not synthesize evidence.
-- [ ] **Step 4b — Authorized native vector probe:** `test_vector_probe.py` invokes the real `run_vector_probe` against the public facade, requires mixed-row old/final/reset evidence and records `ProbeReport`. Run `SPIRE_LEARN_RUN_NATIVE_INTEGRATION=1 PYTHONPATH=src "$PYTHON312" -B -m unittest tests.integration.test_vector_probe -v`; `$PYTHON312` must be explicitly authorized. Missing opt-in is blocked/not-run, not green.
-- [ ] **Step 5 — TorchRL opt-in only:** separately inspect actual GymWrapper mapping and MaskedCategorical CPU sampling/log-probability; required checks include observation mapping and mask semantics. No optimizer or empty-mask sampling. Record candidate versions and native build separately.
-- [ ] **Step 6 — Integration command:** `SPIRE_LEARN_RUN_TORCHRL_INTEGRATION=1 PYTHONPATH=src "$PYTHON312" -B -m unittest tests.integration.test_torchrl_adapter -v`; require authorized `$PYTHON312`, never fallback to bare Python. Missing flag/dependencies is blocked, not skipped pass.
-- [ ] **Step 7 — Gate:** freeze provisional collection interfaces only after evidence and user/parent review. Compatible/adaptable/incompatible/blocked meanings follow ledger. If blocked, pure stdlib work may continue after implementation authorization, but M1 and contract freeze remain incomplete. If incompatible, stop for user-approved revision. A PyTorch-native fallback requires separate approval and demonstrated boundary/mask evidence.
+- [x] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_probes -v`; expected failure.
+- [x] **Step 3 — Implement pure report/verdict:** implement separate native/TorchRL required check sets and `probe_report_to_json` explicit field mapping (including safe `Failure` encoding). Reports persist via `writer.write_metric` with `spire-learn-probe-v1` and appear in final summary; native verdict does not imply TorchRL verdict.
+- [x] **Step 3a — Verify pure report/verdict:** run `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_probes -v`; assert native check set and TorchRL check set separately, mapping output fields and failure encoding.
+- [x] **Step 4 — Runtime probe only after gate:** use exactly B manifest executions from `to_probe_config`, full-width native-endian int64 actions, legal current masks, batch cap and wall cap. Compare raw delivered public data with final/reset rows and masks; observe actual mixed ended/live row, old context and replacement state. If not observed within cap, report incomplete/blocked, do not synthesize evidence.
+- [x] **Step 4b — Authorized native vector probe:** `test_vector_probe.py` invokes the real `run_vector_probe` against the public facade, requires mixed-row old/final/reset evidence and records `ProbeReport`. Run `SPIRE_LEARN_RUN_NATIVE_INTEGRATION=1 PYTHONPATH=src "$PYTHON312" -B -m unittest tests.integration.test_vector_probe -v`; `$PYTHON312` must be explicitly authorized. Missing opt-in is blocked/not-run, not green.
+- [x] **Step 5 — TorchRL opt-in only:** separately inspect actual GymWrapper mapping and MaskedCategorical CPU sampling/log-probability; required checks include observation mapping and mask semantics. No optimizer or empty-mask sampling. Record candidate versions and native build separately.
+- [x] **Step 6 — Integration command:** `SPIRE_LEARN_RUN_TORCHRL_INTEGRATION=1 PYTHONPATH=src "$PYTHON312" -B -m unittest tests.integration.test_torchrl_adapter -v`; require authorized `$PYTHON312`, never fallback to bare Python. Missing flag/dependencies is blocked, not skipped pass.
+- [x] **Step 7 — Gate:** freeze provisional collection interfaces only after evidence and user/parent review. Compatible/adaptable/incompatible/blocked meanings follow ledger. If blocked, pure stdlib work may continue after implementation authorization, but M1 and contract freeze remain incomplete. If incompatible, stop for user-approved revision. A PyTorch-native fallback requires separate approval and demonstrated boundary/mask evidence.
+
+**Acceptance (2026-10-25):** Parent accepted the bounded native and adapted TorchRL evidence after independent Luna/max code and runtime reviews. Tested reader commit `51194e1`; actual reader API3/0 and cohort1/0, adaptable/all8checks pass. Canonical acceptance record: `artifacts/development/foundation/task-7-contract-freeze.md`, including retained historical setup, race and audit qualifications. Provisional M1 collection contracts are frozen; M1 remains incomplete.
 
 ## Task 8: Single-Case Collector
 

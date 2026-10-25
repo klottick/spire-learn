@@ -70,33 +70,33 @@ one registered learner reader, zero registered vendor readers and exact final
 leaf-spec agreement. The None default retains the previous hook for core tests;
 the revised production probe explicitly selects the new reader.
 
-- [ ] Write focused pure tests first for owned leaf preparation, missing/presence/
+- [x] Write focused pure tests first for owned leaf preparation, missing/presence/
   dtype/shape rejection, no input mutation, info/observation outcome collision,
   and passive known-spec registration. Use authored protocol fixtures, not Gym
   fixtures or a fake simulator. Assert actual expected values, not implementation.
-- [ ] Run `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_torchrl_dict_final -v`;
+- [x] Run `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_torchrl_dict_final -v`;
   retain real RED commands/output/exits. Missing runtime is not behavioral RED.
-- [ ] Implement only declared public Dict tensor leaves from final_obs; validate
+- [x] Implement only declared public Dict tensor leaves from final_obs; validate
   all rows before assigning prepared output. Reuse existing core snapshot and
   presence validation. Derive ended mask from actual TD done when present;
   absence is allowed only for registration/reset with no final fields. Require
   equality with public final masks. No reading routing/hidden fields as features.
-- [ ] Inject via GymWrapper's public info-reader registration hook, with known
+- [x] Inject via GymWrapper's public info-reader registration hook, with known
   Composite final spec. No vendor/installed-package monkeypatch, private reader
   storage edits, observation-key renaming or replacement of VecGymEnvTransform.
-- [ ] Assert in focused tests that exactly the learner reader is registered;
+- [x] Assert in focused tests that exactly the learner reader is registered;
   the constructor-supplied vendor reader is never registered or called. A failed
   spec check must register no reader and perform no environment operation.
-- [ ] Add per-key/row dtype/shape/value mismatch diagnostics from existing owned
+- [x] Add per-key/row dtype/shape/value mismatch diagnostics from existing owned
   raw and mapped snapshots without new calls/samples; persist before stopping.
-- [ ] Assert adapter ID persistence in discovery/summary using a real RunWriter
+- [x] Assert adapter ID persistence in discovery/summary using a real RunWriter
   in an owned temporary directory. Assert deliberately mismatching authored
   leaves persist a `mapping_mismatch` probe metric identifying `row`, `key`,
   `expected_dtype`, `observed_dtype`, `expected_shape`, `observed_shape` and finite
   expected/observed values when available (otherwise explicit unavailable).
   Never assign a partial final output before validation succeeds. This metadata
   is a diagnostic, never an actor input or a replacement native observation.
-- [ ] Run focused GREEN, current TorchRL guard tests, one full default suite with
+- [x] Run focused GREEN, current TorchRL guard tests, one full default suite with
   native/framework opt-in flags unset, and fresh import/discovery isolation.
   Commit only explicit task paths after parent/independent spec+quality review.
 
@@ -107,22 +107,22 @@ opt-in `SPIRE_LEARN_RUN_TORCHRL_READER_INTEGRATION=1`. Import optional packages
 only inside opted-in tests. Missing package with flag set is error, never skip.
 **Keep:** existing single `tests.integration.test_torchrl_adapter` cohort test.
 
-- [ ] Add `test_mixed_dict_final_values_and_presence`: real CPU TensorDict/spec,
+- [x] Add `test_mixed_dict_final_values_and_presence`: real CPU TensorDict/spec,
   authored B2 fields including player and action_mask; only ended row filled,
   absent None stays absent and input/main reset arrays are unchanged.
-- [ ] Add `test_info_outcome_does_not_replace_observation_outcome`: deliberately
+- [x] Add `test_info_outcome_does_not_replace_observation_outcome`: deliberately
   different authored info outcome and nested observation outcome; assert nested
   observation wins with exact dtype/shape/value. Zero environment/sampler calls.
-- [ ] Add `test_reader_registration_has_zero_environment_calls`: known spec,
+- [x] Add `test_reader_registration_has_zero_environment_calls`: known spec,
   empty registration/reset info and no-final ongoing data; no implicit reset,
   step/check_env_specs/rollout. Use a counter-only registration owner plus actual
   public reader/spec/TensorDict types; real GymWrapper passivity is proved only
   by the following native probe's construction guard. Assert malformed masks/
   fields fail explicitly.
-- [ ] Review new code/tests before runtime. Use one fresh exclusive output/marker
+- [x] Review new code/tests before runtime. Use one fresh exclusive output/marker
   and pinned protected offline container; interpreter `/work/venv-task7/bin/python`.
   Venv/src/tests RO, fresh output RW, no whole-root/home/credential/socket mount.
-- [ ] Run the three reader tests first (require3executed0skipped, <=60s, zero
+- [x] Run the three reader tests first (require3executed0skipped, <=60s, zero
   `spire_lab`/native-binding imports, environments, actions or draws). The stdlib
   learner adapter may be imported. Then, only if green, run exactly the existing one
   framework cohort test (require1executed0skipped) within the same600s shard.
@@ -147,14 +147,18 @@ only inside opted-in tests. Missing package with flag set is error, never skip.
   Both commands share one fresh exclusive output/marker, protected container
   and600s hard shard including cleanup. Failure of the first command ends the
   shard with no cohort; failure of the second ends without another invocation.
-- [ ] Require constructor nativeforward0, reset1, <=128 steps, <=256 reserved
+- [x] Require constructor nativeforward0, reset1, <=128 steps, <=256 reserved
   draws, <=60s probe, actual mixed row plus later fresh replacement decision,
   all8checks pass and exact old-final/main mapping; verdict must be adaptable.
   Any failure stops with preserved evidence and no retry or compatibility claim.
-- [ ] Parent and independent reviewer inspect source hashes, actual output,
+- [x] Parent and independent reviewer inspect source hashes, actual output,
   payload mapping diagnostics, counters/protections/cleanup and schema/build.
   Only then consider Task7 acceptance/contract freeze. Tasks8–10 remain pending
   until that gate; this approval does not waive the historical setup deviation.
 
 Reports/logs stay in `artifacts/development/foundation/`; do not overwrite prior
 reports, venv, run artifacts or user changes. Use fresh task-specific report names.
+
+## Accepted execution
+
+Parent accepted on2026-10-25 after independent code/runtime reviews. Tested source`51194e1`,3APItests/0skips then1cohort/0skips; adaptable, all8checks pass,11batch22slot1replacement22diagnostic samples. Full record and retained historical qualifications: `artifacts/development/foundation/task-7-contract-freeze.md`. Original race-era TDD logs are qualified; actual final core and native evidence is distinguished in reports. This completes this narrow revision, not M1.

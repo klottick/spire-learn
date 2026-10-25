@@ -19,6 +19,45 @@ approved `/root` search-bit and default-user change was made. Runtime image,
 source pins/mounts/fixture overlay, dependencies, resource/storage limits and
 conformance bounds below remain unchanged. Native conformance has not run.
 
+Stage A Task 2 subsequently built and audited one own Gym wheel, exit 0:
+`spire_lab-0.1.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`,
+SHA-256 `25cd26001e8cf3034da95434351ac71f92f676dbeeb15784682f809e82d4799a`.
+Source and protected learner changes remained unchanged. Runtime import and
+compatibility remain unverified until the later phases.
+
+The build uses fresh owned DATA root
+`artifacts/development/foundation/runtime/2e4242dc-1852-4d78-a13f-1907b42fc94f`
+as `/work`. Host-only Docker client configuration remains under the original
+runtime root, outside that bind. This uses the approved fresh-work-root
+mechanism to exclude a generated Docker client token from container inputs;
+no credential read/copy/move or extra overlay/mount was needed. Keep data and
+client roots separate for all remaining phases. Logs/provenance from earlier
+phases remain retained at their original paths.
+
+Stage A Task 3 subsequently resolved and audited 15 binary wheels, generated
+hash lock SHA-256
+`d026856db845f105383c91d4901231fd016111f46257999456511e699475ee45`,
+and installed offline with `pip check` exit 0. Exact CPU Torch payload hash was
+verified before use. Runtime CPython 3.12.15/glibc 2.36 contains NumPy 2.5.4,
+Gymnasium 1.4.0, Torch 2.14.1+cpu (`torch.version.cuda is None`), and the own
+Gym wheel; no Gym native import or gameplay was performed in that setup phase.
+The full wheel closure, lock and installation logs remain ignored under DATA.
+Conformance is the next separate evidence gate; this setup is not Task 6
+completion or a training/framework-adoption result.
+
+Stage A Task 4 then ran exactly the three opt-in conformance tests offline:
+3 executed, 0 skipped, all passed (exit 0). Cultist delivered20 actions and
+Jaw Worm29, each naturally terminating with public victory/reward+1 and exactly
+one reset/close;49 total is within128 per scenario/256 total. Actual native
+build metadata matches revision `4874fb398128c142bd56f10a12e6fca939a88f93`
+and Rust1.98.0. Native descriptor fingerprint observed:
+`8fd66d212259d2bdd27139988a772e1a6c223f8d65524f38c74174a0d0843357`.
+Host baseline116 passed; final default discovery119 includes116 core passes
+and3 gated native skips, with no optional imports in fresh discovery/import
+checks. This is bounded single-environment conformance, not playing strength,
+vector/TorchRL support or original-game transfer. RNG-001/TIME-001 remain.
+Task6 independent completion review is pending; the milestone is not complete.
+
 ## Historical approval and reviewed execution requirements
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use

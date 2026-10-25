@@ -343,8 +343,8 @@ self.assertEqual(probe_verdict(checks, required=NATIVE_CHECKS, runtime_available
 
 **Interfaces:** Exact `run_case` signature in ledger; injected factory and classifier allow dependency-free scripted tests.
 
-- [ ] **Step 1 — Red tests:** create `test_terminal_transition_records_public_outcome`, `test_truncation_is_distinct`, `test_decision_cap_is_budget_stop`, `test_illegal_action_has_zero_steps`, `test_empty_nonterminal_mask_is_contract_error`, `test_typed_fault_is_not_retried`, `test_terminal_step_delivered_after_deadline_is_preserved`, `test_trace_and_close_errors_preserve_terminal_result_without_retry`. Inject typed fault classes; arbitrary RuntimeError remains unmapped.
-- [ ] **Step 1a — Test assertion:**
+- [x] **Step 1 — Red tests:** create `test_terminal_transition_records_public_outcome`, `test_truncation_is_distinct`, `test_decision_cap_is_budget_stop`, `test_illegal_action_has_zero_steps`, `test_empty_nonterminal_mask_is_contract_error`, `test_typed_fault_is_not_retried`, `test_terminal_step_delivered_after_deadline_is_preserved`, `test_trace_and_close_errors_preserve_terminal_result_without_retry`. Inject typed fault classes; arbitrary RuntimeError remains unmapped.
+- [x] **Step 1a — Test assertion:**
 
 ```python
 clock = FakeClock()
@@ -359,10 +359,12 @@ self.assertEqual(len(env.step_calls), 1)
 self.assertEqual(env.close_calls, 1)
 ```
 
-- [ ] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_single -v`; expected failure.
-- [ ] **Step 3 — Implement:** validate case fields/profile and actual descriptor/content/fingerprint after factory construction and before reset. Runtime mismatch: factory count 1, reset count 0, close count 1; `setup_error` with primary failure. Runner owns config-vs-manifest assertions before factory (Task 9). Factory failure has no env to close; if factory returns, close exactly once. Reset failure or unsupported runtime profile before first successful reset is unstarted `setup_error`, preserving the primary failure kind. No hidden retry.
-- [ ] **Step 4 — Preserve accepted outcomes and classify errors:** invalid agent choice (including bool, stale ID, or illegal action) rejected by `validate_result` -> `agent_error`; malformed public observation or empty nonterminal mask -> `contract_error`; factory/reset/unsupported runtime profile before first successful reset -> `setup_error`, preserving the primary failure kind. Do not classify arbitrary `RuntimeError` as simulator fault. Upon delivered step, record accepted step/reward/terminal outcome before invoking trace callback. Ongoing callback error -> `exec_error` primary; terminal callback/close error -> retain terminal outcome and attach secondary. Close never replaces primary. Typed simulator failure remains error, never death. One reset, close exactly once.
-- [ ] **Step 5 — Green:** repeat focused command; assert terminal step overshooting deadline remains terminal, ongoing deadline stops before another action, and call logs show no retries or extra resets.
+- [x] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_single -v`; expected failure.
+- [x] **Step 3 — Implement:** validate static case fields/profile before factory construction; validate the actual descriptor/content/fingerprint after construction and before reset. Runtime mismatch: factory count 1, reset count 0, close count 1; `setup_error` with primary failure. Runner owns config-vs-manifest assertions before factory (Task 9). Factory failure has no env to close; if factory returns, close exactly once. Reset failure or unsupported runtime profile before first successful reset is unstarted `setup_error`, preserving the primary failure kind. No hidden retry.
+- [x] **Step 4 — Preserve accepted outcomes and classify errors:** invalid agent choice (including bool, stale ID, or illegal action) rejected by `validate_result` -> `agent_error`; malformed public observation or empty nonterminal mask -> `contract_error`; factory/reset/unsupported runtime profile before first successful reset -> `setup_error`, preserving the primary failure kind. Do not classify arbitrary `RuntimeError` as simulator fault. Upon delivered step, record accepted step/reward/terminal outcome before invoking trace callback. Ongoing callback error -> `exec_error` primary; terminal callback/close error -> retain terminal outcome and attach secondary. Close never replaces primary. Typed simulator failure remains error, never death. One reset, close exactly once.
+- [x] **Step 5 — Green:** repeat focused command; assert terminal step overshooting deadline remains terminal, ongoing deadline stops before another action, and call logs show no retries or extra resets.
+
+**Core acceptance (2026-10-25):** Parent and independent Luna/max review accepted collector commit `773c8d7`, including the public HP resource allowlist and a focused both-flags fix. Final collector29focusedpass; prior full227total219pass8skips and six-optional-package import/discovery checks passed. Actual evaluator integration remains separately gated. A returned reset marks started before subsequent observation-contract validation; reset exceptions remain unstarted. Recognized delivered outcomes remain independent of execution status (for example, terminal reward-sum overflow retains victory with contract_error).
 
 ## Task 9: Reports, Evaluation Runner and CLI
 

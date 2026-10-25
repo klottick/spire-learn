@@ -103,7 +103,10 @@ def _validate_dtype_values(dtype: str, values: tuple[int | float, ...], key: str
 
 def normalize_public_info(info: Mapping[str, object], schema: ObservationSchema) -> Mapping[str, object]:
     result: dict[str, object] = {}
-    for key in ("outcome", "episode_steps", "steps", "final_resources"):
+    for key in (
+        "outcome", "episode_steps", "steps", "final_resources",
+        "hp_before_healing", "hp_after_cleanup",
+    ):
         if key not in info:
             continue
         value = info[key]
@@ -117,6 +120,8 @@ def normalize_public_info(info: Mapping[str, object], schema: ObservationSchema)
             result["steps"] = value
         elif key == "final_resources" and isinstance(value, Mapping):
             result[key] = MappingProxyType({k: v for k, v in value.items() if isinstance(k, str) and (v is None or type(v) is int)})
+        elif key in ("hp_before_healing", "hp_after_cleanup") and (value is None or type(value) is int):
+            result[key] = value
     return MappingProxyType(result)
 
 

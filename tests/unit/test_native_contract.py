@@ -163,6 +163,29 @@ class NativeContractTests(unittest.TestCase):
         value = self.native.normalize_public_info({"outcome": 1, "steps": 4, "seed": 99, "private": "x"}, self.schema)
         self.assertEqual(value, {"outcome": "victory", "steps": 4})
 
+    def test_info_allowlist_preserves_documented_terminal_hp_fields_only(self):
+        value = self.native.normalize_public_info(
+            {
+                "hp_before_healing": 17,
+                "hp_after_cleanup": None,
+                "private_hp": 99,
+                "seed": 123,
+                "hidden": "not public",
+            },
+            self.schema,
+        )
+        self.assertEqual(
+            value,
+            {"hp_before_healing": 17, "hp_after_cleanup": None},
+        )
+
+        for invalid in (True, 1.5, "17", object()):
+            with self.subTest(invalid=type(invalid).__name__):
+                filtered = self.native.normalize_public_info(
+                    {"hp_before_healing": invalid}, self.schema
+                )
+                self.assertEqual(filtered, {})
+
     def test_unsupported_schema_is_setup_error(self):
         descriptor = tiny_descriptor()
         descriptor["schema_id"] = "unsupported"

@@ -4,7 +4,13 @@
 > explicit approval of the new dependency setup. Luna workers use max reasoning;
 > no nested agents. Keep artifacts/development/foundation as canonical workspace.
 
-**Status:** Tasks A–B explicitly user-approved on 2026-10-25; not yet executed. The
+**Status:** Tasks A–B explicitly user-approved on 2026-10-25 and executed.
+Task A's locked runtime is accepted. Task B's final availability checks passed,
+with a recorded compliance failure: retries drew 96 authored CPU samples against
+the 32-sample bound. The parent accepted qualified artifacts for the already
+authorized probe, without retroactively authorizing that overrun. Full evidence,
+review and disposition are in `artifacts/development/foundation/task-7-runtime-report.md`,
+`task-7-runtime-review.md` and `task-7-setup-parent-review.md`. The
 user's “Let's continue” resumes Task7 implementation and bounded native-vector
 work in the existing runtime. This request covers only adding the separately
 selected TorchRL/TensorDict CPU probe runtime, not training or framework adoption.

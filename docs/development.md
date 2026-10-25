@@ -175,6 +175,13 @@ For a real run, use a run-specific config with `gym_checkout` set to the actual
 checkout path when that source provenance is required; retain the environment's
 observed public native build identity separately.
 
+Evaluation summaries include `elapsed_wall_seconds` and
+`overshoot_wall_seconds`, measured from the shared run budget after case work and
+owned artifact streams close, but before `summary.json` serialization. These
+values describe that boundary, not total process runtime. If the final clock read
+fails, both values are null and the run reports a reliability failure while
+retaining delivered case outcomes.
+
 Keep generated runs, logs, rollouts, and checkpoints out of Git. Preserve the
 literal command, stdout, stderr, exit status, config/manifest, environment revision
 and dirty state, content/profile, schema/reward contract, seeds, learner settings,

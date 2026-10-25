@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+import math
 from pathlib import Path
 import platform
 import time
@@ -72,7 +73,7 @@ def evaluate(
     except Exception as error:
         failure = _failure(error, phase="preflight", kind="blocked" if isinstance(error, _BlockedEvaluation) else "setup_error")
         results = _preflight_results(manifest.executions if manifest is not None else (), failure)
-        return EvaluationReport(summarize(results), 2, None, failure)
+        return EvaluationReport(_summary_with_timing(results, None, None), 2, None, failure)
 
     assert budget is not None
     if run_id is None:
@@ -87,7 +88,7 @@ def evaluate(
     except Exception as error:
         failure = _failure(error, phase="artifact_create", kind="artifact_error")
         results = _not_started_results(executions, "artifact_failure")
-        return EvaluationReport(summarize(results), 1, None, failure)
+        return EvaluationReport(_summary_with_timing(results, None, None), 1, None, failure)
 
     return _evaluate_with_writer(
         writer,
@@ -145,7 +146,7 @@ def _evaluate_with_writer(
                     raise close_failure
                 failure = _with_secondary_context(failure, close_failure)
             results = _not_started_results(executions, "artifact_failure")
-            return EvaluationReport(summarize(results), 1, run_dir, failure)
+            return EvaluationReport(_summary_with_timing(results, None, None), 1, run_dir, failure)
 
         results: list[CaseResult] = []
         fatal_error: Failure | None = None
@@ -256,14 +257,37 @@ def _evaluate_with_writer(
             fatal_error = fatal_error or failure
             _attach_secondary(results, failure)
 
-        report_summary = summarize(results)
+        elapsed_wall_seconds: float | None = None
+        overshoot_wall_seconds: float | None = None
+        try:
+            measured_elapsed = budget.elapsed()
+            if not math.isfinite(measured_elapsed):
+                raise ValueError("elapsed wall time measurement must be finite")
+            measured_overshoot = max(
+                0.0,
+                measured_elapsed - float(config.max_wall_seconds),
+            )
+            if not math.isfinite(measured_overshoot):
+                raise ValueError("overshoot wall time measurement must be finite")
+            elapsed_wall_seconds = measured_elapsed
+            overshoot_wall_seconds = measured_overshoot
+        except Exception as error:
+            failure = _failure(error, phase="budget", kind="exec_error")
+            fatal_error = fatal_error or failure
+            _attach_secondary(results, failure)
+
+        report_summary = _summary_with_timing(
+            results, elapsed_wall_seconds, overshoot_wall_seconds
+        )
         try:
             writer.finalize(report_summary)
         except Exception as error:
             failure = _failure(error, phase="summary_write", kind="artifact_error")
             fatal_error = fatal_error or failure
             _attach_secondary(results, failure)
-            report_summary = summarize(results)
+            report_summary = _summary_with_timing(
+                results, elapsed_wall_seconds, overshoot_wall_seconds
+            )
 
         return EvaluationReport(report_summary, _exit_code(results, fatal_error), run_dir, fatal_error)
     except BaseException as primary:
@@ -455,3 +479,14 @@ def _exit_code(results: Sequence[CaseResult], fatal_error: Failure | None) -> in
     if results and all(result.started and result.status in _NATURAL_STATUSES for result in results):
         return 0
     return 2
+
+
+def _summary_with_timing(
+    results: Sequence[CaseResult],
+    elapsed_wall_seconds: float | None,
+    overshoot_wall_seconds: float | None,
+) -> dict[str, object]:
+    summary = summarize(results)
+    summary["elapsed_wall_seconds"] = elapsed_wall_seconds
+    summary["overshoot_wall_seconds"] = overshoot_wall_seconds
+    return summary

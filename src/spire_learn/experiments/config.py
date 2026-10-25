@@ -88,6 +88,8 @@ def load_config(path: Path, *, expected_mode: str) -> RunConfig:
     profile, agent = raw["profile"], raw["agent"]
     if not isinstance(profile, str) or profile not in _PROFILES or not isinstance(agent, str) or agent not in _AGENTS:
         raise ValueError("invalid profile or agent")
+    if mode in _PROBE_MODES and agent != "random":
+        raise ValueError('probe modes require agent = "random"')
     wall = raw["max_wall_seconds"]
     if type(wall) not in (int, float) or not math.isfinite(wall) or wall <= 0:
         raise ValueError("max_wall_seconds must be positive and finite")
@@ -168,6 +170,8 @@ def to_probe_config(config: RunConfig, manifest: CaseManifest) -> ProbeConfig:
     """Build a probe request using only explicitly declared manifest cases."""
     if config.mode not in _PROBE_MODES or config.probe is None or config.max_batch_steps is None:
         raise ValueError("probe configuration required")
+    if config.agent != "random":
+        raise ValueError('probe modes require agent = "random"')
     if manifest.split != "selection":
         raise ValueError("probes require a selection manifest")
     validate_expectations(config, manifest)

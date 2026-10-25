@@ -133,6 +133,25 @@ assert not any(
             self.assertEqual(result, 0)
             self.assertFalse((root / "runs").exists())
 
+    def test_probe_validate_only_does_not_collect_provenance_or_create_writer(self):
+        module, main = _cli_api(self)
+        for command in ("probe-vector", "probe-torchrl"):
+            with self.subTest(command=command):
+                config_path = Path("configs/probes") / f"{command.removeprefix('probe-')}-smoke.toml"
+                with (
+                    patch.object(module, "collect_provenance") as collect,
+                    patch.object(module.RunWriter, "create") as create,
+                    redirect_stdout(StringIO()),
+                    redirect_stderr(StringIO()),
+                ):
+                    result = main(
+                        [command, "--config", str(config_path), "--validate-only"]
+                    )
+
+                self.assertEqual(result, 0)
+                collect.assert_not_called()
+                create.assert_not_called()
+
     def test_final_flag_is_evaluation_only(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -195,11 +214,108 @@ assert not any(
     def test_probe_artifact_creation_failure_is_fatal(self):
         with tempfile.TemporaryDirectory() as directory:
             module, _ = _cli_api(self)
-            config = SimpleNamespace(output_root=Path(directory) / "runs")
-            with patch.object(module.RunWriter, "create", side_effect=OSError("artifact root unavailable")):
+            config = SimpleNamespace(
+                output_root=Path(directory) / "runs",
+                gym_checkout=None,
+            )
+            with (
+                patch.object(module, "collect_provenance", return_value={}, create=True),
+                patch.object(module.RunWriter, "create", side_effect=OSError("artifact root unavailable")),
+            ):
                 status = module._run_probe("probe-vector", config, None, None)
 
             self.assertEqual(status, 1)
+
+    def test_probe_start_records_provenance_and_runtime_qualifications_for_both_modes(self):
+        module, _ = _cli_api(self)
+        provenance = {
+            "learner": {"revision": "learner-revision", "head_state": "present", "dirty": False},
+            "gym_checkout": {"revision": "gym-revision", "dirty": True},
+            "distributions": {"spire-lab": None},
+            "native_build_info": None,
+        }
+        report = SimpleNamespace(
+            verdict="compatible",
+            failures=(),
+            batch_steps=1,
+            slot_decisions=2,
+            replacement_decisions=0,
+        )
+        vector_module = ModuleType("spire_learn.probes.vector")
+        vector_module.run_vector_probe = lambda *args, **kwargs: report
+        vector_module.probe_report_to_json = lambda value: {"verdict": value.verdict}
+        torchrl_module = ModuleType("spire_learn.probes.torchrl")
+        torchrl_module.run_torchrl_probe = lambda *args, **kwargs: report
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for command, mode in (
+                ("probe-vector", "probe-vector"),
+                ("probe-torchrl", "probe-torchrl"),
+            ):
+                with self.subTest(mode=mode):
+                    gym_checkout = root / "gym-checkout" if command == "probe-vector" else None
+                    run_provenance = {
+                        **provenance,
+                        "gym_checkout": (
+                            provenance["gym_checkout"] if gym_checkout is not None else None
+                        ),
+                    }
+                    writer = _ProbeWriter()
+                    config = SimpleNamespace(
+                        mode=mode,
+                        profile="smoke",
+                        agent="random",
+                        cases=root / "cases.json",
+                        output_root=root / "runs",
+                        per_case_decisions=None,
+                        max_batch_steps=10,
+                        max_wall_seconds=10.0,
+                        traces=False,
+                        expected_partition=None,
+                        expected_schema_id=None,
+                        expected_fingerprint=None,
+                        gym_checkout=gym_checkout,
+                        split_guard_manifests=(),
+                        probe=SimpleNamespace(num_envs=2, workers=1),
+                    )
+                    manifest = SimpleNamespace(
+                        path=config.cases,
+                        split="selection",
+                        executions=(),
+                    )
+                    with (
+                        patch.object(module.RunWriter, "create", return_value=writer),
+                        patch.object(
+                            module,
+                            "collect_provenance",
+                            return_value=run_provenance,
+                            create=True,
+                        ) as collect,
+                        patch.dict(
+                            sys.modules,
+                            {
+                                "spire_learn.probes.vector": vector_module,
+                                "spire_learn.probes.torchrl": torchrl_module,
+                            },
+                        ),
+                        redirect_stdout(StringIO()),
+                        redirect_stderr(StringIO()),
+                    ):
+                        status = module._run_probe(command, config, manifest, object())
+
+                    collect.assert_called_once_with(
+                        learner_root=Path(module.__file__).resolve().parents[2],
+                        gym_checkout=gym_checkout,
+                    )
+                    self.assertEqual(status, 0)
+                    config_record = writer.start[0]
+                    self.assertEqual(config_record["provenance"], run_provenance)
+                    self.assertIsNone(config_record["provenance"]["native_build_info"])
+                    self.assertTrue(config_record["python_version"])
+                    self.assertTrue(config_record["platform"])
+                    self.assertIn("original-game RNG parity", config_record["rng_001"])
+                    self.assertIn("Secret Portal", config_record["time_001"])
 
     def test_probe_exit_codes_use_failures_and_delivered_counters(self):
         module, _ = _cli_api(self)

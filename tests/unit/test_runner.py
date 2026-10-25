@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from spire_learn.artifacts.writer import RunWriter
 from spire_learn.experiments.config import RunConfig
 from tests.support import FakeClock, ScriptedEnv, case_execution, fixture_contract, observation
 
@@ -84,6 +85,7 @@ class _Writer:
         control_phase: str | None = None,
         control_error: BaseException | None = None,
         close_error: Exception | None = None,
+        finalize_error: Exception | None = None,
     ):
         self.run_dir = run_dir
         self.fail_case_write = fail_case_write
@@ -92,9 +94,11 @@ class _Writer:
         self.control_phase = control_phase
         self.control_error = control_error
         self.close_error = close_error
+        self.finalize_error = finalize_error
         self.case_writes = []
         self.manifest_updates = []
         self.final_summary = None
+        self.finalize_calls = 0
         self.close_calls = 0
         self.transition_writes = []
 
@@ -121,7 +125,10 @@ class _Writer:
             raise OSError("injected case-write failure")
 
     def finalize(self, summary):
+        self.finalize_calls += 1
         self.final_summary = dict(summary)
+        if self.finalize_error is not None:
+            raise self.finalize_error
 
     def close(self):
         self.close_calls += 1
@@ -217,6 +224,73 @@ class EvaluationRunnerTests(unittest.TestCase):
             self.assertFalse(config.output_root.exists())
             self.assertIsNotNone(report.fatal_error)
 
+    def test_early_failure_reports_mark_unmeasured_wall_time_unavailable(self):
+        class CountingClock:
+            def __init__(self):
+                self.reads = 0
+
+            def __call__(self):
+                self.reads += 1
+                return 0.0
+
+        def assert_timing_unavailable(report):
+            self.assertIn("elapsed_wall_seconds", report.summary)
+            self.assertIn("overshoot_wall_seconds", report.summary)
+            self.assertIsNone(report.summary["elapsed_wall_seconds"])
+            self.assertIsNone(report.summary["overshoot_wall_seconds"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = _config(root, root / "missing-cases.json")
+            module, _ = _runner_api(self)
+
+            preflight_clock = CountingClock()
+            preflight = module.evaluate(
+                config,
+                contract=fixture_contract(),
+                clock=preflight_clock,
+                run_id="preflight-unmeasured",
+            )
+            assert_timing_unavailable(preflight)
+            self.assertEqual(preflight_clock.reads, 1)
+
+            case_path = root / "cases.json"
+            _write_manifest(case_path, (case_execution(execution_id="early-failure"),))
+            config = _config(root, case_path)
+
+            def fail_create(output_root, run_id):
+                raise OSError("injected artifact creation failure")
+
+            create_clock = CountingClock()
+            with self._patch_provenance(module):
+                artifact_create = module.evaluate(
+                    config,
+                    contract=fixture_contract(),
+                    clock=create_clock,
+                    writer_factory=fail_create,
+                    run_id="create-unmeasured",
+                )
+            assert_timing_unavailable(artifact_create)
+            self.assertEqual(create_clock.reads, 1)
+
+            class StartFailingWriter(_Writer):
+                def write_start(self, config_record, manifest_record):
+                    raise OSError("injected artifact start failure")
+
+            writer = StartFailingWriter(root / "start-unmeasured-run")
+            start_clock = CountingClock()
+            with self._patch_provenance(module):
+                artifact_start = module.evaluate(
+                    config,
+                    contract=fixture_contract(),
+                    clock=start_clock,
+                    writer_factory=_writer_factory_for(writer),
+                    run_id="start-unmeasured",
+                )
+            assert_timing_unavailable(artifact_start)
+            self.assertEqual(start_clock.reads, 1)
+            self.assertEqual(writer.close_calls, 1)
+
     def test_deadline_marks_remaining_cases_not_started(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -270,6 +344,217 @@ class EvaluationRunnerTests(unittest.TestCase):
                     ("deadline-next", "not_started", "wall_time_budget"),
                 ],
             )
+
+    def test_natural_terminal_overshoot_is_measured_after_writer_close_and_persisted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            case_path = root / "cases.json"
+            _write_manifest(case_path, (case_execution(execution_id="natural-overshoot"),))
+            config = _config(root, case_path, max_wall_seconds=1.0)
+            clock = FakeClock()
+            env = ScriptedEnv(
+                (observation(), {}),
+                [_terminal_step()],
+                on_step=lambda: clock.advance(1.25),
+            )
+
+            def create_writer(output_root, run_id):
+                writer = RunWriter.create(output_root, run_id)
+                close = writer.close
+
+                def close_after_case_streams():
+                    close()
+                    clock.advance(0.25)
+
+                writer.close = close_after_case_streams
+                return writer
+
+            module, _ = _runner_api(self)
+            with self._patch_provenance(module):
+                report = module.evaluate(
+                    config,
+                    env_factory=lambda execution: env,
+                    contract=fixture_contract(),
+                    clock=clock,
+                    writer_factory=create_writer,
+                    run_id="natural-overshoot",
+                )
+
+            self.assertEqual(report.exit_code, 0)
+            self.assertEqual(report.summary["status_counts"]["terminal"], 1)
+            self.assertEqual(report.summary["outcome_counts"]["victory"], 1)
+            self.assertIn("elapsed_wall_seconds", report.summary)
+            self.assertIn("overshoot_wall_seconds", report.summary)
+            self.assertEqual(report.summary["elapsed_wall_seconds"], 1.5)
+            self.assertEqual(report.summary["overshoot_wall_seconds"], 0.5)
+            self.assertEqual(env.step_calls, [0])
+            self.assertEqual(env.close_calls, 1)
+            persisted = json.loads((report.run_dir / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(persisted["summary"], dict(report.summary))
+
+    def test_summary_records_zero_wall_time_overshoot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            case_path = root / "cases.json"
+            _write_manifest(case_path, (case_execution(execution_id="within-budget"),))
+            config = _config(root, case_path, max_wall_seconds=1.0)
+            clock = FakeClock()
+            writer = _Writer(root / "zero-overshoot-run")
+            module, _ = _runner_api(self)
+            with self._patch_provenance(module):
+                report = module.evaluate(
+                    config,
+                    env_factory=lambda execution: ScriptedEnv(
+                        (observation(), {}), [_terminal_step()]
+                    ),
+                    contract=fixture_contract(),
+                    clock=clock,
+                    writer_factory=_writer_factory_for(writer),
+                    run_id="zero-overshoot",
+                )
+
+            self.assertIn("elapsed_wall_seconds", report.summary)
+            self.assertEqual(report.summary["elapsed_wall_seconds"], 0.0)
+            self.assertIn("overshoot_wall_seconds", report.summary)
+            self.assertEqual(report.summary["overshoot_wall_seconds"], 0.0)
+            self.assertEqual(writer.final_summary, dict(report.summary))
+
+    def test_final_timing_measurement_failure_preserves_case_results_and_marks_unavailable(self):
+        class FailingAfterCloseClock:
+            def __init__(self):
+                self.fail = False
+
+            def __call__(self):
+                if self.fail:
+                    raise OSError("injected final timing measurement failure")
+                return 0.0
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            case_path = root / "cases.json"
+            _write_manifest(case_path, (case_execution(execution_id="timing-failure"),))
+            config = _config(root, case_path, max_wall_seconds=1.0)
+            clock = FailingAfterCloseClock()
+
+            close_calls = []
+
+            def create_writer(output_root, run_id):
+                writer = RunWriter.create(output_root, run_id)
+                close = writer.close
+
+                def close_and_arm_measurement_failure():
+                    close_calls.append(run_id)
+                    close()
+                    clock.fail = True
+
+                writer.close = close_and_arm_measurement_failure
+                return writer
+
+            env = ScriptedEnv((observation(), {}), [_terminal_step()])
+            module, _ = _runner_api(self)
+            with self._patch_provenance(module):
+                report = module.evaluate(
+                    config,
+                    env_factory=lambda execution: env,
+                    contract=fixture_contract(),
+                    clock=clock,
+                    writer_factory=create_writer,
+                    run_id="timing-failure",
+                )
+
+            self.assertEqual(report.exit_code, 1)
+            self.assertIn("elapsed_wall_seconds", report.summary)
+            self.assertIn("overshoot_wall_seconds", report.summary)
+            self.assertEqual((report.summary["elapsed_wall_seconds"], report.summary["overshoot_wall_seconds"]), (None, None))
+            self.assertEqual(report.summary["status_counts"]["terminal"], 1)
+            self.assertEqual(report.summary["outcome_counts"]["victory"], 1)
+            self.assertEqual(report.fatal_error.kind, "exec_error")
+            self.assertEqual(report.fatal_error.phase, "budget")
+            self.assertEqual(report.summary["secondary_failure_count"], 1)
+            persisted = json.loads((report.run_dir / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(persisted["summary"], dict(report.summary))
+            self.assertEqual(close_calls, ["timing-failure"])
+            self.assertEqual(env.step_calls, [0])
+
+    def test_nonfinite_final_timing_measurement_is_unavailable_and_preserves_terminal_outcome(self):
+        class ExtremeFinalClock:
+            now = -1e308
+
+            def __call__(self):
+                return self.now
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            case_path = root / "cases.json"
+            _write_manifest(case_path, (case_execution(execution_id="nonfinite-timing"),))
+            config = _config(root, case_path, max_wall_seconds=1.0)
+            clock = ExtremeFinalClock()
+            env = ScriptedEnv(
+                (observation(), {}),
+                [_terminal_step()],
+                on_step=lambda: setattr(clock, "now", 1e308),
+            )
+            module, _ = _runner_api(self)
+            with self._patch_provenance(module):
+                report = module.evaluate(
+                    config,
+                    env_factory=lambda execution: env,
+                    contract=fixture_contract(),
+                    clock=clock,
+                    run_id="nonfinite-timing",
+                )
+
+            self.assertEqual(report.exit_code, 1)
+            self.assertEqual(
+                (report.summary["elapsed_wall_seconds"], report.summary["overshoot_wall_seconds"]),
+                (None, None),
+            )
+            self.assertEqual(report.summary["status_counts"]["terminal"], 1)
+            self.assertEqual(report.summary["outcome_counts"]["victory"], 1)
+            self.assertEqual(report.fatal_error.kind, "exec_error")
+            self.assertEqual(report.fatal_error.phase, "budget")
+            self.assertEqual(report.summary["secondary_failure_count"], 1)
+            persisted = json.loads((report.run_dir / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(persisted["summary"], dict(report.summary))
+            self.assertEqual(env.step_calls, [0])
+
+    def test_timing_fields_survive_best_effort_summary_artifact_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            case_path = root / "cases.json"
+            _write_manifest(case_path, (case_execution(execution_id="summary-failure"),))
+            config = _config(root, case_path, max_wall_seconds=1.0)
+            clock = FakeClock()
+            env = ScriptedEnv(
+                (observation(), {}),
+                [_terminal_step()],
+                on_step=lambda: clock.advance(1.25),
+            )
+            writer = _Writer(
+                root / "summary-failure-run",
+                finalize_error=OSError("injected summary write failure"),
+            )
+            module, _ = _runner_api(self)
+            with self._patch_provenance(module):
+                report = module.evaluate(
+                    config,
+                    env_factory=lambda execution: env,
+                    contract=fixture_contract(),
+                    clock=clock,
+                    writer_factory=_writer_factory_for(writer),
+                    run_id="summary-failure",
+                )
+
+            self.assertEqual(report.exit_code, 1)
+            self.assertEqual(report.fatal_error.phase, "summary_write")
+            self.assertIn("elapsed_wall_seconds", report.summary)
+            self.assertIn("overshoot_wall_seconds", report.summary)
+            self.assertEqual(report.summary["elapsed_wall_seconds"], 1.25)
+            self.assertEqual(report.summary["overshoot_wall_seconds"], 0.25)
+            self.assertEqual(report.summary["status_counts"]["terminal"], 1)
+            self.assertEqual(report.summary["outcome_counts"]["victory"], 1)
+            self.assertEqual(writer.finalize_calls, 1)
+            self.assertEqual(writer.close_calls, 1)
 
     def test_budget_clock_failure_is_an_execution_reliability_error(self):
         with tempfile.TemporaryDirectory() as directory:

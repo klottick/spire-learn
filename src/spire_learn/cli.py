@@ -4,12 +4,14 @@ import argparse
 from collections.abc import Sequence
 import json
 from pathlib import Path
+import platform
 import sys
 import time
 import uuid
 
+from spire_learn.artifacts.provenance import collect_provenance
 from spire_learn.artifacts.writer import RunWriter
-from spire_learn.evaluation.runner import EvaluationReport, evaluate
+from spire_learn.evaluation.runner import EvaluationReport, _RNG_001, _TIME_001, evaluate
 from spire_learn.experiments.cases import CaseManifest, load_cases, validate_splits
 from spire_learn.experiments.config import RunConfig, load_config, to_probe_config, validate_expectations
 
@@ -91,8 +93,12 @@ def _run_probe(command: str, config: RunConfig, manifest: CaseManifest, probe_co
     primary_exception: BaseException | None = None
     try:
         try:
+            provenance = collect_provenance(
+                learner_root=Path(__file__).resolve().parents[2],
+                gym_checkout=config.gym_checkout,
+            )
             writer = RunWriter.create(config.output_root, run_id)
-            writer.write_start(_config_record(config), _manifest_record(manifest))
+            writer.write_start(_config_record(config, provenance), _manifest_record(manifest))
             if command == "probe-vector":
                 from spire_learn.probes.vector import probe_report_to_json, run_vector_probe
 
@@ -162,7 +168,7 @@ def _probe_exit_code(report) -> int:
     return 1
 
 
-def _config_record(config: RunConfig) -> dict[str, object]:
+def _config_record(config: RunConfig, provenance: dict[str, object]) -> dict[str, object]:
     probe = None
     if config.probe is not None:
         probe = {"num_envs": config.probe.num_envs, "workers": config.probe.workers}
@@ -182,6 +188,11 @@ def _config_record(config: RunConfig) -> dict[str, object]:
         "gym_checkout": str(config.gym_checkout) if config.gym_checkout is not None else None,
         "split_guard_manifests": [str(path) for path in config.split_guard_manifests],
         "probe": probe,
+        "provenance": provenance,
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "rng_001": _RNG_001,
+        "time_001": _TIME_001,
     }
 
 

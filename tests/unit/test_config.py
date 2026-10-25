@@ -1,3 +1,4 @@
+from dataclasses import replace
 import os
 from pathlib import Path
 import tempfile
@@ -144,6 +145,39 @@ class ConfigTests(unittest.TestCase):
         for suffix in ("", "\nper_case_decisions=1", "\nmax_batch_steps=true", "\n[probe]\nnum_envs=1\nworkers=1", "\n[probe]\nnum_envs=2\nworkers=0", "\n[probe]\nnum_envs=2\nworkers=1\nextra=1"):
             with self.subTest(suffix=suffix), self.assertRaises(ValueError):
                 self.load(common.replace("per_case_decisions = 5", "") + "\nmax_batch_steps=3\n" + suffix, expected_mode="probe-vector")
+
+    def test_probe_modes_reject_non_random_agents_during_strict_load(self):
+        for mode in ("probe-vector", "probe-torchrl"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "probe.toml"
+                path.write_text(
+                    config_text(mode=f'"{mode}"', agent='"play-first"')
+                    .replace("per_case_decisions = 5", "")
+                    + "\nmax_batch_steps = 3\n[probe]\nnum_envs = 2\nworkers = 1\n"
+                )
+                with self.assertRaisesRegex(ValueError, "probe.*agent|agent.*random"):
+                    load_config(path, expected_mode=mode)
+
+    def test_evaluation_still_accepts_play_first_agent(self):
+        config = self.load(config_text(agent='"play-first"'))
+        self.assertEqual((config.mode, config.agent), ("evaluate", "play-first"))
+
+    def test_probe_conversion_rejects_direct_non_random_run_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "probe.toml"
+            path.write_text(
+                config_text(mode='"probe-vector"').replace("per_case_decisions = 5", "")
+                + "\nmax_batch_steps = 4\n[probe]\nnum_envs = 2\nworkers = 1\n"
+            )
+            config = replace(load_config(path, expected_mode="probe-vector"), agent="play-first")
+        executions = (
+            self.execution(execution_id="probe-a"),
+            self.execution(execution_id="probe-b", environment_seed=24),
+        )
+        manifest = CaseManifest(Path("cases.json"), "selection", executions)
+
+        with self.assertRaisesRegex(ValueError, "probe.*agent|agent.*random"):
+            to_probe_config(config, manifest)
 
     def test_trace_requires_exact_boolean_and_optional_split_guards_resolve(self):
         with self.assertRaises(ValueError):

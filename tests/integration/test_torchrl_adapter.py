@@ -106,6 +106,23 @@ class TorchRLAdapterIntegrationTests(unittest.TestCase):
                 (run_directory / "summary.json").read_text(encoding="utf-8")
             )
             summary = summary_envelope["summary"]
+            manifest_updates = [
+                json.loads(line)
+                for line in (run_directory / "manifest_updates.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            discovery = next(
+                item["record"]
+                for item in manifest_updates
+                if item.get("record", {}).get("event") == "torchrl_probe_discovery"
+            )
+            registration = next(
+                item["record"]
+                for item in manifest_updates
+                if item.get("record", {}).get("event")
+                == "torchrl_probe_reader_registration"
+            )
             metric_records = [
                 json.loads(line)
                 for line in (run_directory / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
@@ -127,6 +144,18 @@ class TorchRLAdapterIntegrationTests(unittest.TestCase):
                 {"dtype": "int64", "native_endian": True, "shape": [2]},
             )
             self.assertEqual(summary["report"], probe_report_to_json(report))
+            self.assertEqual(
+                discovery["adapter"]["configured_info_dict_reader_id"],
+                "spire-learn-dict-final-reader-v1",
+            )
+            self.assertEqual(
+                registration["adapter"]["info_dict_reader_id"],
+                "spire-learn-dict-final-reader-v1",
+            )
+            self.assertEqual(
+                summary["adapter"]["info_dict_reader_id"],
+                "spire-learn-dict-final-reader-v1",
+            )
             self.assertEqual(len(probe_metrics), 1)
             self.assertEqual(probe_metrics[0]["record"], summary["report"])
             self.assertEqual(summary["delivered"]["batch_steps"], report.batch_steps)

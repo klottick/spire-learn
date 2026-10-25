@@ -9,12 +9,22 @@ from ..artifacts.writer import RunWriter
 from ..contracts import ContractError, SetupBlocked
 from ..experiments.config import ProbeConfig
 from . import vector
+from .torchrl_dict_final import DICT_FINAL_ADAPTER_ID, make_dict_final_reader
 from .vector import NATIVE_CHECKS
 
 
 TORCHRL_CHECKS = NATIVE_CHECKS | frozenset(
     {"observation_mapping", "mask_sampling", "mask_log_prob"}
 )
+
+
+def _reader_identity_metadata(
+    *, configured_id: str, registered_id: str | None, registration_succeeded: bool
+) -> dict[str, str | None]:
+    return {
+        "configured_info_dict_reader_id": configured_id,
+        "info_dict_reader_id": registered_id if registration_succeeded else None,
+    }
 
 
 class _FacadeCallGuard:
@@ -464,10 +474,206 @@ def _capture_step_result(
     )
 
 
+class _TorchRLMappingMismatch(vector._VectorContractViolation):
+    def __init__(
+        self,
+        check: str,
+        message: str,
+        details: Mapping[str, object],
+        *,
+        phase: str,
+    ):
+        super().__init__(check, message)
+        self.details = MappingProxyType({**details, "phase": phase})
+
+
+def _mapping_leaf_fields(value: object) -> tuple[object, object, object]:
+    """Return JSON-safe dtype, shape, and finite values for one owned leaf."""
+    dtype = getattr(value, "dtype", None)
+    dtype_name = dtype if isinstance(dtype, str) else getattr(dtype, "name", None)
+    if not isinstance(dtype_name, str):
+        dtype_name = "unavailable"
+    shape = getattr(value, "shape", None)
+    try:
+        shape_value: object = list(tuple(shape))
+    except TypeError:
+        shape_value = "unavailable"
+
+    values = getattr(value, "values", None)
+    if values is None:
+        tolist = getattr(value, "tolist", None)
+        if callable(tolist):
+            try:
+                values = tolist()
+            except Exception:
+                values = None
+    if values is None:
+        value_result: object = "unavailable"
+    else:
+        flattened: list[int | float] = []
+        stack = [values]
+        available = True
+        while stack:
+            item = stack.pop()
+            if isinstance(item, (tuple, list)):
+                stack.extend(reversed(item))
+            elif type(item) in (int, float) and (
+                type(item) is not float or math.isfinite(item)
+            ):
+                flattened.append(item)
+            else:
+                available = False
+                break
+        value_result = flattened if available else "unavailable"
+    return dtype_name, shape_value, value_result
+
+
+def _mapping_mismatch_record(
+    row: int, key: str, expected: object | None, observed: object | None
+) -> dict[str, object]:
+    expected_dtype, expected_shape, expected_value = (
+        _mapping_leaf_fields(expected)
+        if expected is not None
+        else ("unavailable", "unavailable", "unavailable")
+    )
+    observed_dtype, observed_shape, observed_value = (
+        _mapping_leaf_fields(observed)
+        if observed is not None
+        else ("unavailable", "unavailable", "unavailable")
+    )
+    return {
+        "row": row,
+        "key": key,
+        "expected_dtype": expected_dtype,
+        "observed_dtype": observed_dtype,
+        "expected_shape": expected_shape,
+        "observed_shape": observed_shape,
+        "expected_values": expected_value,
+        "observed_values": observed_value,
+    }
+
+
+def _mapping_mismatch_details(
+    expected_rows: Sequence[Mapping[str, object]],
+    observed_rows: Sequence[Mapping[str, object]],
+) -> dict[str, object] | None:
+    """Find the first public leaf mismatch and retain its row-level evidence."""
+    if len(expected_rows) != len(observed_rows):
+        row = min(len(expected_rows), len(observed_rows))
+        source = expected_rows[0] if expected_rows else {}
+        key = next(iter(source), "unavailable")
+        expected = expected_rows[row].get(key) if row < len(expected_rows) else None
+        observed = observed_rows[row].get(key) if row < len(observed_rows) else None
+        return _mapping_mismatch_record(row, key, expected, observed)
+    for row, (expected, observed) in enumerate(
+        zip(expected_rows, observed_rows, strict=True)
+    ):
+        keys = tuple(expected)
+        keys += tuple(key for key in observed if key not in expected)
+        for key in keys:
+            expected_leaf = expected.get(key)
+            observed_leaf = observed.get(key)
+            if _mapping_leaf_fields(expected_leaf) != _mapping_leaf_fields(observed_leaf):
+                return _mapping_mismatch_record(
+                    row, str(key), expected_leaf, observed_leaf
+                )
+    return None
+
+
+def _persist_mapping_mismatch(writer: RunWriter, details: Mapping[str, object]) -> None:
+    required = {
+        "phase",
+        "row",
+        "key",
+        "expected_dtype",
+        "observed_dtype",
+        "expected_shape",
+        "observed_shape",
+        "expected_values",
+        "observed_values",
+    }
+    if not isinstance(details, Mapping) or not required <= set(details):
+        raise ContractError("mapping mismatch diagnostics are incomplete")
+    vector._writer_call(
+        writer,
+        "write_metric",
+        {
+            "schema_id": "spire-learn-probe-v1",
+            "metric": "mapping_mismatch",
+            "phase": details["phase"],
+            "mapping_mismatch": [dict(details)],
+        },
+    )
+
+
+def _raw_mapping_mismatch_details(
+    expected_rows: Sequence[Mapping[str, object]],
+    arrays: Mapping[str, object],
+    schema: object,
+    *,
+    width: int,
+) -> dict[str, object] | None:
+    specs = tuple(schema.tensors)  # type: ignore[union-attr]
+    for spec in specs:
+        key = spec.key
+        expected_shape = tuple(spec.shape)
+        array = arrays.get(key)
+        if array is None:
+            row = expected_rows[0].get(key) if expected_rows else None
+            return _mapping_mismatch_record(0, key, row, None)
+        dtype = getattr(array, "dtype", None)
+        dtype_name = getattr(dtype, "name", None)
+        try:
+            array_shape = tuple(array.shape)  # type: ignore[attr-defined]
+        except (AttributeError, TypeError):
+            array_shape = ()
+        batch_shape_ok = array_shape == (width, *expected_shape)
+        expected_dtype = spec.dtype
+        if dtype_name != expected_dtype or not batch_shape_ok:
+            for row_index in range(width):
+                expected = (
+                    expected_rows[row_index].get(key)
+                    if row_index < len(expected_rows)
+                    else None
+                )
+                try:
+                    observed_row = array[row_index]  # type: ignore[index]
+                except (IndexError, KeyError, TypeError):
+                    observed_row = None
+                if observed_row is None:
+                    details = _mapping_mismatch_record(row_index, key, expected, None)
+                    details["observed_dtype"] = dtype_name or "unavailable"
+                    details["observed_shape"] = (
+                        list(array_shape[1:]) if array_shape else "unavailable"
+                    )
+                    return details
+                return _mapping_mismatch_record(row_index, key, expected, observed_row)
+
+    raw_rows: list[dict[str, object]] = [dict() for _ in range(width)]
+    for spec in specs:
+        array = arrays.get(spec.key)
+        if array is None:
+            continue
+        for row_index in range(width):
+            try:
+                raw_rows[row_index][spec.key] = array[row_index]  # type: ignore[index]
+            except (IndexError, KeyError, TypeError):
+                continue
+    return _mapping_mismatch_details(expected_rows, raw_rows)
+
+
 def _mapped_observation_rows(
-    tensordict: object, schema: object, *, width: int
+    tensordict: object,
+    schema: object,
+    *,
+    width: int,
+    expected_rows: Sequence[Mapping[str, object]] | None = None,
+    mismatch_check: str = "observation_mapping",
+    phase: str = "next_observation",
 ) -> tuple[Mapping[str, object], ...]:
     """Convert GymWrapper's public CPU TensorDict leaves to owned core rows."""
+    if type(phase) is not str or not phase:
+        raise ContractError("mapping mismatch phase must be a non-empty string")
     keys = getattr(tensordict, "keys", None)
     if not callable(keys):
         raise vector._VectorContractViolation(
@@ -482,6 +688,15 @@ def _mapped_observation_rows(
     specs = tuple(schema.tensors)  # type: ignore[union-attr]
     expected_keys = tuple(spec.key for spec in specs)
     if len(set(mapped_keys)) != len(mapped_keys) or not set(expected_keys) <= set(mapped_keys):
+        if expected_rows is not None:
+            missing = next((key for key in expected_keys if key not in mapped_keys), expected_keys[0])
+            row = expected_rows[0].get(missing) if expected_rows else None
+            raise _TorchRLMappingMismatch(
+                mismatch_check,
+                "GymWrapper TensorDict is missing a public observation leaf",
+                _mapping_mismatch_record(0, missing, row, None),
+                phase=phase,
+            )
         raise vector._VectorContractViolation(
             "observation_mapping",
             "GymWrapper TensorDict must contain every public descriptor tensor",
@@ -493,6 +708,14 @@ def _mapped_observation_rows(
         try:
             tensor = tensordict[key]  # type: ignore[index]
         except (KeyError, IndexError, TypeError) as error:
+            if expected_rows is not None:
+                expected = expected_rows[0].get(key) if expected_rows else None
+                raise _TorchRLMappingMismatch(
+                    mismatch_check,
+                    f"GymWrapper TensorDict is missing {key}",
+                    _mapping_mismatch_record(0, key, expected, None),
+                    phase=phase,
+                ) from error
             raise vector._VectorContractViolation(
                 "observation_mapping", f"GymWrapper TensorDict is missing {key}"
             ) from error
@@ -510,15 +733,52 @@ def _mapped_observation_rows(
         try:
             arrays[key] = numpy()
         except Exception as error:
+            if expected_rows is not None:
+                expected = expected_rows[0].get(key) if expected_rows else None
+                raise _TorchRLMappingMismatch(
+                    mismatch_check,
+                    f"GymWrapper tensor {key} cannot be read as a CPU array",
+                    _mapping_mismatch_record(0, key, expected, None),
+                    phase=phase,
+                ) from error
             raise vector._VectorContractViolation(
                 "observation_mapping", f"GymWrapper tensor {key} cannot be read as a CPU array"
             ) from error
+    if expected_rows is not None:
+        raw_mismatch = _raw_mapping_mismatch_details(
+            expected_rows, arrays, schema, width=width
+        )
+        if raw_mismatch is not None:
+            raise _TorchRLMappingMismatch(
+                mismatch_check,
+                "GymWrapper TensorDict leaf dtype/shape/value differs from same-call public data",
+                raw_mismatch,
+                phase=phase,
+            )
     try:
-        return vector._snapshot_batch(arrays, schema, width=width, check="observation_mapping")
+        rows = vector._snapshot_batch(arrays, schema, width=width, check="observation_mapping")
     except vector._VectorContractViolation as error:
+        if expected_rows is not None:
+            details = _raw_mapping_mismatch_details(
+                expected_rows, arrays, schema, width=width
+            )
+            if details is not None:
+                raise _TorchRLMappingMismatch(
+                    mismatch_check, str(error), details, phase=phase
+                ) from error
         if error.check == "observation_mapping":
             raise
         raise vector._VectorContractViolation("observation_mapping", str(error)) from error
+    if expected_rows is not None:
+        details = _mapping_mismatch_details(expected_rows, rows)
+        if details is not None:
+            raise _TorchRLMappingMismatch(
+                mismatch_check,
+                "GymWrapper TensorDict leaf value differs from same-call public data",
+                details,
+                phase=phase,
+            )
+    return rows
 
 
 class _GuardedVectorFacade:
@@ -674,12 +934,47 @@ def _passive_register_info_reader(wrapper: object, reader: object) -> object:
     return result
 
 
-def _passive_gym_wrapper_class(gym_wrapper_class: type) -> type:
-    """Make the minimal public-method override required to avoid auto-rollout."""
+def _passive_gym_wrapper_class(
+    gym_wrapper_class: type,
+    *,
+    reader_factory: Callable[[object], object] | None = None,
+) -> type:
+    """Avoid auto-rollout and optionally substitute the learner Dict reader."""
+    if reader_factory is not None and not callable(reader_factory):
+        raise ContractError("reader_factory must be callable or None")
+
     class PassiveGymWrapper(gym_wrapper_class):
         def auto_register_info_dict(self, ignore_private=True, *, info_dict_reader=None):
             del ignore_private
-            return _passive_register_info_reader(self, info_dict_reader)
+            if reader_factory is None:
+                return _passive_register_info_reader(self, info_dict_reader)
+            if getattr(self, "info_dict_reader", None):
+                raise SetupBlocked("TorchRL wrapper already has an info reader")
+            try:
+                learner_reader = reader_factory(self.observation_spec)
+            except ContractError as error:
+                raise SetupBlocked(
+                    f"learner Dict-final reader could not bind the known observation spec: {error}"
+                ) from error
+            if (
+                learner_reader is None
+                or learner_reader is info_dict_reader
+                or getattr(learner_reader, "adapter_id", None) != DICT_FINAL_ADAPTER_ID
+            ):
+                raise SetupBlocked("reader factory did not provide the approved learner Dict-final reader")
+            result = _passive_register_info_reader(self, learner_reader)
+            registered = getattr(self, "info_dict_reader", None)
+            if (
+                not isinstance(registered, Sequence)
+                or len(registered) != 1
+                or registered[0] is not learner_reader
+                or (
+                    info_dict_reader is not None
+                    and any(reader is info_dict_reader for reader in registered)
+                )
+            ):
+                raise SetupBlocked("TorchRL registered a vendor or duplicate info reader")
+            return result
 
     return PassiveGymWrapper
 
@@ -718,7 +1013,9 @@ def _load_torchrl_runtime() -> Mapping[str, object]:
         import gymnasium
         import tensordict
         import torch
+        from torchrl.data import Composite
         from torchrl.envs import GymWrapper
+        from torchrl.envs.gym_like import BaseInfoDictReader
         from torchrl.envs.utils import step_mdp
         from torchrl.modules import MaskedCategorical
     except Exception as error:
@@ -730,6 +1027,8 @@ def _load_torchrl_runtime() -> Mapping[str, object]:
             "gymnasium": gymnasium,
             "tensordict": tensordict,
             "torch": torch,
+            "Composite": Composite,
+            "BaseInfoDictReader": BaseInfoDictReader,
             "GymWrapper": GymWrapper,
             "step_mdp": step_mdp,
             "MaskedCategorical": MaskedCategorical,
@@ -900,15 +1199,6 @@ def _diagnostic_masked_sample(
         return tuple(sampled_values)  # type: ignore[return-value]
 
     return budget.sample(rows=width, sampler=sample_once)
-
-
-def _same_observation_rows(
-    expected: Sequence[Mapping[str, object]], actual: Sequence[Mapping[str, object]]
-) -> bool:
-    return len(expected) == len(actual) and all(
-        dict(expected_row) == dict(actual_row)
-        for expected_row, actual_row in zip(expected, actual, strict=True)
-    )
 
 
 def _captured_flags_and_rewards_match(
@@ -1209,6 +1499,8 @@ def run_torchrl_probe(
     operational_failure = False
     runtime_available = False
     adaptation_verified = False
+    adapter_reader_id: str | None = None
+    mapping_mismatch: Mapping[str, object] | None = None
     stop_reason = "not_started"
     phase = "runtime"
     writer_failure: BaseException | None = None
@@ -1289,6 +1581,7 @@ def run_torchrl_probe(
                     "native_build_info": build_info,
                     "adapter": {
                         "GymWrapper": "public Gymnasium wrapper",
+                        "configured_info_dict_reader_id": DICT_FINAL_ADAPTER_ID,
                         "categorical_action_encoding": True,
                         "frame_skip": 1,
                         "device": "cpu",
@@ -1307,8 +1600,22 @@ def run_torchrl_probe(
             if facade.autoreset_mode != expected_autoreset:
                 raise _TorchRLSetupFailure(
                     "public vector metadata does not declare Gymnasium SAME_STEP autoreset"
+            )
+            def reader_factory(observation_spec: object) -> object:
+                nonlocal adapter_reader_id
+                reader = make_dict_final_reader(
+                    observation_spec=observation_spec,
+                    schema=schema,
+                    torch=runtime["torch"],
+                    info_reader_type=runtime["BaseInfoDictReader"],
+                    composite_type=runtime["Composite"],
                 )
-            wrapper_class = _passive_gym_wrapper_class(runtime["GymWrapper"])  # type: ignore[arg-type]
+                adapter_reader_id = getattr(reader, "adapter_id", None)
+                return reader
+
+            wrapper_class = _passive_gym_wrapper_class(
+                runtime["GymWrapper"], reader_factory=reader_factory  # type: ignore[arg-type]
+            )
             torchrl_env = wrapper_class(
                 facade,
                 categorical_action_encoding=True,
@@ -1325,6 +1632,18 @@ def run_torchrl_probe(
             guard.construction_complete()
             checks["guard"] = "pass"
             checks["passive_registration"] = "pass"
+            vector._writer_call(
+                writer,  # type: ignore[arg-type]
+                "update_manifest",
+                {
+                    "event": "torchrl_probe_reader_registration",
+                    "adapter": _reader_identity_metadata(
+                        configured_id=DICT_FINAL_ADAPTER_ID,
+                        registered_id=adapter_reader_id,
+                        registration_succeeded=True,
+                    ),
+                },
+            )
             if tuple(torchrl_env.batch_size) != (config.num_envs,):  # type: ignore[attr-defined]
                 raise _TorchRLSetupFailure("GymWrapper batch size differs from the native vector width")
             checks["torchrl_wrapper"] = "pass"
@@ -1352,13 +1671,14 @@ def run_torchrl_probe(
                     raise vector._VectorContractViolation(
                         "observation_mapping", "guard did not capture the same-call reset result"
                     )
-                mapped_rows = _mapped_observation_rows(
-                    current_tensordict, schema, width=config.num_envs  # type: ignore[attr-defined]
+                _mapped_observation_rows(
+                    current_tensordict,
+                    schema,
+                    width=config.num_envs,  # type: ignore[attr-defined]
+                    expected_rows=captured_reset.rows,
+                    mismatch_check="observation_mapping",
+                    phase="reset_observation",
                 )
-                if not _same_observation_rows(captured_reset.rows, mapped_rows):
-                    raise vector._VectorContractViolation(
-                        "observation_mapping", "GymWrapper reset observations differ from same-call public raw arrays"
-                    )
                 checks["observation_mapping"] = "pass"
                 current_rows = captured_reset.rows
                 current_info = captured_reset.current_info
@@ -1394,12 +1714,13 @@ def run_torchrl_probe(
                         stop_reason = "wall_budget_before_step"
                         break
                     mapped_current_rows = _mapped_observation_rows(
-                        current_tensordict, schema, width=config.num_envs  # type: ignore[attr-defined]
+                        current_tensordict,
+                        schema,
+                        width=config.num_envs,  # type: ignore[attr-defined]
+                        expected_rows=current_rows,
+                        mismatch_check="observation_mapping",
+                        phase="current_observation",
                     )
-                    if not _same_observation_rows(current_rows, mapped_current_rows):
-                        raise vector._VectorContractViolation(
-                            "observation_mapping", "current GymWrapper data changed from the verified public replacement rows"
-                        )
 
                     routes = []
                     actions = []
@@ -1606,12 +1927,6 @@ def run_torchrl_probe(
                         raise vector._VectorContractViolation(
                             "observation_mapping", "GymWrapper step result has no public next TensorDict"
                         )
-                    mapped_next_rows = _mapped_observation_rows(
-                        next_tensordict, schema, width=config.num_envs  # type: ignore[attr-defined]
-                    )
-                    _captured_flags_and_rewards_match(
-                        next_tensordict, captured_step, width=config.num_envs  # type: ignore[attr-defined]
-                    )
                     expected_next_rows = tuple(
                         captured_step.final_rows[index]
                         if captured_step.ended[index]
@@ -1622,13 +1937,24 @@ def run_torchrl_probe(
                         raise vector._VectorContractViolation(
                             "presence_masks", "ended row has no independently captured same-call final observation"
                         )
-                    if not _same_observation_rows(expected_next_rows, mapped_next_rows):  # type: ignore[arg-type]
-                        checks["observation_mapping"] = "fail"
-                        check = "old_final" if any(captured_step.ended) else "observation_mapping"
-                        raise vector._VectorContractViolation(
-                            check,
-                            "GymWrapper next observations differ from same-call old-final/continuing raw arrays",
+                    mismatch_check = (
+                        "old_final" if any(captured_step.ended) else "observation_mapping"
+                    )
+                    try:
+                        mapped_next_rows = _mapped_observation_rows(
+                            next_tensordict,
+                            schema,
+                            width=config.num_envs,  # type: ignore[attr-defined]
+                            expected_rows=expected_next_rows,  # type: ignore[arg-type]
+                            mismatch_check=mismatch_check,
+                            phase="next_observation",
                         )
+                    except _TorchRLMappingMismatch:
+                        checks["observation_mapping"] = "fail"
+                        raise
+                    _captured_flags_and_rewards_match(
+                        next_tensordict, captured_step, width=config.num_envs  # type: ignore[attr-defined]
+                    )
                     checks["observation_mapping"] = "pass"
 
                     if not any(ended):
@@ -1666,15 +1992,18 @@ def run_torchrl_probe(
                         raise _TorchRLSetupFailure(
                             "TorchRL cached replacement reset was denied or forwarded to the native vector"
                         )
-                    mapped_replacements = _mapped_observation_rows(
-                        current_tensordict, schema, width=config.num_envs  # type: ignore[attr-defined]
-                    )
-                    if not _same_observation_rows(main_rows, mapped_replacements):
-                        checks["observation_mapping"] = "fail"
-                        raise vector._VectorContractViolation(
-                            "replacement_reset",
-                            "TorchRL cached reset did not return the same-call public replacement rows",
+                    try:
+                        _mapped_observation_rows(
+                            current_tensordict,
+                            schema,
+                            width=config.num_envs,  # type: ignore[attr-defined]
+                            expected_rows=main_rows,
+                            mismatch_check="replacement_reset",
+                            phase="replacement_reset",
                         )
+                    except _TorchRLMappingMismatch:
+                        checks["observation_mapping"] = "fail"
+                        raise
                     if guard.counts["reset_attempts"] != 1 or guard.counts["step_forwarded"] != batch_steps:
                         raise _TorchRLSetupFailure(
                             "TorchRL cached replacement path changed guarded native call counts"
@@ -1703,6 +2032,9 @@ def run_torchrl_probe(
         stop_reason = "writer_io_error"
     except vector._VectorContractViolation as error:
         checks[error.check] = "fail"
+        if isinstance(error, _TorchRLMappingMismatch):
+            mapping_mismatch = error.details
+            checks["observation_mapping"] = "fail"
         failures.append(
             vector.Failure("contract_violation", str(error), phase, type(error).__name__)
         )
@@ -1862,6 +2194,11 @@ def run_torchrl_probe(
         "native_build_info": build_info,
         "action_batch_contract": action_batch_contract,
         "adapter": {
+            **_reader_identity_metadata(
+                configured_id=DICT_FINAL_ADAPTER_ID,
+                registered_id=adapter_reader_id,
+                registration_succeeded=checks["passive_registration"] == "pass",
+            ),
             "library": "torchrl.envs.GymWrapper",
             "categorical_action_encoding": True,
             "frame_skip": 1,
@@ -1877,6 +2214,9 @@ def run_torchrl_probe(
                 facade is not None and facade.last_step is not None
             ),
             "diagnostic_rng": "Torch CPU RNG state forked/restored; samples are not actor actions",
+            "mapping_mismatch": (
+                dict(mapping_mismatch) if mapping_mismatch is not None else None
+            ),
         },
         "reward": {
             "contract_id": vector.NATIVE_CONTRACT.reward_contract_id,
@@ -1886,6 +2226,8 @@ def run_torchrl_probe(
         "time_001": vector._TIME_001,
     }
     try:
+        if mapping_mismatch is not None:
+            _persist_mapping_mismatch(writer, mapping_mismatch)
         vector._writer_call(
             writer,  # type: ignore[arg-type]
             "update_manifest",

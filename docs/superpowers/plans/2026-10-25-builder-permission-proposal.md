@@ -1,6 +1,31 @@
 # Builder permission repair proposal
 
-**Status: pending user approval. No derivative or permission change has run.**
+**Status: user-approved and completed 2026-10-25; protected preflight passed.**
+
+Approval: the user replied **“I approve”** to the explicit request to create
+this local derivative (one image-root chmod, default user `1000:1000`,
+every-UID traversal disclosure) and repeat the non-root preflight. Approval
+recorded at `2026-10-25T11:52:20Z`. No broader root/group workaround is covered.
+
+Verified result: local linux/amd64 builder ID
+`sha256:470a1d6751fa197eaeb99319d9a2f2f24f3d7da11347659c7b24b4ff5527c738`.
+The original 26 filesystem layers are retained with one added layer containing
+only directory `root`, mode `0551`, owner `0:0`, no payload. `User=1000:1000`
+is the only image-config difference; environment and entrypoint are unchanged.
+Direct Rust/Cargo **1.98.0** and builder Python **3.12.14** passed protected
+non-root preflight. The approved source projection and empty read-only fixture
+overlay passed; Gym source/lock/fixture hashes and existing learner changes
+remain unchanged. Both disposable task containers were removed.
+
+Evidence is retained in
+`artifacts/development/foundation/builder-repair-report-2026-10-25.md`,
+`builder-repair-review-2026-10-25.md`, and
+`builder-repair-parent-review-2026-10-25.md` under that same foundation directory.
+Independent task review passed specification and quality, with a minor audit-log
+completeness limitation retained in its report. Parent reconciled the history
+count question: 50/52 JSON records contain 63/65 text lines because some
+instructions contain newlines. Parent accepted the actual repair evidence.
+This result is builder preflight, not native-wheel/runtime conformance.
 
 This is a proposed narrow amendment to the
 [Stage A setup addendum](2026-10-24-native-setup-addendum.md). It addresses only
@@ -63,8 +88,8 @@ toolchain copy, new toolchain, package installation, or source input is needed.
 The intentional second change is image configuration: the derivative defaults
 to the existing non-root UID:GID. Every run still specifies `--user 1000:1000`.
 
-**The one `chmod` image-build instruction executes as image root. This needs
-explicit new authority.** It is confined to image preparation with no host
+**The one `chmod` image-build instruction executes as image root. The approval
+above covers only this root operation.** It is confined to image preparation with no host
 source/work/home/credential/socket mounts, no secrets or SSH forwarding, and
 network disabled. Wheel compilation and all diagnostic containers still run
 as `1000:1000`. No root shell or supplemental group is proposed.

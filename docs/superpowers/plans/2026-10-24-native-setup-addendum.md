@@ -1,5 +1,26 @@
 # Task 6 Native Setup Implementation Plan Addendum — Stage A Preflight Authority
 
+## Current execution authority and builder amendment — 2026-10-25
+
+The current user handoff explicitly lists **“CPU-only Stage A setup described
+by the reviewed addendum”** as already authorized and directs resuming Stage A
+after resolving the builder blocker. This current instruction governs the
+remaining wheel-build, CPU dependency closure/install and bounded conformance
+phases. The earlier Task 1-only approval record below is retained as history.
+No GPU, TorchRL, vector experiments, training or shared-service work is covered.
+
+The user separately approved the exact
+[builder permission amendment](2026-10-25-builder-permission-proposal.md).
+It has passed non-root and source-mount preflight with Rust/Cargo 1.98.0.
+Use its verified local linux/amd64 image ID
+`sha256:470a1d6751fa197eaeb99319d9a2f2f24f3d7da11347659c7b24b4ff5527c738`
+for the builder, retaining the original pinned base as provenance. Only the
+approved `/root` search-bit and default-user change was made. Runtime image,
+source pins/mounts/fixture overlay, dependencies, resource/storage limits and
+conformance bounds below remain unchanged. Native conformance has not run.
+
+## Historical approval and reviewed execution requirements
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:subagent-driven-development` or `superpowers:executing-plans`
 > only after explicit user approval of this exact addendum. Do not spawn nested

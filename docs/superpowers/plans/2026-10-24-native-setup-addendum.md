@@ -56,7 +56,11 @@ Host baseline116 passed; final default discovery119 includes116 core passes
 and3 gated native skips, with no optional imports in fresh discovery/import
 checks. This is bounded single-environment conformance, not playing strength,
 vector/TorchRL support or original-game transfer. RNG-001/TIME-001 remain.
-Task6 independent completion review is pending; the milestone is not complete.
+Task6 independent completion review passed specification compliance and approved
+code quality with no actionable findings; parent accepted actual code/raw logs
+and closed `spire_learn-d8l.7`. Native tests are committed as `f21d90b`.
+Stage A and Task6 are complete. Tasks7–10 and the M1 milestone remain pending;
+no vector/TorchRL/training authority or support is implied by this signoff.
 
 ## Historical approval and reviewed execution requirements
 

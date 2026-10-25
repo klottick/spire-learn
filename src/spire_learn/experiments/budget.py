@@ -35,9 +35,11 @@ class Budget:
             raise ValueError(f"{name} must be finite")
         return converted
 
+    def elapsed(self) -> float:
+        return max(0.0, self._read_clock() - self._start)
+
     def remaining(self) -> float:
-        elapsed = max(0.0, self._read_clock() - self._start)
-        return max(0.0, self._max_wall_seconds - elapsed)
+        return max(0.0, self._max_wall_seconds - self.elapsed())
 
     def exhausted(self) -> bool:
         return self.remaining() <= 0.0

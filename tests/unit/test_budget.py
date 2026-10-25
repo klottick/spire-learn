@@ -5,6 +5,15 @@ from spire_learn.experiments.budget import Budget
 
 
 class BudgetTests(unittest.TestCase):
+    def test_elapsed_uses_budget_start_and_clamps_clock_reversal(self):
+        clock = FakeClock(10)
+        budget = Budget(3.0, clock)
+        self.assertEqual(budget.elapsed(), 0.0)
+        clock.advance(2.0)
+        self.assertEqual(budget.elapsed(), 2.0)
+        clock.now = 9.0
+        self.assertEqual(budget.elapsed(), 0.0)
+
     def test_remaining_and_expiry(self):
         clock = FakeClock(10)
         budget = Budget(3.0, clock)

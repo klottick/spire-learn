@@ -1,10 +1,13 @@
 # Gym request: Ironclad combat training in two modes
 
-Status: acknowledged by the existing Gym controller as `spire-dxo.66`, queued
-after M11 acceptance (`spire-dxo.33.2`). Exact API/schema delivery remains pending.
+Status: Gym ticket `spire-dxo.66` is running in parallel with M11 under a fresh
+GPT-6.1 Sol/high senior, with Luna6/max assistants required. The senior owns an
+isolated worktree based on accepted M10 `36fbdc6310945caa194f2aa806c37769275228c3`.
+The M11 start dependency was removed; final integration remains coordinated.
+Exact API/schema delivery is still pending.
 Consumer: Spire Learn. This file requests a public environment capability, not
-training code in Gym. Preserve the controller's current M11 work and schedule
-this ticket at a safe ownership boundary.
+training code in Gym. Preserve the controller's current M11 work; use an isolated
+worktree/branch so this ticket can start in parallel, with coordinated integration.
 
 ## User request and execution setup
 

@@ -2,8 +2,11 @@
 
 **Status: PROPOSED — preparation, not implementation or training authority.**
 The user selected both modes and requested the Gym compatibility ticket. Public
-names, schemas and dimensions depend on Gym `spire-dxo.66`, queued after M11.
-This advances the neural track ahead of LLM/VOD work; neither is a prerequisite.
+names, schemas and dimensions depend on Gym `spire-dxo.66`, now running under
+a new senior executor.
+The user has requested a new senior to start Gym work in parallel with M11,
+using isolated source ownership and coordinated integration. This advances the
+neural track ahead of LLM/VOD work; neither is a prerequisite.
 M1 remains accepted and its frozen contracts/evidence remain unchanged.
 
 ## Intent and scope
@@ -47,8 +50,10 @@ means run termination. Do not alias these contracts or merely widen schema IDs.
 See the read-only audit in `artifacts/development/neural-combat/schema-audit.md`.
 
 Gym controller `d5b72748-ea4e-4d34-b6a0-4b7b54dfafc5` acknowledged ticket
-`spire-dxo.66`, depends on M11 `spire-dxo.33.2`, and will notify this learner only
-when accepted. The intended interface is a new full-engine standalone profile,
+`spire-dxo.66`; the user superseded its initial M11 start dependency with a
+parallel senior executor. It is running from accepted M10 in an isolated
+worktree; M11 is an integration constraint, not an implementation start blocker.
+The controller will notify this learner only when accepted. The intended interface is a new full-engine standalone profile,
 plus a reusable combat-facing view and public lifecycle/resource facts in RunEnv.
 Exact classes, dimensions and fingerprints are design outputs, not available APIs.
 The request is `docs/requests/2026-10-26-ironclad-combat-training-gym-request.md`.

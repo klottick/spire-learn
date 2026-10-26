@@ -21,16 +21,20 @@ contract; planned gym capabilities are not implemented learner support.
 
 ## Current state
 
-This is a local, dependency-light evaluation scaffold, not a trained learner. A
-fixed-case evaluator and bounded CPU/native probes are present, but no learning
-framework, training algorithm, learned architecture, or playing-strength result
-has been selected or produced. The two-case selection smoke config is diagnostic,
-not a benchmark corpus or permission to run. M1 foundation is complete for its
-scoped CPU/native profile: the bounded evaluator smoke executed one test with
-zero skips and reconciled both selection cases. See the
-[development and evaluation checks](docs/development.md) for evidence and
-qualifications. Historical PPO and two-policy proposals
-remain references, not implementation commitments.
+This is a local, dependency-light learner scaffold, not a trained agent. The
+public combat model, PPO update path, collection, checkpoint and Task 7 training
+and evaluation runner are authored. The single approved Task 7 CPU smoke ran
+once: both mode tests passed with zero skips, recording 396 learned decisions,
+444 environment slots, 28 accepted optimizer steps, and two updates per mode.
+This is bounded training-plumbing evidence. Task 7 acceptance and final combined
+review remain pending with the parent. It is not a playing-strength result;
+there has been no frozen-policy evaluation or GPU run. See the [retained runtime
+report](artifacts/development/neural-combat/task-7/task-7-training-smoke-runtime-report.md),
+[development and evaluation checks](docs/development.md), and [neural combat
+guide](docs/neural-combat.md) for evidence and qualifications. The M1 evaluator
+and bounded CPU/native probes remain separate from this training evidence.
+Historical PPO and two-policy proposals remain references, not implementation
+commitments.
 
 Python **3.12** matches the gym's current Python package requirement. Spire Learn
 declares no runtime dependencies, and this project has not installed packages

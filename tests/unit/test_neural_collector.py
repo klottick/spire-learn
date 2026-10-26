@@ -166,6 +166,24 @@ class FakePolicy:
                      for frame_value in frozen)
 
 
+class StatelessReferencePolicy:
+    def __init__(self, *, choice=0, include_statistics=False):
+        self.choice = choice
+        self.include_statistics = include_statistics
+        self.generators = []
+        self.value_calls = 0
+
+    def act(self, frames, *, generator, deterministic=False):
+        self.generators.append(generator)
+        if self.include_statistics:
+            return tuple(PolicyChoice(self.choice, -0.5, 0.25, 0) for _ in frames)
+        return tuple(PolicyChoice(self.choice) for _ in frames)
+
+    def values(self, frames):
+        self.value_calls += 1
+        raise AssertionError("reference policies must not request value estimates")
+
+
 class NeuralCollectorTests(unittest.TestCase):
     def setUp(self):
         self.standalone_config = replace(
@@ -178,6 +196,11 @@ class NeuralCollectorTests(unittest.TestCase):
             rollout_steps=1,
         )
         self.generator = object()
+        self.selection_config = replace(
+            load_neural_config(ROOT / "configs/neural/standalone-selection.toml"),
+            rollout_rows=2,
+            rollout_steps=1,
+        )
 
     def collector(self, driver, config, policy=None):
         from spire_learn.neural.collector import Collector
@@ -736,6 +759,216 @@ class NeuralCollectorTests(unittest.TestCase):
         self.assertEqual(len(driver.step_calls), 2)
         collector.close()
         self.assertEqual(driver.close_calls, 1)
+
+    def test_recovery_uses_next_seed_decision_and_episode_without_off_by_one(self):
+        from spire_learn.neural.cases import environment_seed_for
+        from spire_learn.neural.collector import CollectorRecovery
+
+        before = row(101, active=True, entered=1, visit=0)
+        successors = (row(102, active=True, entered=1, visit=0),
+                      row(103, active=True, entered=1, visit=0))
+        driver = ScriptedDriver(
+            "standalone", 2,
+            reset_rows=lambda slot, call, seed, entry: before,
+            steps=(lambda rows, actions: tuple(
+                transition(source, successor)
+                for source, successor in zip(rows, successors, strict=True)
+            ),),
+        )
+        recovery = CollectorRecovery(7, 11, (4, 9))
+        policy = FakePolicy(self.standalone_config)
+        from spire_learn.neural.collector import Collector
+
+        collector = Collector(
+            driver,
+            policy,
+            self.standalone_config,
+            controller_rng=random.Random(901),
+            curriculum_rng=random.Random(1201),
+            budget=Budget(60.0, lambda: 0.0),
+            policy_generator=self.generator,
+            recovery=recovery,
+        )
+        self.assertEqual(driver.reset_calls, [])
+        self.assertEqual(driver.step_calls, [])
+        self.assertEqual(collector.recovery_state, recovery)
+
+        rollout = collector.collect(
+            max_learned_decisions=4, max_env_actions=2, policy_version=0
+        )
+        self.assertEqual(driver.reset_calls[0][0], (
+            environment_seed_for("train", replica=0, ordinal=7),
+            environment_seed_for("train", replica=0, ordinal=8),
+        ))
+        self.assertEqual(tuple(item.task_id for item in rollout.records),
+                         ("task-0-4", "task-1-9"))
+        self.assertEqual(tuple(item.decision_id for item in rollout.records),
+                         ("decision-11", "decision-11"))
+        self.assertEqual(collector.recovery_state, CollectorRecovery(9, 12, (5, 10)))
+        collector.close()
+
+    def test_recovery_rejects_invalid_ordinals_width_and_previously_used_driver(self):
+        from spire_learn.neural.collector import Collector, CollectorRecovery
+
+        for args in (
+            (True, 0, (0,)),
+            (-1, 0, (0,)),
+            (0, 2**64, (0,)),
+            (0, 0, ()),
+            (0, 0, [0]),
+            (0, 0, (False,)),
+            (0, 0, (2**64,)),
+        ):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                CollectorRecovery(*args)
+
+        recovery = CollectorRecovery(0, 0, (0,))
+        cases = (
+            ScriptedDriver("standalone", 2),
+            ScriptedDriver("standalone", 2,
+                           initial_rows=(row(1, active=True, entered=1, visit=0), None)),
+        )
+        for driver in cases:
+            with self.subTest(driver=driver), self.assertRaises(Exception):
+                Collector(
+                    driver, FakePolicy(self.standalone_config), self.standalone_config,
+                    controller_rng=random.Random(901), curriculum_rng=random.Random(1201),
+                    budget=Budget(60.0, lambda: 0.0), policy_generator=self.generator,
+                    recovery=recovery,
+                )
+            self.assertEqual(driver.reset_calls, [])
+            self.assertEqual(driver.step_calls, [])
+
+        used = ScriptedDriver("standalone", 2)
+        used.accepted_steps = 1
+        with self.assertRaisesRegex(Exception, "no accepted steps"):
+            Collector(
+                used, FakePolicy(self.standalone_config), self.standalone_config,
+                controller_rng=random.Random(901), curriculum_rng=random.Random(1201),
+                budget=Budget(60.0, lambda: 0.0), policy_generator=self.generator,
+                recovery=CollectorRecovery(0, 0, (0, 0)),
+            )
+        self.assertEqual(used.reset_calls, [])
+        self.assertEqual(used.step_calls, [])
+
+    def test_recovery_snapshot_rejects_faulted_or_closed_collector(self):
+        from spire_learn.neural.collector import Collector
+
+        driver = ScriptedDriver("standalone", 2)
+        collector = self.collector(driver, self.standalone_config)
+        collector.close()
+        with self.assertRaisesRegex(RuntimeError, "closed"):
+            _ = collector.recovery_state
+
+        failing = ScriptedDriver("standalone", 2, steps=())
+        faulted = self.collector(failing, self.standalone_config)
+        with self.assertRaises(AssertionError):
+            faulted.collect(max_learned_decisions=8, max_env_actions=2, policy_version=0)
+        with self.assertRaisesRegex(RuntimeError, "faulted"):
+            _ = faulted.recovery_state
+
+    def test_stateless_reference_rows_are_fixed_and_never_request_values(self):
+        import random as random_module
+        from spire_learn.neural.collector import Collector
+
+        before = row(110, active=True, entered=1, visit=0)
+        after = row(111, active=True, entered=1, visit=0)
+        driver = ScriptedDriver(
+            "standalone", 2, reset_rows=lambda slot, call, seed, entry: before,
+            steps=(lambda rows, actions: tuple(transition(source, after) for source in rows),),
+        )
+        policy = StatelessReferencePolicy()
+        rng = random_module.Random(4411)
+        collector = Collector(
+            driver, policy, self.selection_config,
+            controller_rng=random.Random(901), curriculum_rng=random.Random(1201),
+            budget=Budget(60.0, lambda: 0.0), policy_generator=rng,
+            learned_combat_policy=False,
+        )
+        rollout = collector.collect(
+            max_learned_decisions=0, max_env_actions=2, policy_version="reference-policy-v1"
+        )
+        self.assertEqual(len(rollout.records), 2)
+        self.assertEqual(rollout.counters.actor_rows, 0)
+        self.assertEqual(rollout.counters.fixed_rows, 2)
+        self.assertEqual(rollout.collection.learned_decisions, 0)
+        self.assertEqual(rollout.collection.fixed_decisions, 2)
+        self.assertEqual(rollout.collection.attempted_environment_slots, 2)
+        self.assertEqual(rollout.collection.undispatched_fixed_decisions, 0)
+        self.assertTrue(all(not record.actor_training_mask and record.next_value is None
+                            for record in rollout.records))
+        self.assertEqual(policy.value_calls, 0)
+        self.assertTrue(all(generator is rng for generator in policy.generators))
+        collector.close()
+
+    def test_reference_policy_rejects_statistics_and_counts_undispatched_as_fixed(self):
+        import random as random_module
+        from spire_learn.neural.collector import Collector
+
+        before = row(120, active=True, entered=1, visit=0)
+        driver = ScriptedDriver("standalone", 2, initial_rows=(before, before), steps=())
+        bad = StatelessReferencePolicy(include_statistics=True)
+        collector = Collector(
+            driver, bad, self.selection_config,
+            controller_rng=random.Random(901), curriculum_rng=random.Random(1201),
+            budget=Budget(60.0, lambda: 0.0), policy_generator=random_module.Random(4411),
+            learned_combat_policy=False,
+        )
+        with self.assertRaisesRegex(Exception, "statless"):
+            collector.collect(max_learned_decisions=0, max_env_actions=2,
+                              policy_version="reference-policy-v1")
+        self.assertEqual(driver.step_calls, [])
+
+        clock = [0.0]
+        expiring_driver = ScriptedDriver(
+            "standalone", 2, initial_rows=(before, before), steps=()
+        )
+
+        class ExpiringReference(StatelessReferencePolicy):
+            def act(self, frames, *, generator, deterministic=False):
+                choices = super().act(frames, generator=generator, deterministic=deterministic)
+                clock[0] = 61.0
+                return choices
+
+        expiring = Collector(
+            expiring_driver, ExpiringReference(), self.selection_config,
+            controller_rng=random.Random(901), curriculum_rng=random.Random(1201),
+            budget=Budget(60.0, lambda: clock[0]),
+            policy_generator=random_module.Random(4411), learned_combat_policy=False,
+        )
+        result = expiring.collect(max_learned_decisions=0, max_env_actions=2,
+                                  policy_version="reference-policy-v1")
+        self.assertEqual(result.collection.learned_decisions, 0)
+        self.assertEqual(result.collection.fixed_decisions, 0)
+        self.assertEqual(result.collection.undispatched_fixed_decisions, 2)
+        self.assertEqual(result.collection.undispatched_actor_decisions, 0)
+        self.assertEqual(expiring_driver.step_calls, [])
+        collector.close()
+        expiring.close()
+
+    def test_default_frozen_neural_collector_keeps_learned_attribution(self):
+        from spire_learn.neural.collector import Collector
+
+        before = row(130, active=True, entered=1, visit=0)
+        after = row(131, active=True, entered=1, visit=0)
+        driver = ScriptedDriver(
+            "standalone", 2, reset_rows=lambda slot, call, seed, entry: before,
+            steps=(lambda rows, actions: tuple(transition(source, after) for source in rows),),
+        )
+        policy = FakePolicy(self.selection_config)
+        collector = Collector(
+            driver, policy, self.selection_config,
+            controller_rng=random.Random(901), curriculum_rng=random.Random(1201),
+            budget=Budget(60.0, lambda: 0.0), policy_generator=self.generator,
+        )
+        rollout = collector.collect(max_learned_decisions=2, max_env_actions=2,
+                                    policy_version=0)
+        self.assertTrue(collector.learned_combat_policy)
+        self.assertEqual(rollout.counters.actor_rows, 2)
+        self.assertEqual(rollout.counters.fixed_rows, 0)
+        self.assertTrue(all(record.actor_training_mask for record in rollout.records))
+        self.assertEqual(len(policy.value_inputs), 1)
+        collector.close()
 
 
 if __name__ == "__main__":

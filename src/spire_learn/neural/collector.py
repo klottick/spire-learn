@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import math
 import random
 from typing import Any
@@ -29,6 +29,28 @@ from spire_learn.neural.returns import task_signal
 _TRAIN_SEED_POLICY = "environment-seed-for-replica0-v1"
 _REFERENCE_SEED_POLICY = "authored-reference-seed-v1"
 _MAX_FAULT_TEXT = 512
+_MAX_RECOVERY_ORDINAL = 2**64 - 1
+
+
+@dataclass(frozen=True)
+class CollectorRecovery:
+    """Validated high-water marks for a fresh environment after checkpoint load."""
+
+    next_seed_ordinal: int
+    next_decision_sequence: int
+    next_episode_ordinals: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        for name in ("next_seed_ordinal", "next_decision_sequence"):
+            value = getattr(self, name)
+            if type(value) is not int or not 0 <= value <= _MAX_RECOVERY_ORDINAL:
+                raise ValueError(f"CollectorRecovery {name} must be a JSON-range non-negative integer")
+        if (not isinstance(self.next_episode_ordinals, tuple)
+                or not self.next_episode_ordinals):
+            raise ValueError("CollectorRecovery next_episode_ordinals must be a non-empty tuple")
+        if any(type(value) is not int or not 0 <= value <= _MAX_RECOVERY_ORDINAL
+               for value in self.next_episode_ordinals):
+            raise ValueError("CollectorRecovery episode ordinals must be JSON-range non-negative integers")
 
 
 def _clean_error(error: BaseException) -> str:
@@ -63,6 +85,8 @@ class Collector:
         curriculum_rng: random.Random,
         budget: Any,
         policy_generator: Any | None = None,
+        recovery: CollectorRecovery | None = None,
+        learned_combat_policy: bool = True,
     ) -> None:
         if not isinstance(config, NeuralConfig):
             raise TypeError("Collector requires a NeuralConfig")
@@ -87,22 +111,37 @@ class Collector:
             raise TypeError("controller_rng must expose choice")
         if not callable(getattr(curriculum_rng, "randrange", None)):
             raise TypeError("curriculum_rng must expose randrange")
-        for name in ("act", "values"):
-            if not callable(getattr(policy, name, None)):
-                raise ContractError(f"policy must expose {name}()")
+        if type(learned_combat_policy) is not bool:
+            raise TypeError("learned_combat_policy must be a boolean")
+        if not learned_combat_policy and config.operation != "evaluate":
+            raise ContractError("statless combat-controller attribution is evaluate-only")
+        if not callable(getattr(policy, "act", None)):
+            raise ContractError("policy must expose act()")
+        if learned_combat_policy and not callable(getattr(policy, "values", None)):
+            raise ContractError("learned policy must expose values()")
+        if not learned_combat_policy and not callable(getattr(policy_generator, "choice", None)):
+            raise ContractError("reference policy requires an injected Python choice generator")
 
         cases = config.cases.for_mode(mode)
         if not cases:
             raise ContractError(f"neural case manifest has no {mode} cases")
         identity_fields = ("model_id", "features_id", "action_id", "objective_id")
-        policy_identity = tuple(getattr(policy, name, None) for name in identity_fields)
-        identities = tuple(
-            identity for identity in config.accepted_identities
-            if tuple(getattr(identity, name) for name in identity_fields) == policy_identity
-            and mode in identity.accepted_raw_mode_mappings
-        )
-        if len(identities) != 1:
-            raise ContractError("policy must match one configured identity for the selected mode")
+        if learned_combat_policy:
+            policy_identity = tuple(getattr(policy, name, None) for name in identity_fields)
+            identities = tuple(
+                identity for identity in config.accepted_identities
+                if tuple(getattr(identity, name) for name in identity_fields) == policy_identity
+                and mode in identity.accepted_raw_mode_mappings
+            )
+            if len(identities) != 1:
+                raise ContractError("policy must match one configured identity for the selected mode")
+        else:
+            identities = tuple(
+                identity for identity in config.accepted_identities
+                if mode in identity.accepted_raw_mode_mappings
+            )
+            if len(identities) != 1:
+                raise ContractError("reference policy requires one configured transport identity")
 
         self.driver = driver
         self.policy = policy
@@ -113,6 +152,7 @@ class Collector:
         self.identity: NeuralIdentity = identities[0]
         self._cases: tuple[NeuralCase, ...] = tuple(cases)
         self._policy_generator = policy_generator
+        self._learned_combat_policy = learned_combat_policy
         self._mode = mode
         self._batch_size = batch_size
         self._rows: tuple[DriverRow | None, ...] = rows
@@ -171,6 +211,21 @@ class Collector:
             "undispatched_actor_decisions": 0,
             "undispatched_fixed_decisions": 0,
         }
+        if recovery is not None:
+            if not isinstance(recovery, CollectorRecovery):
+                raise TypeError("recovery must be a CollectorRecovery or None")
+            if rows != (None,) * batch_size:
+                raise ContractError("collector recovery requires a fresh driver with unreset rows")
+            accepted_steps = getattr(driver, "accepted_steps", None)
+            if type(accepted_steps) is not int or accepted_steps != 0:
+                raise ContractError("collector recovery requires a driver with no accepted steps")
+            if len(recovery.next_episode_ordinals) != batch_size:
+                raise ContractError("collector recovery episode width must match the driver batch")
+            if config.split == "train" and recovery.next_seed_ordinal > 2**32:
+                raise ContractError("collector recovery seed ordinal exceeds the train domain")
+            self._seed_ordinal = recovery.next_seed_ordinal
+            self._decision_ordinals = [recovery.next_decision_sequence] * batch_size
+            self._episodes = [ordinal - 1 for ordinal in recovery.next_episode_ordinals]
         initial_elapsed = float(budget.elapsed())
         initial_remaining = float(budget.remaining())
         if (not math.isfinite(initial_elapsed) or initial_elapsed < 0
@@ -190,9 +245,32 @@ class Collector:
         return self._policy_generator
 
     @property
+    def learned_combat_policy(self) -> bool:
+        """Whether active combat choices carry learned policy statistics."""
+        return self._learned_combat_policy
+
+    @property
     def partial_rollout(self) -> Rollout | None:
         """Most recent immutable output, including a known prefix after failure."""
         return self._last_rollout
+
+    @property
+    def recovery_state(self) -> CollectorRecovery:
+        """Return fresh-environment high-water marks at a healthy boundary."""
+        if self._failed:
+            raise RuntimeError("faulted collector recovery state is unavailable")
+        if self._closed:
+            raise RuntimeError("closed collector recovery state is unavailable")
+        if (self._phase not in {"idle", "ready"}
+                or self._current_operation_kind != "none"
+                or self._pending_decisions != 0):
+            raise RuntimeError("collector recovery state requires a healthy collection boundary")
+        next_sequence = max(self._decision_ordinals, default=0)
+        return CollectorRecovery(
+            next_seed_ordinal=self._seed_ordinal,
+            next_decision_sequence=next_sequence,
+            next_episode_ordinals=tuple(episode + 1 for episode in self._episodes),
+        )
 
     def _mark_task_started(self, slot: int, visit: int | None) -> None:
         if self._mode == "standalone":
@@ -424,6 +502,8 @@ class Collector:
         return self._rows  # type: ignore[return-value]
 
     def _reserved_learned_rows(self, rows: tuple[DriverRow | None, ...]) -> int:
+        if not self._learned_combat_policy:
+            return 0
         total = 0
         for slot, row in enumerate(rows):
             if self._needs_reset[slot] or row is None:
@@ -443,6 +523,11 @@ class Collector:
         return False
 
     def _policy_generator_for_actor(self) -> Any:
+        if not self._learned_combat_policy:
+            generator = self._policy_generator
+            if not callable(getattr(generator, "choice", None)):
+                raise ContractError("reference policy choice generator is unavailable")
+            return generator
         if self._policy_generator is None:
             import torch
 
@@ -452,25 +537,32 @@ class Collector:
         return self._policy_generator
 
     def _actions(self, rows: tuple[DriverRow, ...], policy_version: str | int):
-        learned_slots = tuple(index for index, row in enumerate(rows) if row.lifecycle.active)
-        self._pending_decisions = len(learned_slots)
+        policy_slots = tuple(index for index, row in enumerate(rows) if row.lifecycle.active)
+        self._pending_decisions = len(policy_slots)
         self._sampled_actor_this_batch = 0
         self._sampled_fixed_this_batch = 0
         actions: list[int | None] = [None] * self._batch_size
         choices: list[PolicyChoice | None] = [None] * self._batch_size
-        if learned_slots:
+        if policy_slots:
             generator = self._policy_generator_for_actor()
-            frames = tuple(rows[index].frame for index in learned_slots)
+            frames = tuple(rows[index].frame for index in policy_slots)
             policy_choices = self.policy.act(frames, generator=generator, deterministic=False)
-            if not isinstance(policy_choices, tuple) or len(policy_choices) != len(learned_slots):
+            if not isinstance(policy_choices, tuple) or len(policy_choices) != len(policy_slots):
                 raise ContractError("policy.act must return one immutable choice per learned row")
-            self._sampled_actor_this_batch = len(learned_slots)
-            for slot, choice in zip(learned_slots, policy_choices, strict=True):
+            if self._learned_combat_policy:
+                self._sampled_actor_this_batch = len(policy_slots)
+            else:
+                self._sampled_fixed_this_batch = len(policy_slots)
+            for slot, choice in zip(policy_slots, policy_choices, strict=True):
                 if not isinstance(choice, PolicyChoice):
                     raise ContractError("policy.act returned a non-PolicyChoice value")
-                if (choice.value is None or choice.log_probability is None
-                        or choice.behavior_policy_version != policy_version):
-                    raise ContractError("learned choice statistics/version disagree with the requested policy")
+                if self._learned_combat_policy:
+                    if (choice.value is None or choice.log_probability is None
+                            or choice.behavior_policy_version != policy_version):
+                        raise ContractError("learned choice statistics/version disagree with the requested policy")
+                elif (choice.value is not None or choice.log_probability is not None
+                      or choice.behavior_policy_version is not None):
+                    raise ContractError("reference combat policy choices must be statless")
                 legal = tuple(candidate.index for candidate in rows[slot].candidates)
                 if choice.original_action_index not in legal:
                     raise ContractError("policy selected an action outside the current legal candidates")
@@ -491,7 +583,7 @@ class Collector:
             self._sampled_fixed_this_batch += 1
         if any(action is None for action in actions) or any(choice is None for choice in choices):
             raise ContractError("collector did not construct a complete native batch")
-        return tuple(actions), tuple(choices), learned_slots
+        return tuple(actions), tuple(choices), policy_slots
 
     @staticmethod
     def _validate_lifecycle_jump(previous, current, transition: DriverTransition) -> None:
@@ -516,7 +608,7 @@ class Collector:
             raise ContractError("inactive lifecycle changed visit counters without a combat boundary")
 
     def _step_batch(self, rows: tuple[DriverRow, ...], policy_version: str | int):
-        actions, choices, learned_slots = self._actions(rows, policy_version)
+        actions, choices, policy_slots = self._actions(rows, policy_version)
         if self._wall_remaining() <= 0:
             self._counts["undispatched_actor_decisions"] += self._sampled_actor_this_batch
             self._counts["undispatched_fixed_decisions"] += self._sampled_fixed_this_batch
@@ -568,7 +660,7 @@ class Collector:
             )
             task_id = self._task_id(slot, source)
             decision_id = f"decision-{self._decision_ordinals[slot]}"
-            learned = slot in learned_slots
+            learned = self._learned_combat_policy and slot in policy_slots
             if learned and not signal.task_terminal:
                 bootstrap_frames.append((slot, result.successor.frame))
             prepared.append((slot, result, choice, signal, task_id, decision_id, learned))
@@ -883,4 +975,4 @@ class Collector:
         self.driver.close()
 
 
-__all__ = ["Collector"]
+__all__ = ["Collector", "CollectorRecovery"]

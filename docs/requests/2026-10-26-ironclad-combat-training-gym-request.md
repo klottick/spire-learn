@@ -1,13 +1,15 @@
 # Gym request: Ironclad combat training in two modes
 
-Status: Gym ticket `spire-dxo.66` is running in parallel with M11 under a fresh
-GPT-6.1 Sol/high senior, with Luna6/max assistants required. The senior owns an
-isolated worktree based on accepted M10 `36fbdc6310945caa194f2aa806c37769275228c3`.
-The M11 start dependency was removed; final integration remains coordinated.
-Exact API/schema delivery is still pending.
+Status: Gym ticket `spire-dxo.66` is accepted and closed. PR #47 merged at
+`533dad1c8aec86df624b3742b6b3ad1dbf1d0033`, following GPT-6.1 Sol/high senior
+execution with Luna6/max assistants and coordinated M11 integration. The READY
+callback was received; Learn verified accepted source/package bytes without
+installing or running the new runtime. Exact accepted APIs and compatibility
+identities are recorded in
+`docs/superpowers/specs/2026-10-26-ironclad-combat-learning-design.md`.
 Consumer: Spire Learn. This file requests a public environment capability, not
-training code in Gym. Preserve the controller's current M11 work; use an isolated
-worktree/branch so this ticket can start in parallel, with coordinated integration.
+training code in Gym. The request and execution requirements below are retained
+as the historical scope; they do not request another implementation or run.
 
 ## User request and execution setup
 

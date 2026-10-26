@@ -1,12 +1,12 @@
 # Ironclad combat learning in standalone and normal-run modes
 
 **Status: PROPOSED — preparation, not implementation or training authority.**
-The user selected both modes and requested the Gym compatibility ticket. Public
-names, schemas and dimensions depend on Gym `spire-dxo.66`, now running under
-a new senior executor.
-The user has requested a new senior to start Gym work in parallel with M11,
-using isolated source ownership and coordinated integration. This advances the
-neural track ahead of LLM/VOD work; neither is a prerequisite.
+The user selected both modes and requested Gym compatibility ticket
+`spire-dxo.66`. It is now accepted and merged at
+`533dad1c8aec86df624b3742b6b3ad1dbf1d0033` (PR #47), following the requested
+parallel senior execution and coordinated M11 integration. Learn has audited
+source/package bytes; no new runtime has been installed or exercised here.
+This advances the neural track ahead of LLM/VOD work; neither is a prerequisite.
 M1 remains accepted and its frozen contracts/evidence remain unchanged.
 
 ## Intent and scope
@@ -32,7 +32,7 @@ LLMs, demonstrations and a learned full-run controller remain later tracks.
 | --- | --- | --- |
 | Standalone combats only | Controlled curricula and cheap resets | Excludes in-run behavior; user wants both |
 | Normal runs only, fixed noncombat controller | Uses existing broader RunEnv progression | Biased reached states and slower curriculum control; insufficient alone |
-| Shared combat policy, two explicit environment/collection modes | Supports controlled learning and in-run use without duplicate models or simulator rules | Selected direction from user's both-modes instruction; exact Gym mappings remain pending |
+| Shared combat policy, two explicit environment/collection modes | Supports controlled learning and in-run use without duplicate models or simulator rules | Selected direction from user's both-modes instruction; accepted common Gym view now available |
 
 ## Current evidence and upstream boundary
 
@@ -40,7 +40,8 @@ M1 source `732b714` passed 267 core tests with 9 gated skips; the accepted nativ
 evaluator executed one test with no skips. Its two starter combats are interface
 evidence, not a broad training corpus. Accepted Gym M10 source inspected at
 `36fbdc6310945caa194f2aa806c37769275228c3` includes the broader Ironclad A0
-engine profile. Current in-flight M11 work is not a dependency acceptance claim.
+engine profile. Gym66 and its M11 prerequisite are now accepted; this does not
+change the older installed M1 runtime or establish Learn training compatibility.
 
 `ArrayValue` and numeric validation already support int64. However, M1's schema
 reader and candidate extraction expect combat-v1's five action tensors. M10 Run
@@ -49,14 +50,35 @@ references. `RunEnv.reset` has no scenario/resource override, and its terminatio
 means run termination. Do not alias these contracts or merely widen schema IDs.
 See the read-only audit in `artifacts/development/neural-combat/schema-audit.md`.
 
-Gym controller `d5b72748-ea4e-4d34-b6a0-4b7b54dfafc5` acknowledged ticket
-`spire-dxo.66`; the user superseded its initial M11 start dependency with a
-parallel senior executor. It is running from accepted M10 in an isolated
-worktree; M11 is an integration constraint, not an implementation start blocker.
-The controller will notify this learner only when accepted. The intended interface is a new full-engine standalone profile,
-plus a reusable combat-facing view and public lifecycle/resource facts in RunEnv.
-Exact classes, dimensions and fingerprints are design outputs, not available APIs.
+Gym controller `d5b72748-ea4e-4d34-b6a0-4b7b54dfafc5` delivered the accepted
+READY callback for `spire-dxo.66`. Learn independently verified all 636 accepted
+source hashes/modes, the delivered wheel/native hashes and all 22 packaged
+Python/stub files against accepted Git. The native build label still identifies
+its original dirty build context; accepted source and built-byte provenance are
+recorded separately in `artifacts/development/neural-combat/accepted-gym66-audit.json`.
+Upstream retains one historical Rust failure and 60 baseline-matched legacy
+comparison failures; no entirely green suite or original-game parity is claimed.
 The request is `docs/requests/2026-10-26-ironclad-combat-training-gym-request.md`.
+
+Accepted public guide: `docs/combat-training.md` in Gym at the revision above.
+Exports are from `spire_lab.gymnasium`:
+
+| Mode / identity | Accepted contract |
+| --- | --- |
+| Standalone | `IroncladCombatEnv(entry_catalog, partition="train")`; reset with `seed` and `options={"entry_id": ...}` |
+| Standalone vector | `IroncladCombatVectorEnv(num_envs, entry_catalog, partition="train")`; B=1..256, explicit masked reset, DISABLED autoreset |
+| Normal Run | `RunEnv("ironclad", 0, profile="m10-ironclad-policy", partition=...)`; `combat_view()`, `combat_observation_spec()`, `environment_spec()` |
+| Common view | `spire-gym-combat-policy-view-v1`; fingerprint `02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78` |
+| Normal policy transport | `M10IroncladPolicy`, observation-v3 / replay-v3; fingerprint `30905db1b7a520482d3ea8aa2e63ddb7f78b7c081de89d87268151f29cf4c7f8` |
+| Standalone identities | profile `ironclad-combat-v1`; content `spire-gym-ironclad-combat-content-v1`; rules `spire-gym-native-m10-rules-v1`; reward `spire-gym-combat-outcome-reward-v1` |
+
+The common descriptor has int64 values and int8 known/occupied masks, typed row
+references and 1,024 action rows. It includes the public `lose_strength` power.
+Use exact descriptor columns/vocabularies, not the old full-Run audit's dimensions.
+Original action-row indices remain dispatch indices. Frozen combat-v1, M9 and
+M10-v2 remain distinct; no silent profile substitution. Finite standalone support
+is 75 Red cards, 43 native setups, 30 relics and 13 potions; bind exact supported
+IDs/limits from the public catalog, not registry rows or aggregate counts.
 
 Gym owns valid entry construction, shuffle, startup hooks, encounters, game
 rules/RNG, public views/masks, outcomes and native batch/fault behavior. Learn owns
@@ -75,6 +97,12 @@ A single facade resets only when collection explicitly requests it. A native bat
 uses only its documented reset/autoreset/final-state protocol. Natural combat end
 is also the standalone environment episode end.
 
+For the accepted vector, a terminal row rejects the entire step before dispatch.
+Record old terminal results, then masked-reset finished rows before the next
+full-batch step. Unselected ongoing rows keep exact state/token and do not advance.
+There are no SAME_STEP replacements or inactive action placeholders. Input errors
+are recoverable; accepted runtime/export faults freeze the owner and prohibit retry.
+
 ### Combat learning inside normal runs
 
 A versioned Run case names character, ascension, profile, partition, supported
@@ -91,6 +119,15 @@ selection screens as combat or infer victory from a phase change/positive HP.
 Use explicit accepted public lifecycle/outcome facts. Every environment call is
 accounted for, including fixed-controller work and its effects on later state.
 Only learned combat decisions receive actor-loss/log-probability attribution.
+
+The sidecar routes `combat` and `combat_selection` to the learned policy,
+including card/potion-owned selectors; `noncombat` has an empty common legal
+mask. Dispatch through the original Run action index. Observe settled-count
+increments once, paired with sticky `last_exit` visit/outcome and HP before
+healing/after cleanup. Snapshot current numeric deck/items/HP at that increment,
+before later reward/map actions; those arrays are not historical checkpoints.
+Keep routing, tokens, visits and seeds outside actor/critic features. No Python
+full-Run vector facade is included; initial in-run collection is explicitly single.
 
 Proposed initial objective is local to each fight: a natural combat end closes a
 learner task segment even when the Run continues. Preserve original Gym terminal
@@ -244,7 +281,8 @@ fact; exact environment or cross-machine trajectory continuation is not promised
 Completed preparation: Gym request/ticket/callback routing, M1 reuse audit,
 read-only hardware inventory and this proposed design. A builder check identified one material question about weight ownership. The
 parent proposed the separate-run/frozen-transfer default above; no other
-material planning question was raised. Exact upstream contracts remain pending.
+material planning question was raised. The accepted upstream contract has now
+been reconciled; learner adapter/runtime verification remains future work.
 
 Implementation sequence after design approval:
 1. Pure neural rollout/objective/return and compatibility metadata tests; no Gym
@@ -265,7 +303,8 @@ honest, resources/provenance are recorded, and a budgeted learning result (inclu
 an inconclusive one) is documented against baselines. A code test pass is not a
 learning result. A failed/incomplete experiment never becomes a fabricated loss.
 
-Exact Gym IDs/signatures and the GPU/runtime package pins are deliberately pending.
-Do not invent them or modify the completed M1 contracts to conceal missing support.
+Gym IDs/signatures are now fixed above. GPU/runtime package pins and concrete
+experiment budgets remain pending separate setup/calibration work. Preserve the
+completed M1 contracts and runtime when adding the new neural track.
 The user must approve the design, then the implementation plan and concrete runtime
 setup/experiment budgets can be prepared under the normal workflow.

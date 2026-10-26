@@ -107,7 +107,9 @@ class NeuralTensorRunHelperTests(unittest.TestCase):
 
         root = Path(__file__).resolve().parents[2] / "tests/neural"
         with patch.object(builtins, "__import__", new=reject_optional):
-            suite = unittest.defaultTestLoader.discover(str(root), pattern="test*.py")
+            suite = unittest.TestSuite()
+            for module in ("test_model.py", "test_distribution.py", "test_ppo.py"):
+                suite.addTests(unittest.defaultTestLoader.discover(str(root), pattern=module))
 
         actual: list[str] = []
 

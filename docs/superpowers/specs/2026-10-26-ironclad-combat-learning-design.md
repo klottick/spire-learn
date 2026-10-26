@@ -1,6 +1,8 @@
 # Ironclad combat learning in standalone and normal-run modes
 
-**Status: PROPOSED — preparation, not implementation or training authority.**
+**Status: APPROVED DESIGN — user approved on 2026-10-26.**
+Approval covers this learner design and preparation of its implementation/runtime
+plan. Dependency installation and concrete experiment budgets are separate gates.
 The user selected both modes and requested Gym compatibility ticket
 `spire-dxo.66`. It is now accepted and merged at
 `533dad1c8aec86df624b3742b6b3ad1dbf1d0033` (PR #47), following the requested
@@ -306,5 +308,5 @@ learning result. A failed/incomplete experiment never becomes a fabricated loss.
 Gym IDs/signatures are now fixed above. GPU/runtime package pins and concrete
 experiment budgets remain pending separate setup/calibration work. Preserve the
 completed M1 contracts and runtime when adding the new neural track.
-The user must approve the design, then the implementation plan and concrete runtime
-setup/experiment budgets can be prepared under the normal workflow.
+The design is approved. Review the implementation plan and concrete runtime
+setup/experiment budgets before executing their scoped work.

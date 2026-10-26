@@ -1,0 +1,401 @@
+{
+  "schema": "spire-learn-neural-cases-v1",
+  "split": "selection",
+  "partition": "selection",
+  "cases": [
+    {
+      "case_id": "selection-standalone-cultist-starting-hp64-v1",
+      "lineage_id": "lineage:selection:standalone:cultist:starting:hp64",
+      "mode": "standalone",
+      "environment_seed": 1099511627776,
+      "cohort": "seen",
+      "entry_id": "entry-selection-standalone-cultist-starting-hp64-v1",
+      "entry": {
+        "id": "entry-selection-standalone-cultist-starting-hp64-v1",
+        "encounter": "cultist",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "selection-standalone-jaw_worm-starting-hp64-v1",
+      "lineage_id": "lineage:selection:standalone:jaw_worm:starting:hp64",
+      "mode": "standalone",
+      "environment_seed": 1099511627777,
+      "cohort": "seen",
+      "entry_id": "entry-selection-standalone-jaw_worm-starting-hp64-v1",
+      "entry": {
+        "id": "entry-selection-standalone-jaw_worm-starting-hp64-v1",
+        "encounter": "jaw_worm",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "selection-standalone-two_louse-starting-hp64-v1",
+      "lineage_id": "lineage:selection:standalone:two_louse:starting:hp64",
+      "mode": "standalone",
+      "environment_seed": 1099511627778,
+      "cohort": "seen",
+      "entry_id": "entry-selection-standalone-two_louse-starting-hp64-v1",
+      "entry": {
+        "id": "entry-selection-standalone-two_louse-starting-hp64-v1",
+        "encounter": "two_louse",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "selection-standalone-small_slimes-starting-hp64-v1",
+      "lineage_id": "lineage:selection:standalone:small_slimes:starting:hp64",
+      "mode": "standalone",
+      "environment_seed": 1099511627779,
+      "cohort": "seen",
+      "entry_id": "entry-selection-standalone-small_slimes-starting-hp64-v1",
+      "entry": {
+        "id": "entry-selection-standalone-small_slimes-starting-hp64-v1",
+        "encounter": "small_slimes",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "selection-standalone-large_slime-starting-hp64-v1",
+      "lineage_id": "lineage:selection:standalone:large_slime:starting:hp64",
+      "mode": "standalone",
+      "environment_seed": 1099511627780,
+      "cohort": "held_out_encounter",
+      "entry_id": "entry-selection-standalone-large_slime-starting-hp64-v1",
+      "entry": {
+        "id": "entry-selection-standalone-large_slime-starting-hp64-v1",
+        "encounter": "large_slime",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "selection-standalone-three_louse-starting-hp64-v1",
+      "lineage_id": "lineage:selection:standalone:three_louse:starting:hp64",
+      "mode": "standalone",
+      "environment_seed": 1099511627781,
+      "cohort": "held_out_encounter",
+      "entry_id": "entry-selection-standalone-three_louse-starting-hp64-v1",
+      "entry": {
+        "id": "entry-selection-standalone-three_louse-starting-hp64-v1",
+        "encounter": "three_louse",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "selection-run-normal-ironclad-a0-v1",
+      "lineage_id": "lineage:selection:run:normal-ironclad-a0",
+      "mode": "run",
+      "environment_seed": 1099511627782,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    }
+  ]
+}

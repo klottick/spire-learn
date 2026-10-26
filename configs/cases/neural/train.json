@@ -1,0 +1,1681 @@
+{
+  "schema": "spire-learn-neural-cases-v1",
+  "split": "train",
+  "partition": "train",
+  "cases": [
+    {
+      "case_id": "train-standalone-cultist-starting-hp64-v1",
+      "lineage_id": "lineage:train:standalone:cultist:starting:hp64",
+      "mode": "standalone",
+      "environment_seed": 0,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-cultist-starting-hp64-v1",
+      "entry": {
+        "id": "entry-train-standalone-cultist-starting-hp64-v1",
+        "encounter": "cultist",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-cultist-starting-hp80-v1",
+      "lineage_id": "lineage:train:standalone:cultist:starting:hp80",
+      "mode": "standalone",
+      "environment_seed": 1,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-cultist-starting-hp80-v1",
+      "entry": {
+        "id": "entry-train-standalone-cultist-starting-hp80-v1",
+        "encounter": "cultist",
+        "hp": 80,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-cultist-immolate_armaments-hp64-v1",
+      "lineage_id": "lineage:train:standalone:cultist:immolate_armaments:hp64",
+      "mode": "standalone",
+      "environment_seed": 2,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-cultist-immolate_armaments-hp64-v1",
+      "entry": {
+        "id": "entry-train-standalone-cultist-immolate_armaments-hp64-v1",
+        "encounter": "cultist",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "immolate",
+            "upgrades": 1
+          },
+          {
+            "card": "armaments",
+            "upgrades": 1
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-cultist-immolate_armaments-hp80-v1",
+      "lineage_id": "lineage:train:standalone:cultist:immolate_armaments:hp80",
+      "mode": "standalone",
+      "environment_seed": 3,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-cultist-immolate_armaments-hp80-v1",
+      "entry": {
+        "id": "entry-train-standalone-cultist-immolate_armaments-hp80-v1",
+        "encounter": "cultist",
+        "hp": 80,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "immolate",
+            "upgrades": 1
+          },
+          {
+            "card": "armaments",
+            "upgrades": 1
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-cultist-warcry_whirlwind-hp64-v1",
+      "lineage_id": "lineage:train:standalone:cultist:warcry_whirlwind:hp64",
+      "mode": "standalone",
+      "environment_seed": 4,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-cultist-warcry_whirlwind-hp64-v1",
+      "entry": {
+        "id": "entry-train-standalone-cultist-warcry_whirlwind-hp64-v1",
+        "encounter": "cultist",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "warcry",
+            "upgrades": 0
+          },
+          {
+            "card": "whirlwind",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-cultist-warcry_whirlwind-hp80-v1",
+      "lineage_id": "lineage:train:standalone:cultist:warcry_whirlwind:hp80",
+      "mode": "standalone",
+      "environment_seed": 5,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-cultist-warcry_whirlwind-hp80-v1",
+      "entry": {
+        "id": "entry-train-standalone-cultist-warcry_whirlwind-hp80-v1",
+        "encounter": "cultist",
+        "hp": 80,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "warcry",
+            "upgrades": 0
+          },
+          {
+            "card": "whirlwind",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-jaw_worm-starting-hp64-v1",
+      "lineage_id": "lineage:train:standalone:jaw_worm:starting:hp64",
+      "mode": "standalone",
+      "environment_seed": 6,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-jaw_worm-starting-hp64-v1",
+      "entry": {
+        "id": "entry-train-standalone-jaw_worm-starting-hp64-v1",
+        "encounter": "jaw_worm",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-jaw_worm-starting-hp80-v1",
+      "lineage_id": "lineage:train:standalone:jaw_worm:starting:hp80",
+      "mode": "standalone",
+      "environment_seed": 7,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-jaw_worm-starting-hp80-v1",
+      "entry": {
+        "id": "entry-train-standalone-jaw_worm-starting-hp80-v1",
+        "encounter": "jaw_worm",
+        "hp": 80,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-jaw_worm-immolate_armaments-hp64-v1",
+      "lineage_id": "lineage:train:standalone:jaw_worm:immolate_armaments:hp64",
+      "mode": "standalone",
+      "environment_seed": 8,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-jaw_worm-immolate_armaments-hp64-v1",
+      "entry": {
+        "id": "entry-train-standalone-jaw_worm-immolate_armaments-hp64-v1",
+        "encounter": "jaw_worm",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "immolate",
+            "upgrades": 1
+          },
+          {
+            "card": "armaments",
+            "upgrades": 1
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-jaw_worm-immolate_armaments-hp80-v1",
+      "lineage_id": "lineage:train:standalone:jaw_worm:immolate_armaments:hp80",
+      "mode": "standalone",
+      "environment_seed": 9,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-jaw_worm-immolate_armaments-hp80-v1",
+      "entry": {
+        "id": "entry-train-standalone-jaw_worm-immolate_armaments-hp80-v1",
+        "encounter": "jaw_worm",
+        "hp": 80,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "immolate",
+            "upgrades": 1
+          },
+          {
+            "card": "armaments",
+            "upgrades": 1
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-jaw_worm-warcry_whirlwind-hp64-v1",
+      "lineage_id": "lineage:train:standalone:jaw_worm:warcry_whirlwind:hp64",
+      "mode": "standalone",
+      "environment_seed": 10,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-jaw_worm-warcry_whirlwind-hp64-v1",
+      "entry": {
+        "id": "entry-train-standalone-jaw_worm-warcry_whirlwind-hp64-v1",
+        "encounter": "jaw_worm",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "warcry",
+            "upgrades": 0
+          },
+          {
+            "card": "whirlwind",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-jaw_worm-warcry_whirlwind-hp80-v1",
+      "lineage_id": "lineage:train:standalone:jaw_worm:warcry_whirlwind:hp80",
+      "mode": "standalone",
+      "environment_seed": 11,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-jaw_worm-warcry_whirlwind-hp80-v1",
+      "entry": {
+        "id": "entry-train-standalone-jaw_worm-warcry_whirlwind-hp80-v1",
+        "encounter": "jaw_worm",
+        "hp": 80,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "warcry",
+            "upgrades": 0
+          },
+          {
+            "card": "whirlwind",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-two_louse-starting-hp64-v1",
+      "lineage_id": "lineage:train:standalone:two_louse:starting:hp64",
+      "mode": "standalone",
+      "environment_seed": 12,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-two_louse-starting-hp64-v1",
+      "entry": {
+        "id": "entry-train-standalone-two_louse-starting-hp64-v1",
+        "encounter": "two_louse",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-two_louse-starting-hp80-v1",
+      "lineage_id": "lineage:train:standalone:two_louse:starting:hp80",
+      "mode": "standalone",
+      "environment_seed": 13,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-two_louse-starting-hp80-v1",
+      "entry": {
+        "id": "entry-train-standalone-two_louse-starting-hp80-v1",
+        "encounter": "two_louse",
+        "hp": 80,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-two_louse-immolate_armaments-hp64-v1",
+      "lineage_id": "lineage:train:standalone:two_louse:immolate_armaments:hp64",
+      "mode": "standalone",
+      "environment_seed": 14,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-two_louse-immolate_armaments-hp64-v1",
+      "entry": {
+        "id": "entry-train-standalone-two_louse-immolate_armaments-hp64-v1",
+        "encounter": "two_louse",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "immolate",
+            "upgrades": 1
+          },
+          {
+            "card": "armaments",
+            "upgrades": 1
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-two_louse-immolate_armaments-hp80-v1",
+      "lineage_id": "lineage:train:standalone:two_louse:immolate_armaments:hp80",
+      "mode": "standalone",
+      "environment_seed": 15,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-two_louse-immolate_armaments-hp80-v1",
+      "entry": {
+        "id": "entry-train-standalone-two_louse-immolate_armaments-hp80-v1",
+        "encounter": "two_louse",
+        "hp": 80,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "immolate",
+            "upgrades": 1
+          },
+          {
+            "card": "armaments",
+            "upgrades": 1
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-two_louse-warcry_whirlwind-hp64-v1",
+      "lineage_id": "lineage:train:standalone:two_louse:warcry_whirlwind:hp64",
+      "mode": "standalone",
+      "environment_seed": 16,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-two_louse-warcry_whirlwind-hp64-v1",
+      "entry": {
+        "id": "entry-train-standalone-two_louse-warcry_whirlwind-hp64-v1",
+        "encounter": "two_louse",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "warcry",
+            "upgrades": 0
+          },
+          {
+            "card": "whirlwind",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-two_louse-warcry_whirlwind-hp80-v1",
+      "lineage_id": "lineage:train:standalone:two_louse:warcry_whirlwind:hp80",
+      "mode": "standalone",
+      "environment_seed": 17,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-two_louse-warcry_whirlwind-hp80-v1",
+      "entry": {
+        "id": "entry-train-standalone-two_louse-warcry_whirlwind-hp80-v1",
+        "encounter": "two_louse",
+        "hp": 80,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "warcry",
+            "upgrades": 0
+          },
+          {
+            "card": "whirlwind",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-small_slimes-starting-hp64-v1",
+      "lineage_id": "lineage:train:standalone:small_slimes:starting:hp64",
+      "mode": "standalone",
+      "environment_seed": 18,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-small_slimes-starting-hp64-v1",
+      "entry": {
+        "id": "entry-train-standalone-small_slimes-starting-hp64-v1",
+        "encounter": "small_slimes",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-small_slimes-starting-hp80-v1",
+      "lineage_id": "lineage:train:standalone:small_slimes:starting:hp80",
+      "mode": "standalone",
+      "environment_seed": 19,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-small_slimes-starting-hp80-v1",
+      "entry": {
+        "id": "entry-train-standalone-small_slimes-starting-hp80-v1",
+        "encounter": "small_slimes",
+        "hp": 80,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-small_slimes-immolate_armaments-hp64-v1",
+      "lineage_id": "lineage:train:standalone:small_slimes:immolate_armaments:hp64",
+      "mode": "standalone",
+      "environment_seed": 20,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-small_slimes-immolate_armaments-hp64-v1",
+      "entry": {
+        "id": "entry-train-standalone-small_slimes-immolate_armaments-hp64-v1",
+        "encounter": "small_slimes",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "immolate",
+            "upgrades": 1
+          },
+          {
+            "card": "armaments",
+            "upgrades": 1
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-small_slimes-immolate_armaments-hp80-v1",
+      "lineage_id": "lineage:train:standalone:small_slimes:immolate_armaments:hp80",
+      "mode": "standalone",
+      "environment_seed": 21,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-small_slimes-immolate_armaments-hp80-v1",
+      "entry": {
+        "id": "entry-train-standalone-small_slimes-immolate_armaments-hp80-v1",
+        "encounter": "small_slimes",
+        "hp": 80,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "immolate",
+            "upgrades": 1
+          },
+          {
+            "card": "armaments",
+            "upgrades": 1
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-small_slimes-warcry_whirlwind-hp64-v1",
+      "lineage_id": "lineage:train:standalone:small_slimes:warcry_whirlwind:hp64",
+      "mode": "standalone",
+      "environment_seed": 22,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-small_slimes-warcry_whirlwind-hp64-v1",
+      "entry": {
+        "id": "entry-train-standalone-small_slimes-warcry_whirlwind-hp64-v1",
+        "encounter": "small_slimes",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "warcry",
+            "upgrades": 0
+          },
+          {
+            "card": "whirlwind",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-standalone-small_slimes-warcry_whirlwind-hp80-v1",
+      "lineage_id": "lineage:train:standalone:small_slimes:warcry_whirlwind:hp80",
+      "mode": "standalone",
+      "environment_seed": 23,
+      "cohort": "train_catalog",
+      "entry_id": "entry-train-standalone-small_slimes-warcry_whirlwind-hp80-v1",
+      "entry": {
+        "id": "entry-train-standalone-small_slimes-warcry_whirlwind-hp80-v1",
+        "encounter": "small_slimes",
+        "hp": 80,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          },
+          {
+            "card": "warcry",
+            "upgrades": 0
+          },
+          {
+            "card": "whirlwind",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "train-run-normal-ironclad-a0-v1",
+      "lineage_id": "lineage:train:run:normal-ironclad-a0",
+      "mode": "run",
+      "environment_seed": 24,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    }
+  ]
+}

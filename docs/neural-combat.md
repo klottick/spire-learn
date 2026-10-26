@@ -10,9 +10,9 @@ evaluation, and two stateless public-action references. The implementation has
 pure fake-driven coverage. The single approved native CPU training smoke ran
 once: both mode tests passed with zero skips, within the declared decision,
 environment, update, and time ceilings. It demonstrates bounded training and
-checkpoint plumbing only. Task 7 acceptance and final combined review remain
-pending with the parent. No playing-strength, frozen-policy evaluation, or GPU
-result is claimed. See the [retained runtime report](../artifacts/development/neural-combat/task-7/task-7-training-smoke-runtime-report.md).
+checkpoint plumbing only. Approved Tasks 1–7 are accepted after parent and
+independent review, with the documented minor qualifications retained. No
+playing-strength, frozen-policy evaluation, or GPU result is claimed. See the [retained runtime report](../artifacts/development/neural-combat/task-7/task-7-training-smoke-runtime-report.md).
 
 ## Commands
 
@@ -136,3 +136,7 @@ parity, or original-runtime transfer. RNG-001 qualifies project-owned
 reproducibility. TIME-001 qualifies the unvalidated full-Run Secret Portal
 elapsed-time assumption. Final evaluation is reserved for a separately reviewed
 experiment; it must not be used for model or hyperparameter selection.
+
+The [combined review](../artifacts/development/neural-combat/final-combined-review.md)
+records the remaining minor qualifications. CUDA RNG initialization must be
+corrected and checked before GPU calibration.

@@ -7,7 +7,7 @@ evaluation runner are authored. The single approved Task 7 CPU smoke completed
 once with both mode tests passing and zero skips; it recorded 396 learned
 decisions, 444 environment slots, 28 accepted optimizer steps, and two updates
 per mode. This is bounded plumbing evidence, not a playing-strength result.
-Task 7 acceptance and final combined review remain pending with the parent; no
+Approved Tasks 1–7 are accepted after parent and independent review; no
 frozen-policy evaluation or GPU run is evidenced. The configs below are
 examples with resource ceilings; they are not permission to construct
 environments, evaluate, or run probes.
@@ -101,9 +101,9 @@ release gate. It passed exactly two tests with zero skips, within the shared
 environment slots, 28 accepted optimizer steps, two updates per mode, and no
 faults, uncertain effects, or wall-budget overshoot. Parent verification also
 matched 105 inventory entries, 127 mounted input files, and all 20 reviewed
-source files. Task 7 acceptance and final combined review remain pending with
-the parent and same independent reviewer. This smoke is separate from M1
-evaluation and probe evidence. See the [Task 7 implementation
+source files. Parent and independent review accepted the approved Tasks 1–7
+scope, with the documented minor qualifications retained. This smoke is separate
+from M1 evaluation and probe evidence. See the [Task 7 implementation
 report](../artifacts/development/neural-combat/task-7/task-7-report.md),
 [retained runtime report](../artifacts/development/neural-combat/task-7/task-7-training-smoke-runtime-report.md),
 and [historical smoke runbook](../scripts/neural/task7-training-smoke-runbook.md).

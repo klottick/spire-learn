@@ -7,8 +7,9 @@ environment slots, 28 accepted optimizer steps, and two updates per mode, with
 no faults, uncertain effects, or wall-budget overshoot. This is plumbing evidence
 only; it is not a playing-strength result, and no frozen-policy evaluation or
 GPU run is claimed. Parent verification matched 105 inventory entries, 127
-mounted input files, and all 20 reviewed source files. Task 7 acceptance and
-final combined review remain pending with the parent. See the [retained runtime
+mounted input files, and all 20 reviewed source files. Approved Tasks 1–7 are
+accepted after parent and independent review, with the documented minor
+qualifications retained. See the [retained runtime
 report](../../artifacts/development/neural-combat/task-7/task-7-training-smoke-runtime-report.md).
 
 At the pre-release fix-round source freeze on 2026-10-26, the retained CPU setup

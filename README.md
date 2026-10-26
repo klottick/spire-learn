@@ -26,8 +26,8 @@ public combat model, PPO update path, collection, checkpoint and Task 7 training
 and evaluation runner are authored. The single approved Task 7 CPU smoke ran
 once: both mode tests passed with zero skips, recording 396 learned decisions,
 444 environment slots, 28 accepted optimizer steps, and two updates per mode.
-This is bounded training-plumbing evidence. Task 7 acceptance and final combined
-review remain pending with the parent. It is not a playing-strength result;
+This is bounded training-plumbing evidence. Approved Tasks 1–7 are accepted
+after parent and independent review. It is not a playing-strength result;
 there has been no frozen-policy evaluation or GPU run. See the [retained runtime
 report](artifacts/development/neural-combat/task-7/task-7-training-smoke-runtime-report.md),
 [development and evaluation checks](docs/development.md), and [neural combat

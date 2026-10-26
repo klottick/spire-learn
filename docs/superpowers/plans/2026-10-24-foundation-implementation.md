@@ -10,7 +10,14 @@
 
 **Spec:** [M1 foundation design](../specs/2026-10-24-foundation-design.md); [approved master architecture](../specs/2026-10-24-spire-learn-architecture-design.md).
 
-**Status:** User-approved plan; implementation in the main session is authorized. Native integration/setup remains separately gated as described below.
+**Status:** M1 complete for the approved scope, accepted 2026-10-26. Implementation
+source `732b714`. Core verification ran 276 tests: 267 passed, 9 gated skips.
+The actual evaluator executed 1 test with 0 skips: two selection cases and
+28 actions with reconciled artifacts. Parent and independent
+code/runtime reviews passed with documented qualifications. Completion does not
+authorize another run, setup change or next milestone. Per-step checkboxes below
+are reconciled from accepted task reports; earlier commands were not rerun for
+this documentation closeout. Canonical acceptance: `artifacts/development/foundation/m1-acceptance-report.md`.
 
 ## Global Constraints
 
@@ -151,7 +158,7 @@ Use these names/signatures across tasks. Do not invent helpers in later tasks. C
 
 **Interfaces:** Records/schema/test-support from ledger. Parser must represent native 3 action-kind labels independently of candidate count.
 
-- [ ] **Step 1 — Red:** add tests including this exact distinction, malformed schema and immutable records:
+- [x] **Step 1 — Red:** add tests including this exact distinction, malformed schema and immutable records:
 
 ```python
 def test_action_kind_vocabulary_is_not_candidate_count(self):
@@ -163,9 +170,9 @@ def test_action_kind_vocabulary_is_not_candidate_count(self):
     self.assertEqual(next(t for t in schema.tensors if t.key == "action_kind").mask, "action_mask")
 ```
 
-- [ ] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_contracts tests.unit.test_schema -v`; expected missing symbols/failing assertions.
-- [ ] **Step 3 — Implement:** frozen owned numeric records, string mask reference and axes-aware schema parser/candidate extraction. Validate category codes using vocabulary, mask width independently against action count, and named field-axis counts only where declared. Never infer vocab/action-space equality.
-- [ ] **Step 4 — Green:** repeat exact command; expected all Task 1 tests pass without optional imports. `test_fixture_contract_is_explicitly_scoped` asserts fixture schema/content allowed and native schema not allowed. Candidate category codes are validated against vocabularies when observations are parsed, not when descriptor metadata is parsed.
+- [x] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_contracts tests.unit.test_schema -v`; expected missing symbols/failing assertions.
+- [x] **Step 3 — Implement:** frozen owned numeric records, string mask reference and axes-aware schema parser/candidate extraction. Validate category codes using vocabulary, mask width independently against action count, and named field-axis counts only where declared. Never infer vocab/action-space equality.
+- [x] **Step 4 — Green:** repeat exact command; expected all Task 1 tests pass without optional imports. `test_fixture_contract_is_explicitly_scoped` asserts fixture schema/content allowed and native schema not allowed. Candidate category codes are validated against vocabularies when observations are parsed, not when descriptor metadata is parsed.
 
 ## Task 2: Policy Protocol and Baselines
 
@@ -173,8 +180,8 @@ def test_action_kind_vocabulary_is_not_candidate_count(self):
 
 **Interfaces:** `Policy.init_state`, `Policy.act`, `resolve_decision`, `validate_result` are in `agents/base.py`; baselines in `agents/baselines.py`.
 
-- [ ] **Step 1 — Red:** create named tests `test_random_policy_matches_independent_seeded_legal_sequence`, `test_play_first_uses_lowest_legal_kind`, `test_empty_nonterminal_mask_errors`, `test_result_rejects_bool_illegal_padding_and_stale_id`, `test_policy_receives_no_route_or_seed`.
-- [ ] **Step 1a — Test assertion:**
+- [x] **Step 1 — Red:** create named tests `test_random_policy_matches_independent_seeded_legal_sequence`, `test_play_first_uses_lowest_legal_kind`, `test_empty_nonterminal_mask_errors`, `test_result_rejects_bool_illegal_padding_and_stale_id`, `test_policy_receives_no_route_or_seed`.
+- [x] **Step 1a — Test assertion:**
 
 ```python
 public = public_decision(mask=(1, 0, 1), kinds=(1, 0, 2))
@@ -183,10 +190,10 @@ self.assertEqual([policy.act(public, None).action for _ in range(8)],
                  [expected.choice((0, 2)) for _ in range(8)])
 ```
 
-- [ ] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_baselines -v`; expected failure.
-- [ ] **Step 3 — Implement** the exact protocol and baseline signatures in ledger; random sequence uses its own `random.Random(seed)`, play-first resolves descriptor kind only. No fallback or action-effect rules.
-- [ ] **Step 4 — Green:** same command; assert expected choices against independent `random.Random(seed).choice(legal)` and captured policy arguments contain `PublicDecision`/state but no route or seeds.
-- [ ] **Step 5 — Import check:** `PYTHONPATH=src python3.12 -B -c 'import sys; import spire_learn.agents.baselines; assert not any(n in sys.modules for n in ("numpy", "torch", "torchrl", "gymnasium", "spire_lab"))'`; expected exit 0.
+- [x] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_baselines -v`; expected failure.
+- [x] **Step 3 — Implement** the exact protocol and baseline signatures in ledger; random sequence uses its own `random.Random(seed)`, play-first resolves descriptor kind only. No fallback or action-effect rules.
+- [x] **Step 4 — Green:** same command; assert expected choices against independent `random.Random(seed).choice(legal)` and captured policy arguments contain `PublicDecision`/state but no route or seeds.
+- [x] **Step 5 — Import check:** `PYTHONPATH=src python3.12 -B -c 'import sys; import spire_learn.agents.baselines; assert not any(n in sys.modules for n in ("numpy", "torch", "torchrl", "gymnasium", "spire_lab"))'`; expected exit 0.
 
 ## Task 3: Boundary Routing
 
@@ -194,9 +201,9 @@ self.assertEqual([policy.act(public, None).action for _ in range(8)],
 
 **Interfaces:** `BoundaryResult`, `route_single_step`, `route_vector_step` from ledger.
 
-- [ ] **Step 1 — Red:** create `test_single_step_preserves_flags`, `test_vector_routes_final_and_replacement_with_old_state`, `test_vector_live_row_preserves_state`, `test_missing_final_keys_allowed_when_no_row_ends`, `test_presence_masks_must_match`, `test_terminal_empty_mask_is_not_acted_on`, `test_cut_does_not_reset_memory`. Assert a single ended row has `episode_started=False`, `active_state=None`, and terminal `active_observation` is not acted on; a vector ended row retains old final/context in `transition` while its active replacement has `episode_started=True` and reset `active_state`; an ongoing vector row has `episode_started=False` and unchanged state. No new field or live flag.
-- [ ] **Step 1a — Fixture interface:** add `vector_step_fixture() -> dict[str, object]` to `tests/support.py`. It returns exactly the keyword arguments accepted by `route_vector_step`: two routes/sources/actions/rewards/flag rows/main observations/final observations/presence masks/states and reset callback. Row 0 terminates with final HP 10 and old state 7; row 1 continues with state 9; reset callback returns 0 only for row 0. This contains protocol records only.
-- [ ] **Step 1b — Test assertion:**
+- [x] **Step 1 — Red:** create `test_single_step_preserves_flags`, `test_vector_routes_final_and_replacement_with_old_state`, `test_vector_live_row_preserves_state`, `test_missing_final_keys_allowed_when_no_row_ends`, `test_presence_masks_must_match`, `test_terminal_empty_mask_is_not_acted_on`, `test_cut_does_not_reset_memory`. Assert a single ended row has `episode_started=False`, `active_state=None`, and terminal `active_observation` is not acted on; a vector ended row retains old final/context in `transition` while its active replacement has `episode_started=True` and reset `active_state`; an ongoing vector row has `episode_started=False` and unchanged state. No new field or live flag.
+- [x] **Step 1a — Fixture interface:** add `vector_step_fixture() -> dict[str, object]` to `tests/support.py`. It returns exactly the keyword arguments accepted by `route_vector_step`: two routes/sources/actions/rewards/flag rows/main observations/final observations/presence masks/states and reset callback. Row 0 terminates with final HP 10 and old state 7; row 1 continues with state 9; reset callback returns 0 only for row 0. This contains protocol records only.
+- [x] **Step 1b — Test assertion:**
 
 ```python
 rows = route_vector_step(**vector_step_fixture())
@@ -206,9 +213,9 @@ self.assertIsNot(rows[0].transition.successor, rows[0].transition.replacement)
 self.assertEqual((10 + rows[0].transition.state_after_source, 10 + rows[0].active_state), (17, 10))
 ```
 
-- [ ] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_boundaries -v`; expected failure.
-- [ ] **Step 3 — Implement** pure routing with row-width checks. Ended transition retains old final and old state; main is replacement and reset callback applies before its decision. Live rows retain main successor and state.
-- [ ] **Step 4 — Green:** same command. In `test_vector_routes_final_and_replacement_with_old_state`, assert old final HP 10 + old state 7 = 17 while replacement HP 10 + reset state 0 = 10; assert reset callback is called only for ended row. No trainer/value-target helper is introduced.
+- [x] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_boundaries -v`; expected failure.
+- [x] **Step 3 — Implement** pure routing with row-width checks. Ended transition retains old final and old state; main is replacement and reset callback applies before its decision. Live rows retain main successor and state.
+- [x] **Step 4 — Green:** same command. In `test_vector_routes_final_and_replacement_with_old_state`, assert old final HP 10 + old state 7 = 17 while replacement HP 10 + reset state 0 = 10; assert reset callback is called only for ended row. No trainer/value-target helper is introduced.
 
 ## Task 4: Manifests, Config and Budget
 
@@ -216,12 +223,12 @@ self.assertEqual((10 + rows[0].transition.state_after_source, 10 + rows[0].activ
 
 **Interfaces:** `CaseManifest`, manifest functions, `ProbeSettings`, `ProbeConfig`, `RunConfig`, `load_config`, `validate_expectations`, `to_probe_config`, `Budget` from ledger. Both probe dataclasses are defined in `experiments/config.py`; `to_probe_config` constructs `ProbeConfig` directly, and Task 7 imports it from this module.
 
-- [ ] **Step 1 — Red cases:** create `test_manifest_preserves_explicit_seeds`, `test_bool_and_negative_seeds_rejected`, `test_duplicate_case_and_execution_ids_rejected`, `test_cross_split_case_id_rejected`, `test_split_overlap_ignores_partition_and_policy_seed`, and `test_same_scenario_different_environment_seed_is_allowed`.
-- [ ] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_cases -v`; expected failure.
-- [ ] **Step 3 — Implement** declared JSON schema and conservative `(scenario_id, environment_seed)` cross-split collision. No content field on `CaseExecution`; content/profile is provenance only. Repeated explicit executions in one case/split remain allowed.
-- [ ] **Step 4 — Green cases:** repeat command; assert duplicate case IDs reject while distinct execution IDs under one repeated case preserve each policy seed independently.
-- [ ] **Step 5 — Red config:** tests cover strict unknown/bool numeric rejection, relative paths, mode mismatch, assertion-only partition/schema conflicts, probe-table mode rules, seed non-overrides, positive finite caps, exact B manifest execution count and one partition.
-- [ ] **Step 5a — Test assertion:**
+- [x] **Step 1 — Red cases:** create `test_manifest_preserves_explicit_seeds`, `test_bool_and_negative_seeds_rejected`, `test_duplicate_case_and_execution_ids_rejected`, `test_cross_split_case_id_rejected`, `test_split_overlap_ignores_partition_and_policy_seed`, and `test_same_scenario_different_environment_seed_is_allowed`.
+- [x] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_cases -v`; expected failure.
+- [x] **Step 3 — Implement** declared JSON schema and conservative `(scenario_id, environment_seed)` cross-split collision. No content field on `CaseExecution`; content/profile is provenance only. Repeated explicit executions in one case/split remain allowed.
+- [x] **Step 4 — Green cases:** repeat command; assert duplicate case IDs reject while distinct execution IDs under one repeated case preserve each policy seed independently.
+- [x] **Step 5 — Red config:** tests cover strict unknown/bool numeric rejection, relative paths, mode mismatch, assertion-only partition/schema conflicts, probe-table mode rules, seed non-overrides, positive finite caps, exact B manifest execution count and one partition.
+- [x] **Step 5a — Test assertion:**
 
 ```python
 with tempfile.TemporaryDirectory() as directory:
@@ -233,12 +240,12 @@ with tempfile.TemporaryDirectory() as directory:
         load_config(path, expected_mode="evaluate")
 ```
 
-- [ ] **Step 6 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_config -v`; expected failure.
-- [ ] **Step 7 — Implement** TOML root fields, `ProbeSettings` and `ProbeConfig` stdlib dataclasses in `experiments/config.py`, and `[probe] num_envs, workers`; probe modes require that table and `num_envs>=2`; evaluate rejects it. `to_probe_config` takes exactly B explicit manifest executions and constructs `ProbeConfig`; no seed/partition fields in probe TOML. Config expected values are static assertions only. Task 7 imports `ProbeConfig` from this module.
+- [x] **Step 6 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_config -v`; expected failure.
+- [x] **Step 7 — Implement** TOML root fields, `ProbeSettings` and `ProbeConfig` stdlib dataclasses in `experiments/config.py`, and `[probe] num_envs, workers`; probe modes require that table and `num_envs>=2`; evaluate rejects it. `to_probe_config` takes exactly B explicit manifest executions and constructs `ProbeConfig`; no seed/partition fields in probe TOML. Config expected values are static assertions only. Task 7 imports `ProbeConfig` from this module.
 - Task 4b Task 9 consumer pointer: scheduler must pass `bind_case_expectations` results to `run_case`, not only validate the original manifest.
-- [ ] **Step 8 — Green config:** repeat command; static mismatch errors occur before env factory (tested in Task 9); runtime descriptor mismatch is a separate post-construction check.
-- [ ] **Step 9 — Red budget:** `test_budget_remaining_and_expiry` uses FakeClock to assert remaining at start/cap, exhaustion and zero-clamped remaining after expiry; no batch/slot counters are assigned to Budget.
-- [ ] **Step 9a — Test assertion:**
+- [x] **Step 8 — Green config:** repeat command; static mismatch errors occur before env factory (tested in Task 9); runtime descriptor mismatch is a separate post-construction check.
+- [x] **Step 9 — Red budget:** `test_budget_remaining_and_expiry` uses FakeClock to assert remaining at start/cap, exhaustion and zero-clamped remaining after expiry; no batch/slot counters are assigned to Budget.
+- [x] **Step 9a — Test assertion:**
 
 ```python
 clock = FakeClock()
@@ -248,9 +255,9 @@ self.assertTrue(budget.exhausted())
 self.assertEqual(budget.remaining(), 0.0)
 ```
 
-- [ ] **Step 10 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_budget -v`; expected failure.
-- [ ] **Step 11 — Implement:** implement `Budget` only; probe batch/slot counters belong to Task 7 report; accepted step count belongs to Task 8 result.
-- [ ] **Step 12 — Green:** repeat `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_budget -v`; expected pass.
+- [x] **Step 10 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_budget -v`; expected failure.
+- [x] **Step 11 — Implement:** implement `Budget` only; probe batch/slot counters belong to Task 7 report; accepted step count belongs to Task 8 result.
+- [x] **Step 12 — Green:** repeat `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_budget -v`; expected pass.
 
 ## Task 5: Artifacts and Provenance
 
@@ -258,8 +265,8 @@ self.assertEqual(budget.remaining(), 0.0)
 
 **Interfaces:** Ledger codec, RunWriter (including append-only `update_manifest`) and `collect_provenance`.
 
-- [ ] **Step 1 — Red codec:** create `test_array_json_preserves_dtype_shape_values`, `test_codec_rejects_opaque_nonfinite_and_arbitrary_values`, and `test_canonical_fingerprint_ignores_mapping_order`; assertions below pin order and unsupported-object behavior.
-- [ ] **Step 1a — Test assertion:**
+- [x] **Step 1 — Red codec:** create `test_array_json_preserves_dtype_shape_values`, `test_codec_rejects_opaque_nonfinite_and_arbitrary_values`, and `test_canonical_fingerprint_ignores_mapping_order`; assertions below pin order and unsupported-object behavior.
+- [x] **Step 1a — Test assertion:**
 
 ```python
 self.assertEqual(canonical_fingerprint({"a": 1, "b": 2}),
@@ -268,17 +275,17 @@ with self.assertRaises(TypeError):
     to_json_value(object())
 ```
 
-- [ ] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_artifacts -v`; expected missing symbols.
-- [ ] **Step 3 — Implement codec:** explicit JSON conversion only, with record whitelist and `transition_to_json` excluding opaque context.
-- [ ] **Step 4 — Green codec:** repeat `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_artifacts -v`; expected pass.
-- [ ] **Step 5 — Red writer:** create `test_writer_flushes_jsonl`, `test_writer_refuses_existing_run`, `test_writer_rejects_unsafe_id`, `test_summary_replace_is_atomic`, `test_manifest_discovery_is_append_only`, and `test_writer_error_does_not_retry_action`. Use `tempfile.TemporaryDirectory()` and `pathlib.Path` from stdlib. Assert second create raises `FileExistsError` and original `config.json` bytes are unchanged.
-- [ ] **Step 6 — Run red writer:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_artifacts -v`; expected writer tests fail.
-- [ ] **Step 7 — Implement writer:** exclusive run directory, flushed output, stable schema envelopes, safe IDs, atomic summary; errors never retry environment actions.
-- [ ] **Step 8 — Green writer:** repeat exact command; expected pass.
-- [ ] **Step 9 — Red provenance:** tests cover unborn/dirty unavailable state, metadata lookup without optional imports, separate checkout/build identities and exact result keys from ledger.
-- [ ] **Step 10 — Run red provenance:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_provenance -v`; expected failure.
-- [ ] **Step 11 — Implement provenance:** read-only Git subprocess and `importlib.metadata`; unavailable values explicit.
-- [ ] **Step 12 — Green provenance:** repeat exact command; expected pass without optional imports.
+- [x] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_artifacts -v`; expected missing symbols.
+- [x] **Step 3 — Implement codec:** explicit JSON conversion only, with record whitelist and `transition_to_json` excluding opaque context.
+- [x] **Step 4 — Green codec:** repeat `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_artifacts -v`; expected pass.
+- [x] **Step 5 — Red writer:** create `test_writer_flushes_jsonl`, `test_writer_refuses_existing_run`, `test_writer_rejects_unsafe_id`, `test_summary_replace_is_atomic`, `test_manifest_discovery_is_append_only`, and `test_writer_error_does_not_retry_action`. Use `tempfile.TemporaryDirectory()` and `pathlib.Path` from stdlib. Assert second create raises `FileExistsError` and original `config.json` bytes are unchanged.
+- [x] **Step 6 — Run red writer:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_artifacts -v`; expected writer tests fail.
+- [x] **Step 7 — Implement writer:** exclusive run directory, flushed output, stable schema envelopes, safe IDs, atomic summary; errors never retry environment actions.
+- [x] **Step 8 — Green writer:** repeat exact command; expected pass.
+- [x] **Step 9 — Red provenance:** tests cover unborn/dirty unavailable state, metadata lookup without optional imports, separate checkout/build identities and exact result keys from ledger.
+- [x] **Step 10 — Run red provenance:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_provenance -v`; expected failure.
+- [x] **Step 11 — Implement provenance:** read-only Git subprocess and `importlib.metadata`; unavailable values explicit.
+- [x] **Step 12 — Green provenance:** repeat exact command; expected pass without optional imports.
 
 ## Task 6: Lazy Public Native Adapter and Gated Integration
 
@@ -286,8 +293,8 @@ with self.assertRaises(TypeError):
 
 **Interfaces:** Native adapter signatures and `NativeErrorTypes` in ledger. Core uses FakeArray/public immutable observations and injected exact error classes; no optional imports.
 
-- [ ] **Step 1 — Red core tests:** create `test_import_is_lazy`, `test_snapshot_copies_public_numeric_array`, `test_snapshot_rejects_object_shape_and_endian_mismatch`, `test_validate_actions_rejects_bool_float_and_negative`, `test_native_failure_uses_injected_types_only`, `test_info_allowlist_and_fixture_outcome_decode`, `test_unsupported_schema_is_setup_error`.
-- [ ] **Step 1a — Test assertion:**
+- [x] **Step 1 — Red core tests:** create `test_import_is_lazy`, `test_snapshot_copies_public_numeric_array`, `test_snapshot_rejects_object_shape_and_endian_mismatch`, `test_validate_actions_rejects_bool_float_and_negative`, `test_native_failure_uses_injected_types_only`, `test_info_allowlist_and_fixture_outcome_decode`, `test_unsupported_schema_is_setup_error`.
+- [x] **Step 1a — Test assertion:**
 
 ```python
 self.assertRaises(ContractError, validate_actions, [0, True])
@@ -301,12 +308,12 @@ self.assertEqual(native_failure(FakeNativeErrors.FaultError(), error_types=error
 self.assertIsNone(native_failure(RuntimeError("not a typed simulator fault"), error_types=errors))
 ```
 
-- [ ] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_native_contract -v`; expected failure.
-- [ ] **Step 3 — Implement** pure stdlib `validate_actions`, snapshot support for numeric public array-like protocol, `native_failure(..., error_types=...)`; actual exception types loaded only with authorized binding. Construct `NativeErrorTypes` explicitly in this task, not in Task 1. `pack_actions` imports NumPy lazily. No fake NumPy helper.
-- [ ] **Step 4 — Green core tests:** repeat command; expected pass with no NumPy/Gym/native imports. Actual NumPy ndarray dtype=`int64`/shape assertions are not core tests.
-- [ ] **Step 5 — Authority gate:** if missing authority or dependencies, stop; do not install/borrow env/edit metadata. Record blocked, not integration pass. Source Gymnasium 1.4.0 tested subset is not a learner pin; source NumPy/Torch versions are not automatic dependencies.
-- [ ] **Step 6 — Only with authority, add opt-in tests** for supported public descriptor/profile, both documented starter scenarios, reset/close, masks/action dtype and delivered public outcome/reward-profile evidence. Bound integration case to 128 steps. Fixture info uses integer outcome 1 decoded through fixture vocabulary to `victory`; native integration uses actual descriptor vocabulary. Use `catalog=None`, replay off; no private fault hooks or catalog enumeration.
-- [ ] **Step 7 — Run authorized integration only:** `SPIRE_LEARN_RUN_NATIVE_INTEGRATION=1 PYTHONPATH=src "$PYTHON312" -B -m unittest tests.integration.test_native_envs -v`. `$PYTHON312` must be explicitly set to the authorized interpreter path; otherwise stop. If flag is absent, tests report blocked/not-run; zero discovered tests is not pass.
+- [x] **Step 2 — Run red:** `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_native_contract -v`; expected failure.
+- [x] **Step 3 — Implement** pure stdlib `validate_actions`, snapshot support for numeric public array-like protocol, `native_failure(..., error_types=...)`; actual exception types loaded only with authorized binding. Construct `NativeErrorTypes` explicitly in this task, not in Task 1. `pack_actions` imports NumPy lazily. No fake NumPy helper.
+- [x] **Step 4 — Green core tests:** repeat command; expected pass with no NumPy/Gym/native imports. Actual NumPy ndarray dtype=`int64`/shape assertions are not core tests.
+- [x] **Step 5 — Authority gate:** if missing authority or dependencies, stop; do not install/borrow env/edit metadata. Record blocked, not integration pass. Source Gymnasium 1.4.0 tested subset is not a learner pin; source NumPy/Torch versions are not automatic dependencies.
+- [x] **Step 6 — Only with authority, add opt-in tests** for supported public descriptor/profile, both documented starter scenarios, reset/close, masks/action dtype and delivered public outcome/reward-profile evidence. Bound integration case to 128 steps. Fixture info uses integer outcome 1 decoded through fixture vocabulary to `victory`; native integration uses actual descriptor vocabulary. Use `catalog=None`, replay off; no private fault hooks or catalog enumeration.
+- [x] **Step 7 — Run authorized integration only:** `SPIRE_LEARN_RUN_NATIVE_INTEGRATION=1 PYTHONPATH=src "$PYTHON312" -B -m unittest tests.integration.test_native_envs -v`. `$PYTHON312` must be explicitly set to the authorized interpreter path; otherwise stop. If flag is absent, tests report blocked/not-run; zero discovered tests is not pass.
 
 ## Task 7: Native Vector and TorchRL Probes; Contract Gate
 
@@ -400,10 +407,10 @@ self.assertEqual(summary["terminal_completion_coverage"], 0.5)
 - [x] **Step 10a — Verify CLI:** run `PYTHONPATH=src python3.12 -B -m unittest tests.unit.test_cli -v`; then run full core suite `PYTHONPATH=src python3.12 -B -m unittest discover -s tests/unit -v`; expected all unit tests pass without optional packages.
 Core accepted in `b6fa739` after parent and independent spec/quality review.
 Retained default evidence:262 total253passed9 gated skips; focused3/19/11.
-Native evaluation below is separately unrun/unapproved, so Task9 acceptance
-remains pending that gate.
+Native evaluation accepted 2026-10-26 at source `732b714`: 1 executed, 0 skips,
+2 cases, 28 actions. Artifacts reconcile; runtime review PASS with qualifications.
 
-- [ ] **Step 11 — Integration only after authority:** run `SPIRE_LEARN_RUN_NATIVE_INTEGRATION=1 PYTHONPATH=src "$PYTHON312" -B -m unittest tests.integration.test_evaluation -v`; smoke cases cap at 128 decisions. Verify tests were discovered/executed, artifacts reconcile, no final split and no exact wall-time claim. Missing flag/setup is blocked, not green.
+- [x] **Step 11 — Integration only after authority:** run `SPIRE_LEARN_RUN_NATIVE_INTEGRATION=1 PYTHONPATH=src "$PYTHON312" -B -m unittest tests.integration.test_evaluation -v`; smoke cases cap at 128 decisions. Verify tests were discovered/executed, artifacts reconcile, no final split and no exact wall-time claim. Missing flag/setup is blocked, not green.
 
 ## Task 10: Authored Configs and Documentation
 
@@ -427,10 +434,11 @@ self.assertEqual((config.profile, config.per_case_decisions, config.max_wall_sec
 Core configs/docs accepted after parent source/evidence review and independent
 Task10 specification/quality PASS.265 total256passed9 gated skips;29 focused;
 five CLI validation checks and27-module optional-import isolation passed.
-Final acceptance below still requires the unrun native evaluation and broad review.
+Final acceptance on 2026-10-26 includes the broad code review, scoped combined
+fix, and independently reviewed native evaluator evidence. No training or strength claim.
 
-- [ ] **Step 9 — Acceptance review:** require core suite, actual single and vector evidence, reconciled artifacts, and TorchRL compatible/adaptable evidence or separately approved, tested PyTorch fallback. Blocked integration is not acceptance. Inspect changed/untracked paths.
-- [ ] **Step 10 — Final execution report:** record actual acceptance evidence and remaining blockers for M1; no automatic next milestone or implementation authorization.
+- [x] **Step 9 — Acceptance review:** require core suite, actual single and vector evidence, reconciled artifacts, and TorchRL compatible/adaptable evidence or separately approved, tested PyTorch fallback. Blocked integration is not acceptance. Inspect changed/untracked paths.
+- [x] **Step 10 — Final execution report:** record actual acceptance evidence and remaining blockers for M1; no automatic next milestone or implementation authorization.
 
 ## Coverage and Stop Conditions
 

@@ -114,21 +114,37 @@ architecture decision; no GPU/CUDA or training run is evidenced here.
   remains recorded as blocked/qualified; later successful probe checks do not
   erase or retroactively cure that deviation. The later cohort's 22 draws were
   accounted under its separate 256-row probe cap.
-- **Evaluation integration:** Task 9's core runner/CLI was accepted and committed
-  at `b6fa739`, but its gated native evaluation smoke has not been run. M1 remains
-  incomplete pending that actual evaluation evidence and final acceptance. Do not
-  infer a pass from the authored integration test, config validation, or probe
-  evidence. The parent-owned evaluation runbook has static readiness PASS; this
-  is not execution approval, and the native evaluation remains unrun/unapproved.
+- **Evaluation integration:** accepted at source `732b714`. The single bounded
+  native test executed once with 0 skips and completed the two selection cases:
+  Cultist in 18 actions and Jaw Worm in 10, both public terminal victories. The
+  28 total actions, case identities, artifact counts, and summary reconcile;
+  no faults, secondary failures, or budget overshoot occurred. Parent and fresh
+  independent review accepted the evidence. M1 foundation is complete for this
+  scoped profile; these diagnostic outcomes are not a strength result.
+- **Checkout/build separation:** the installed native build remains revision
+  `4874fb398128c142bd56f10a12e6fca939a88f93`. The unmounted Gym checkout was
+  independently observed clean at `36fbdc6310945caa194f2aa806c37769275228c3`
+  and unchanged across execution. The first wrapper stopped before any container
+  or test because it assumed the earlier checkout revision; that failed preflight
+  and its incomplete cleanup records remain preserved. The revised wrapper
+  recorded the source observation separately and ran the test once.
+
+All learner-owned setup and evidence are inside this repository under
+`artifacts/development/foundation/runtime/`. Container isolation does not create a
+separate project or workspace. The evaluator reused the existing qualified venv;
+no host dependency setup or additional install was needed.
 
 The corresponding local evidence and raw command/output records are retained in
 `artifacts/development/foundation/`, including the [native integration report](../artifacts/development/foundation/native-integration-report-2026-10-25.md),
 [vector runtime report](../artifacts/development/foundation/task-7-vector-runtime-report.md),
 [Dict-final runtime report](../artifacts/development/foundation/task-7-dict-final-runtime-report.md),
 [contract-gate record](../artifacts/development/foundation/task-7-contract-freeze.md),
-and [Task 9 report](../artifacts/development/foundation/task-9-report.md). The
-parent-owned [evaluation smoke runbook](../artifacts/development/foundation/evaluation-smoke-runbook.sh)
-is separate from this guide. These local development artifacts are ignored by
+[Task 9 report](../artifacts/development/foundation/task-9-report.md),
+[evaluator runtime report](../artifacts/development/foundation/evaluation-native-smoke-v2-runtime-report.md),
+[independent runtime review](../artifacts/development/foundation/evaluation-native-smoke-v2-runtime-review.md),
+and [M1 acceptance report](../artifacts/development/foundation/m1-acceptance-report.md).
+The parent-owned [revised evaluation runbook](../artifacts/development/foundation/evaluation-smoke-runbook-v2.sh)
+records the exact accepted invocation. These local development artifacts are ignored by
 Git and are not packaged with this documentation.
 
 ## Opt-in integration commands
@@ -139,7 +155,8 @@ command forms below are **gates, not authorization**; do not run them unless a
 separate approval identifies the exact attempt. Do not install or repair
 dependencies as part of a gate.
 
-The native evaluator test is the remaining Task 9 runtime gate:
+The native evaluator test satisfied the Task 9 runtime gate; the command is
+recorded here for reference, and any future invocation requires its own authority:
 
 ```sh
 SPIRE_LEARN_RUN_NATIVE_INTEGRATION=1 PYTHONPATH=src "$PYTHON312" -B -m unittest tests.integration.test_evaluation -v

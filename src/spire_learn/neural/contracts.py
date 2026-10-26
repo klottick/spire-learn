@@ -422,6 +422,209 @@ RolloutCounters = CumulativeCounters
 
 
 @dataclass(frozen=True)
+class SeedAllocation:
+    """One reset's authored case identity and actual environment seed."""
+
+    stream_id: str
+    slot: int
+    case_id: str
+    entry_id: str | None
+    authored_reference_seed: int
+    actual_seed: int
+    ordinal: int
+    allocation_policy_id: str
+    delivery: str = "delivered"
+
+    def __post_init__(self) -> None:
+        _identifier(self.stream_id, "SeedAllocation stream_id")
+        _identifier(self.case_id, "SeedAllocation case_id")
+        _identifier(self.allocation_policy_id, "SeedAllocation allocation_policy_id")
+        if self.entry_id is not None:
+            _identifier(self.entry_id, "SeedAllocation entry_id")
+        if type(self.slot) is not int or self.slot < 0:
+            raise ContractError("SeedAllocation slot must be a non-negative integer")
+        for name in ("authored_reference_seed", "actual_seed"):
+            value = getattr(self, name)
+            if type(value) is not int or not 0 <= value < 2**64:
+                raise ContractError(f"SeedAllocation {name} must be an unsigned 64-bit integer")
+        if type(self.ordinal) is not int or self.ordinal < 0:
+            raise ContractError("SeedAllocation ordinal must be a non-negative integer")
+        if self.delivery not in {
+            "attempted", "delivered", "uncertain", "accepted-undelivered", "rejected",
+        }:
+            raise ContractError("SeedAllocation delivery status is unsupported")
+
+
+@dataclass(frozen=True)
+class ResourceCheckpoint:
+    """Public owned combat frame captured at one newly settled visit."""
+
+    stream_id: str
+    task_id: str
+    visit: int
+    outcome: str
+    frame: CombatFrame
+    encounter: str
+    hp_before_healing: int
+    hp_after_cleanup: int
+
+    def __post_init__(self) -> None:
+        _identifier(self.stream_id, "ResourceCheckpoint stream_id")
+        _identifier(self.task_id, "ResourceCheckpoint task_id")
+        if type(self.visit) is not int or self.visit < 0:
+            raise ContractError("ResourceCheckpoint visit must be a non-negative integer")
+        if self.outcome not in {"victory", "death"}:
+            raise ContractError("ResourceCheckpoint outcome must be victory or death")
+        if not isinstance(self.frame, CombatFrame):
+            raise ContractError("ResourceCheckpoint frame must be a public CombatFrame")
+        if not isinstance(self.encounter, str) or not self.encounter:
+            raise ContractError("ResourceCheckpoint encounter must be a non-empty string")
+        for name in ("hp_before_healing", "hp_after_cleanup"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ContractError(f"ResourceCheckpoint {name} must be a non-negative integer")
+
+
+@dataclass(frozen=True)
+class IncompleteTask:
+    """An open task left at a collection horizon or cumulative ceiling."""
+
+    stream_id: str
+    task_id: str
+    decisions: int
+
+    def __post_init__(self) -> None:
+        _identifier(self.stream_id, "IncompleteTask stream_id")
+        _identifier(self.task_id, "IncompleteTask task_id")
+        if type(self.decisions) is not int or self.decisions <= 0:
+            raise ContractError("IncompleteTask decisions must be positive")
+
+
+@dataclass(frozen=True)
+class CollectionFault:
+    """Bounded primitive fault evidence retained without exception/native objects."""
+
+    phase: str
+    exception_type: str
+    message: str
+    operation_slots: int = 0
+    known_accepted_slots: int = 0
+    uncertain_slots: int = 0
+
+    def __post_init__(self) -> None:
+        for name in ("phase", "exception_type"):
+            _identifier(getattr(self, name), f"CollectionFault {name}")
+        if not isinstance(self.message, str) or len(self.message) > 512:
+            raise ContractError("CollectionFault message must be at most 512 characters")
+        for name in ("operation_slots", "known_accepted_slots", "uncertain_slots"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ContractError(f"CollectionFault {name} must be non-negative")
+        if self.known_accepted_slots > self.operation_slots:
+            raise ContractError("CollectionFault known accepted slots exceed operation width")
+        if self.uncertain_slots > self.operation_slots:
+            raise ContractError("CollectionFault uncertain slots exceed operation width")
+
+
+@dataclass(frozen=True)
+class CollectionDiagnostics:
+    """Immutable cumulative acceptance, reset, seed, task and time evidence."""
+
+    attempted_environment_slots: int = 0
+    forwarded_environment_slots: int = 0
+    known_accepted_environment_slots: int = 0
+    delivered_environment_slots: int = 0
+    uncertain_environment_slots: int = 0
+    reset_operations: int = 0
+    reset_slots: int = 0
+    attempted_reset_slots: int = 0
+    forwarded_reset_slots: int = 0
+    known_accepted_reset_slots: int = 0
+    delivered_reset_slots: int = 0
+    uncertain_reset_slots: int = 0
+    learned_decisions: int = 0
+    fixed_decisions: int = 0
+    tasks_started: int = 0
+    task_terminals: int = 0
+    tasks_completed: int = 0
+    victories: int = 0
+    deaths: int = 0
+    faults: int = 0
+    elapsed_seconds: float = 0.0
+    wall_overshoot_seconds: float = 0.0
+    incomplete_decisions: int = 0
+    incomplete_environment_slots: int = 0
+    next_seed_ordinal: int = 0
+    seed_allocations: tuple[SeedAllocation, ...] = ()
+    resource_checkpoints: tuple[ResourceCheckpoint, ...] = ()
+    incomplete_tasks: tuple[IncompleteTask, ...] = ()
+    stop_reason: str | None = None
+    fault: CollectionFault | None = None
+    undispatched_actor_decisions: int = 0
+    undispatched_fixed_decisions: int = 0
+    elapsed_seconds_is_fallback: bool = False
+
+    def __post_init__(self) -> None:
+        integer_names = (
+            "attempted_environment_slots", "forwarded_environment_slots",
+            "known_accepted_environment_slots", "delivered_environment_slots",
+            "uncertain_environment_slots", "reset_operations", "reset_slots",
+            "attempted_reset_slots", "forwarded_reset_slots",
+            "known_accepted_reset_slots", "delivered_reset_slots",
+            "uncertain_reset_slots", "learned_decisions", "fixed_decisions",
+            "tasks_started", "task_terminals", "tasks_completed", "victories",
+            "deaths", "faults", "incomplete_decisions",
+            "incomplete_environment_slots", "next_seed_ordinal",
+            "undispatched_actor_decisions", "undispatched_fixed_decisions",
+        )
+        for name in integer_names:
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ContractError(f"CollectionDiagnostics {name} must be non-negative")
+        for name in ("elapsed_seconds", "wall_overshoot_seconds"):
+            value = _finite_number(getattr(self, name), f"CollectionDiagnostics {name}")
+            if value < 0:
+                raise ContractError(f"CollectionDiagnostics {name} must be non-negative")
+            object.__setattr__(self, name, value)
+        if self.forwarded_environment_slots > self.attempted_environment_slots:
+            raise ContractError("forwarded environment slots exceed attempted slots")
+        if self.known_accepted_environment_slots > self.forwarded_environment_slots:
+            raise ContractError("known accepted environment slots exceed forwarded slots")
+        if self.delivered_environment_slots > self.known_accepted_environment_slots:
+            raise ContractError("delivered environment slots exceed known accepted slots")
+        if self.uncertain_environment_slots > self.forwarded_environment_slots:
+            raise ContractError("uncertain environment slots exceed forwarded slots")
+        if self.forwarded_reset_slots > self.attempted_reset_slots:
+            raise ContractError("forwarded reset slots exceed attempted reset slots")
+        if self.known_accepted_reset_slots > self.forwarded_reset_slots:
+            raise ContractError("known accepted reset slots exceed forwarded slots")
+        if self.delivered_reset_slots > self.known_accepted_reset_slots:
+            raise ContractError("delivered reset slots exceed known accepted slots")
+        if self.uncertain_reset_slots > self.forwarded_reset_slots:
+            raise ContractError("uncertain reset slots exceed forwarded slots")
+        if self.tasks_completed > self.task_terminals:
+            raise ContractError("completed tasks cannot exceed task terminals")
+        if self.victories + self.deaths > self.tasks_completed:
+            raise ContractError("natural outcomes cannot exceed completed tasks")
+        if any(not isinstance(values, tuple) for values in (
+            self.seed_allocations, self.resource_checkpoints, self.incomplete_tasks,
+        )):
+            raise ContractError("collection diagnostic histories must be immutable tuples")
+        if any(not isinstance(value, SeedAllocation) for value in self.seed_allocations):
+            raise ContractError("seed_allocations must contain SeedAllocation records")
+        if any(not isinstance(value, ResourceCheckpoint) for value in self.resource_checkpoints):
+            raise ContractError("resource_checkpoints must contain ResourceCheckpoint records")
+        if any(not isinstance(value, IncompleteTask) for value in self.incomplete_tasks):
+            raise ContractError("incomplete_tasks must contain IncompleteTask records")
+        if self.stop_reason is not None:
+            _identifier(self.stop_reason, "CollectionDiagnostics stop_reason")
+        if self.fault is not None and not isinstance(self.fault, CollectionFault):
+            raise ContractError("CollectionDiagnostics fault must be CollectionFault or None")
+        if type(self.elapsed_seconds_is_fallback) is not bool:
+            raise ContractError("CollectionDiagnostics elapsed_seconds_is_fallback must be a boolean")
+
+
+@dataclass(frozen=True)
 class Rollout:
     """One frozen set of task-grouped transitions and its producing identity."""
 
@@ -430,6 +633,7 @@ class Rollout:
     identity: NeuralIdentity
     records: tuple[StepRecord, ...]
     counters: CumulativeCounters
+    collection: CollectionDiagnostics | None = None
 
     def __post_init__(self) -> None:
         if (not isinstance(self.mode, str) or self.mode not in {"standalone", "run"}
@@ -441,6 +645,8 @@ class Rollout:
             raise ContractError("Rollout records must be an immutable tuple of StepRecord values")
         if not isinstance(self.counters, CumulativeCounters):
             raise ContractError("Rollout counters must be CumulativeCounters")
+        if self.collection is not None and not isinstance(self.collection, CollectionDiagnostics):
+            raise ContractError("Rollout collection must be CollectionDiagnostics or None")
         if self.counters.rows < len(self.records):
             raise ContractError("cumulative row count cannot be smaller than this rollout")
         current_actor_rows = sum(row.actor_training_mask for row in self.records)

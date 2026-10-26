@@ -4,9 +4,14 @@
 > Luna at max reasoning, no nested workers. Canonical workspace remains
 > `artifacts/development/foundation/`; main and local commits are authorized.
 
-**Status:** Proposed. Actual evaluation execution is not yet approved. Finish
-Task9/10 code and reviews, then request approval of this concrete run. The
-accepted reader validation authorized a different test and action budget.
+**Status:** Historical v1 plan, superseded for execution. The approved v1 wrapper
+stopped at host preflight before any container or native test. The reviewed v2
+wrapper then executed the still-unstarted evaluator once at source `732b714`:
+1 test, 0 skips, two cases and 28 actions. Parent and independent reviews accepted
+M1 on 2026-10-26. The original runbook and failed evidence below remain historical;
+do not rerun them. Current evidence and qualifications are in
+`artifacts/development/foundation/m1-acceptance-report.md` and the v2 runtime
+report/review. This closeout grants no further execution authority.
 
 **Goal:** Verify the implemented single-case evaluator produces reconciled public
 case artifacts for the two documented selection scenarios.

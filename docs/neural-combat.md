@@ -11,8 +11,10 @@ pure fake-driven coverage. The single approved native CPU training smoke ran
 once: both mode tests passed with zero skips, within the declared decision,
 environment, update, and time ceilings. It demonstrates bounded training and
 checkpoint plumbing only. Approved Tasks 1–7 are accepted after parent and
-independent review, with the documented minor qualifications retained. No
-playing-strength, frozen-policy evaluation, or GPU result is claimed. See the [retained runtime report](../artifacts/development/neural-combat/task-7/task-7-training-smoke-runtime-report.md).
+independent review, with the documented minor qualifications retained. Task 8
+subsequently completed the bounded GPU calibration described below and is
+accepted after parent and independent review. No playing-strength or frozen-policy evaluation
+is claimed. See the [retained CPU runtime report](../artifacts/development/neural-combat/task-7/task-7-training-smoke-runtime-report.md).
 
 ## Commands
 
@@ -27,6 +29,7 @@ PYTHONPATH=src python3.12 -B -m spire_learn.neural train --config configs/neural
 PYTHONPATH=src python3.12 -B -m spire_learn.neural train --config configs/neural/run.toml --validate-only
 PYTHONPATH=src python3.12 -B -m spire_learn.neural evaluate --config configs/neural/standalone-selection.toml --policy legal-random --validate-only
 PYTHONPATH=src python3.12 -B -m spire_learn.neural evaluate --config configs/neural/run-selection.toml --policy end-turn-last-v1 --validate-only
+PYTHONPATH=src python3.12 -B -m spire_learn.neural calibrate --config configs/neural/calibration.toml --validate-only
 ```
 
 `train` accepts either `--resume CHECKPOINT` or `--warm-start CHECKPOINT`; the
@@ -47,8 +50,10 @@ fabricated policy values or log probabilities.
 
 Final configs require the explicit `--allow-final` flag. Selection and final
 cases are separate, and evaluation never invokes the optimizer. `calibrate`
-only parses and validates configs in Task 7; live calibration belongs to a later
-task.
+uses an isolated CUDA path with a strict calibration config and qualified UUID.
+The recorded one-use cohort has completed; the command above validates only
+and does not authorize another execution. General `train`/`evaluate` runtime
+construction remains CPU-only until a separate scoped GPU extension is accepted.
 
 Exit code `0` means the bounded operation finished and wrote sound artifacts; it
 does not mean the policy learned or won. Code `2` marks invalid configuration or
@@ -92,6 +97,32 @@ native runtime construction. Reports account for every manifest case as complete
 incomplete, or not started. They separate standalone combat from fights reached
 inside a Run and report completion, outcomes, reached-combat denominator, public
 HP retention when available, turns/actions, and full-Run terminal progress.
+
+## Bounded GPU calibration
+
+The qualified runtime uses Torch 2.14.1+cu130/CUDA 13.0 on the inventoried
+RTX 5090. The single completed cohort used standalone B4/B8/B16 at horizon32,
+then one Run capped at 128 actions. It passed one test with zero skips, delivered
+948 environment step slots and 942 learned samples, and made three disposable
+GPU Adam timing calls. The Run ended naturally in death after 52 steps. There
+were no simulator faults or uncertain effects. No trained checkpoint was kept.
+
+B16 was fastest among the tested standalone sizes at 40.724 delivered slots/s,
+including collection, same-frame probes, the disposable update and close.
+Its same-frame GPU forward/backward probe was 4.381 times faster than CPU;
+B4/B8 showed no GPU benefit. This was one fixed-order pass, not an estimate of
+training performance or playing strength. Peak Torch allocated/reserved memory
+was 205.455/250 MiB; process inventory observed 880 MiB separately.
+
+The [runtime report](../artifacts/development/neural-combat/task-8/calibration/calibration-continuation-runtime-report.md)
+records exact input identities, timing boundaries, previous preflight failures,
+the one-use continuation, preservation and successful container cleanup.
+The shared legacy diagnostic-sampling budget remains separate from these real
+actor decisions. General GPU training still needs the narrow device-aware
+runner and checkpoint/RNG integration described in the [Task 9 readiness
+record](../artifacts/development/neural-combat/task-9-readiness.md).
+No longer learning, frozen selection, final evaluation or new cohort is
+authorized by this documentation.
 
 ## Checkpoints and artifacts
 
@@ -138,5 +169,7 @@ elapsed-time assumption. Final evaluation is reserved for a separately reviewed
 experiment; it must not be used for model or hyperparameter selection.
 
 The [combined review](../artifacts/development/neural-combat/final-combined-review.md)
-records the remaining minor qualifications. CUDA RNG initialization must be
-corrected and checked before GPU calibration.
+records the remaining historical minor qualifications. Task 8 corrected model
+initialization to preserve the caller's CPU/CUDA RNG states and passed the
+qualified RNG checks before the recorded GPU calibration. Earlier failures and
+the missing original calibration RED transcript remain disclosed in its reports.

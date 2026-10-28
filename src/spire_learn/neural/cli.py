@@ -35,7 +35,7 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--allow-final", action="store_true")
 
     calibrate = commands.add_parser(
-        "calibrate", help="validate a neural config; calibration execution belongs to Task 8"
+        "calibrate", help="run the fixed Task 8 CUDA calibration cohort"
     )
     calibrate.add_argument("--config", required=True, metavar="PATH")
     calibrate.add_argument("--validate-only", action="store_true")
@@ -71,7 +71,12 @@ def _validated_arguments(arguments: argparse.Namespace) -> tuple[NeuralConfig, s
         return config, "evaluate", checkpoint, policy_kind, arguments.allow_final
 
     if arguments.command == "calibrate":
-        return config, "calibrate", None, "unsupported", False
+        if (config.operation != "calibrate" or config.mode != "standalone"
+                or config.split != "train" or config.partition != "train"):
+            raise ValueError("calibrate requires a calibration-operation standalone train config")
+        if config.device != "cuda:0" or config.calibration_gpu_uuid is None:
+            raise ValueError("calibrate requires the qualified cuda:0 device and GPU UUID")
+        return config, "calibrate", None, "calibration", False
     raise ValueError("unsupported command")
 
 
@@ -93,14 +98,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         message = (
             "configuration valid; no neural runtime or artifacts created"
             if arguments.command != "calibrate"
-            else "configuration valid; calibration is not executed by Task 7"
+            else "calibration configuration valid; CUDA runtime and calibration were not executed"
         )
         print(message)
         return 0
 
     if arguments.command == "calibrate":
-        print("spire-learn neural: calibration execution is reserved for Task 8", file=sys.stderr)
-        return 2
+        from spire_learn.neural.runner import calibrate
+
+        try:
+            report = calibrate(config)
+        except Exception as error:
+            print(f"spire-learn neural: calibration failed: {error}", file=sys.stderr)
+            return 1
+        try:
+            print(json.dumps(dict(report.summary), sort_keys=True, allow_nan=False))
+        except (TypeError, ValueError, OSError) as error:
+            print(f"spire-learn neural: report output failed: {error}", file=sys.stderr)
+            return 1
+        return report.exit_code
 
     from spire_learn.neural.runner import create_runtime, evaluate_policy, train
 

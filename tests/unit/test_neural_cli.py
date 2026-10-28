@@ -57,7 +57,7 @@ for mode in ("standalone", "run"):
         if split == "final":
             args.append("--allow-final")
         assert main(args) == 0
-assert main(["calibrate", "--config", "configs/neural/standalone.toml", "--validate-only"]) == 0
+assert main(["calibrate", "--config", "configs/neural/calibration.toml", "--validate-only"]) == 0
 unittest.defaultTestLoader.discover("tests")
 assert attempts == [], attempts
 assert not any(name.split(".", 1)[0] in blocked for name in sys.modules)
@@ -102,15 +102,30 @@ assert not any(name.split(".", 1)[0] in blocked for name in sys.modules)
         self.assertEqual(self.call("evaluate", "--config", final, "--checkpoint", "/checkpoint",
                                    "--allow-final", "--validate-only")[0], 0)
 
-    def test_training_sources_are_mutually_exclusive_and_calibration_stays_unsupported(self):
+    def test_training_sources_are_mutually_exclusive_and_calibration_dispatch_is_lazy(self):
         config = str(ROOT / "configs/neural/standalone.toml")
         self.assertEqual(self.call("train", "--config", config, "--resume", "/resume",
                                    "--warm-start", "/warm")[0], 2)
         self.assertEqual(self.call("train", "--config", config, "--resume", "/resume",
                                    "--validate-only")[0], 0)
-        status, _, stderr = self.call("calibrate", "--config", config)
-        self.assertEqual(status, 2)
-        self.assertIn("reserved for Task 8", stderr)
+        self.assertEqual(self.call("calibrate", "--config", config)[0], 2)
+        calibration = str(ROOT / "configs/neural/calibration.toml")
+        status, stdout, _ = self.call("calibrate", "--config", calibration, "--validate-only")
+        self.assertEqual(status, 0)
+        self.assertIn("calibration configuration valid", stdout)
+        self.assertIn("were not executed", stdout)
+        from spire_learn.neural.runner import NeuralReport
+
+        report = NeuralReport({"status": "complete", "cohort": {"reserved_action_slots": 1024}}, 0, None)
+        with (
+            patch("spire_learn.neural.runner.create_runtime",
+                  side_effect=AssertionError("calibration must not use the training runtime")),
+            patch("spire_learn.neural.runner.calibrate", return_value=report) as calibrate,
+        ):
+            status, output, _ = self.call("calibrate", "--config", calibration)
+        self.assertEqual(status, 0)
+        self.assertIn('"reserved_action_slots": 1024', output)
+        calibrate.assert_called_once()
 
     def test_train_dispatch_selects_resume_or_warm_start_without_installing_runtime_early(self):
         from spire_learn.neural.runner import NeuralReport

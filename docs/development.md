@@ -7,8 +7,9 @@ evaluation runner are authored. The single approved Task 7 CPU smoke completed
 once with both mode tests passing and zero skips; it recorded 396 learned
 decisions, 444 environment slots, 28 accepted optimizer steps, and two updates
 per mode. This is bounded plumbing evidence, not a playing-strength result.
-Approved Tasks 1–7 are accepted after parent and independent review; no
-frozen-policy evaluation or GPU run is evidenced. The configs below are
+Approved Tasks 1–7 are accepted after parent and independent review. The single
+Task 8 GPU calibration completed and is accepted after parent and independent review. No
+playing-strength or frozen-policy evaluation is established. The configs below are
 examples with resource ceilings; they are not permission to construct
 environments, evaluate, or run probes.
 
@@ -17,7 +18,7 @@ environments, evaluate, or run probes.
 Use CPython 3.12. Set `PYTHON312` explicitly to the exact interpreter selected for
 the check (for example, the already-qualified interpreter inside an approved
 runtime). Do not rely on whichever `python` happens to be first on `PATH`. The
-core package has no selected runtime dependencies; this guide does not install
+core package declares no runtime dependencies; this guide does not install
 packages or set up a Gym environment.
 
 From the repository root:
@@ -91,9 +92,17 @@ evaluation-only and does not make the supplied selection cases a final set.
 
 ## Runtime gates and current evidence
 
-Initial conformance work was CPU-only. The one approved Task 7 smoke is also
-CPU-only; no GPU/CUDA or frozen-policy evaluation is evidenced here. These
-results do not establish policy strength.
+Initial conformance and the Task 7 training smoke were CPU-only. The later
+Task 8 calibration qualified the separate CUDA runtime and completed one actual
+cohort on the RTX 5090: one test passed with zero skips, 948 delivered step
+slots, 942 policy samples, three disposable GPU Adam calls, and no simulator
+faults or uncertain effects. B16 was the fastest tested standalone size at
+40.724 delivered slots/s; peak Torch allocation was 205.455 MiB. Small-batch
+CPU/GPU probes showed no GPU benefit. The [calibration report](../artifacts/development/neural-combat/task-8/calibration/calibration-continuation-runtime-report.md)
+records the exact boundaries, prior failures, continuation guard, and cleanup.
+These results do not establish policy strength or general GPU training support;
+the general train/evaluate runtime remains CPU-only. Task 8 evidence is accepted
+after parent and independent review; no additional cohort is authorized.
 
 The single approved Task 7 CPU training smoke completed once under the parent's
 release gate. It passed exactly two tests with zero skips, within the shared

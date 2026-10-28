@@ -592,7 +592,7 @@ def build_policy(
                 return tuple(float(value.item()) for value in output.values)
 
     with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(seed)
+        torch.random.default_generator.manual_seed(seed)
         policy = CombatPolicy()
     policy = policy.to(device=device)
     actual_count = sum(parameter.numel() for parameter in policy.parameters())

@@ -1435,6 +1435,7 @@ def evaluate_policy(
             summary["runtime_close_error"] = _error_value(close_error)
             report = NeuralReport(summary, report.exit_code, report.run_dir)
         return report
+
     try:
         _set_budget(runtime, budget)
         initial_recovery = _recovery_state(runtime)
@@ -1676,6 +1677,17 @@ def evaluate_policy(
                 _note(primary, f"interruption lifecycle receipt write failed: {type(error).__name__}: {_error_value(error)['message']}")
         if primary is not None and _is_process_control(primary):
             raise primary
+
+
+def calibrate(
+    config: NeuralConfig,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+) -> NeuralReport:
+    """Run the one explicitly bounded Task 8 CUDA calibration cohort lazily."""
+    from spire_learn.neural.calibration import calibrate as run_calibration
+
+    return run_calibration(config, clock=clock)
 
 
 class _NeuralTrainingRuntime:
@@ -2095,4 +2107,7 @@ def create_runtime(
         raise
 
 
-__all__ = ["NeuralReport", "RuntimeOperationLimits", "TrainingRuntime", "create_runtime", "evaluate_policy", "train"]
+__all__ = [
+    "NeuralReport", "RuntimeOperationLimits", "TrainingRuntime", "calibrate",
+    "create_runtime", "evaluate_policy", "train",
+]

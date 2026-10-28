@@ -27,8 +27,15 @@ and evaluation runner are authored. The single approved Task 7 CPU smoke ran
 once: both mode tests passed with zero skips, recording 396 learned decisions,
 444 environment slots, 28 accepted optimizer steps, and two updates per mode.
 This is bounded training-plumbing evidence. Approved Tasks 1–7 are accepted
-after parent and independent review. It is not a playing-strength result;
-there has been no frozen-policy evaluation or GPU run. See the [retained runtime
+after parent and independent review. The Task 8 RTX 5090 calibration also
+completed: 948 environment actions, 942 policy samples and three disposable
+GPU optimizer probes, with no simulator faults. B16 was the fastest tested
+standalone batch. Its [retained calibration report](artifacts/development/neural-combat/task-8/calibration/calibration-continuation-runtime-report.md)
+records performance, memory, cleanup and qualifications. Task 8 is accepted
+after parent and independent source/evidence review. These are bounded plumbing and performance results;
+no playing-strength or frozen-policy evaluation is claimed. The general
+training runner remains CPU-only pending the next scoped GPU integration.
+See the [retained CPU runtime
 report](artifacts/development/neural-combat/task-7/task-7-training-smoke-runtime-report.md),
 [development and evaluation checks](docs/development.md), and [neural combat
 guide](docs/neural-combat.md) for evidence and qualifications. The M1 evaluator

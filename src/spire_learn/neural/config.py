@@ -42,6 +42,8 @@ LEARNER_IDENTITY_IDS = (
 )
 _SHA256 = re.compile(r"[0-9a-fA-F]{64}\Z")
 _DEVICE = re.compile(r"(?:cpu|cuda(?::[0-9]+)?)\Z")
+_CALIBRATION_GPU_UUID = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"
+_GPU_UUID = re.compile(r"GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 
 
 def _canonical_hash(value: object) -> str:
@@ -131,6 +133,7 @@ class NeuralConfig:
     device: str
     budgets: NeuralBudget
     final_requires_opt_in: bool
+    calibration_gpu_uuid: str | None = None
 
 
 def _identity(raw: object, *, model_hash: str, ppo_hash: str) -> NeuralIdentity:
@@ -184,21 +187,37 @@ def load_neural_config(path: Path) -> NeuralConfig:
         "output_root", "device", "environment", "seeds", "model", "ppo",
         "rollout", "budgets", "accepted_identities",
     }
-    if not isinstance(raw, dict) or set(raw) != required:
+    expected_root = set(required)
+    if isinstance(raw, dict) and raw.get("operation") == "calibrate":
+        expected_root.add("calibration")
+    if not isinstance(raw, dict) or set(raw) != expected_root:
         raise ValueError("invalid neural config root fields")
     if raw["schema"] != "spire-learn-neural-config-v1":
         raise ValueError("unsupported neural config schema")
     mode, operation, split, partition = raw["mode"], raw["operation"], raw["split"], raw["partition"]
     if not isinstance(mode, str) or mode not in {"standalone", "run"}:
         raise ValueError("mode must be standalone or run")
-    if not isinstance(operation, str) or operation not in {"train", "evaluate"}:
-        raise ValueError("operation must be train or evaluate")
+    if not isinstance(operation, str) or operation not in {"train", "evaluate", "calibrate"}:
+        raise ValueError("operation must be train, evaluate, or calibrate")
     if not isinstance(split, str) or split not in {"train", "selection", "final"} or partition != split:
         raise ValueError("split and partition must match train/selection/final")
     if operation == "train" and split != "train":
         raise ValueError("training is permitted only with the train split")
     if operation == "evaluate" and split not in {"selection", "final"}:
         raise ValueError("evaluation requires selection or final split")
+    calibration_gpu_uuid: str | None = None
+    if operation == "calibrate":
+        if mode != "standalone" or split != "train" or partition != "train":
+            raise ValueError("calibration requires standalone mode and split=partition=train")
+        calibration_raw = _exact_keys(raw.get("calibration"), {"gpu_uuid"}, "calibration")
+        calibration_gpu_uuid = calibration_raw["gpu_uuid"]
+        if (not isinstance(calibration_gpu_uuid, str)
+                or _GPU_UUID.fullmatch(calibration_gpu_uuid) is None):
+            raise ValueError("calibration.gpu_uuid must be a well-formed GPU UUID string")
+        if calibration_gpu_uuid != _CALIBRATION_GPU_UUID:
+            raise ValueError("calibration.gpu_uuid does not match the qualified Task 8 device")
+    elif "calibration" in raw:
+        raise ValueError("calibration table is valid only for operation=calibrate")
 
     environment = raw["environment"]
     expected_environment_keys = {
@@ -271,6 +290,16 @@ def load_neural_config(path: Path) -> NeuralConfig:
     device = raw["device"]
     if not isinstance(device, str) or _DEVICE.fullmatch(device) is None:
         raise ValueError("device must be cpu, cuda, or cuda:<index>")
+    if operation == "calibrate":
+        if device != "cuda:0":
+            raise ValueError("calibration requires device=cuda:0")
+        if (model.embedding_width, model.hidden_width, model.max_parameters) != (16, 64, 10_000_000):
+            raise ValueError("calibration requires model settings 16/64/10000000")
+        if (rollout_rows, rollout_steps) != (4, 32):
+            raise ValueError("calibration base rollout must be rows=4 and steps=32")
+        if (budgets.max_optimizer_steps, budgets.max_training_decisions,
+                budgets.max_environment_actions, budgets.max_wall_seconds) != (3, 1024, 1024, 300.0):
+            raise ValueError("calibration budgets must be 3 optimizer calls, 1024 decisions/actions, 300 seconds")
 
     model_hash = _canonical_hash(model_raw)
     ppo_hash = _canonical_hash(ppo_raw)
@@ -317,7 +346,7 @@ def load_neural_config(path: Path) -> NeuralConfig:
         if related_split != cases.split and sibling_path.is_file():
             related_manifests.append(load_neural_cases(sibling_path))
     validate_neural_case_lineage(tuple(related_manifests))
-    if operation == "train":
+    if operation in {"train", "calibrate"}:
         validate_neural_case_lineage((cases,), training=True)
     elif split == "final":
         validate_neural_case_lineage((cases,), training=False)
@@ -348,6 +377,7 @@ def load_neural_config(path: Path) -> NeuralConfig:
         device=device,
         budgets=budgets,
         final_requires_opt_in=split == "final",
+        calibration_gpu_uuid=calibration_gpu_uuid,
     )
 
 
@@ -357,7 +387,10 @@ __all__ = [
     "COMMON_VIEW_ID",
     "NeuralBudget",
     "NeuralConfig",
+    "RUN_OBSERVATION_FINGERPRINT",
+    "RUN_OBSERVATION_VERSION",
     "RUN_PROFILE_ID",
+    "RUN_REPLAY_VERSION",
     "SeedStreams",
     "load_neural_config",
 ]

@@ -34,7 +34,8 @@ standalone batch. Its [retained calibration report](artifacts/development/neural
 records performance, memory, cleanup and qualifications. Task 8 is accepted
 after parent and independent source/evidence review. These are bounded plumbing and performance results;
 no playing-strength or frozen-policy evaluation is claimed. The general
-training runner remains CPU-only pending the next scoped GPU integration.
+training runner now has an authored device-aware extension with pure-test
+coverage; its bounded two-mode GPU proof remains unrun and unreleased.
 See the [retained CPU runtime
 report](artifacts/development/neural-combat/task-7/task-7-training-smoke-runtime-report.md),
 [development and evaluation checks](docs/development.md), and [neural combat

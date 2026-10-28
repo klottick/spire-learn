@@ -41,8 +41,9 @@ LEARNER_IDENTITY_IDS = (
     "spire-learn-combat-winloss-v1",
 )
 _SHA256 = re.compile(r"[0-9a-fA-F]{64}\Z")
-_DEVICE = re.compile(r"(?:cpu|cuda(?::[0-9]+)?)\Z")
+_DEVICE = re.compile(r"(?:cpu|cuda:0)\Z")
 _CALIBRATION_GPU_UUID = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"
+_RUNTIME_GPU_UUID = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"
 _GPU_UUID = re.compile(r"GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 
 
@@ -134,6 +135,7 @@ class NeuralConfig:
     budgets: NeuralBudget
     final_requires_opt_in: bool
     calibration_gpu_uuid: str | None = None
+    runtime_gpu_uuid: str | None = None
 
 
 def _identity(raw: object, *, model_hash: str, ppo_hash: str) -> NeuralIdentity:
@@ -190,6 +192,8 @@ def load_neural_config(path: Path) -> NeuralConfig:
     expected_root = set(required)
     if isinstance(raw, dict) and raw.get("operation") == "calibrate":
         expected_root.add("calibration")
+    elif isinstance(raw, dict) and raw.get("device") == "cuda:0":
+        expected_root.add("runtime")
     if not isinstance(raw, dict) or set(raw) != expected_root:
         raise ValueError("invalid neural config root fields")
     if raw["schema"] != "spire-learn-neural-config-v1":
@@ -218,6 +222,18 @@ def load_neural_config(path: Path) -> NeuralConfig:
             raise ValueError("calibration.gpu_uuid does not match the qualified Task 8 device")
     elif "calibration" in raw:
         raise ValueError("calibration table is valid only for operation=calibrate")
+
+    runtime_gpu_uuid: str | None = None
+    if operation != "calibrate" and raw.get("device") == "cuda:0":
+        runtime_raw = _exact_keys(raw.get("runtime"), {"gpu_uuid"}, "runtime")
+        runtime_gpu_uuid = runtime_raw["gpu_uuid"]
+        if (not isinstance(runtime_gpu_uuid, str)
+                or _GPU_UUID.fullmatch(runtime_gpu_uuid) is None):
+            raise ValueError("runtime.gpu_uuid must be a well-formed GPU UUID string")
+        if runtime_gpu_uuid != _RUNTIME_GPU_UUID:
+            raise ValueError("runtime.gpu_uuid does not match the qualified Task 8 device")
+    elif "runtime" in raw:
+        raise ValueError("runtime table is valid only for general device=cuda:0")
 
     environment = raw["environment"]
     expected_environment_keys = {
@@ -289,7 +305,7 @@ def load_neural_config(path: Path) -> NeuralConfig:
         raise ValueError("rollout rows times steps exceeds the environment-action budget")
     device = raw["device"]
     if not isinstance(device, str) or _DEVICE.fullmatch(device) is None:
-        raise ValueError("device must be cpu, cuda, or cuda:<index>")
+        raise ValueError("device must be cpu or cuda:0")
     if operation == "calibrate":
         if device != "cuda:0":
             raise ValueError("calibration requires device=cuda:0")
@@ -378,6 +394,7 @@ def load_neural_config(path: Path) -> NeuralConfig:
         budgets=budgets,
         final_requires_opt_in=split == "final",
         calibration_gpu_uuid=calibration_gpu_uuid,
+        runtime_gpu_uuid=runtime_gpu_uuid,
     )
 
 

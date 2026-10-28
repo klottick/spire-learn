@@ -52,6 +52,48 @@ class NeuralConfigTests(unittest.TestCase):
         self.assertEqual(run.accepted_identities[0].accepted_raw_mode_mappings.keys(),
                          {"standalone", "run"})
 
+    def test_general_cuda_config_requires_only_the_qualified_runtime_uuid(self):
+        gpu_uuid = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"
+        source = Path("configs/neural/standalone.toml").read_text()
+        source = source.replace(
+            'manifest_path = "../cases/neural/train.json"',
+            f'manifest_path = "{Path("configs/cases/neural/train.json").resolve()}"',
+        ).replace(
+            'output_root = "../../artifacts/development/neural-combat/runs/standalone"',
+            f'output_root = "{Path("artifacts/development/neural-combat/runs/config-tests").resolve()}"',
+        )
+        valid = source.replace('device = "cpu"', 'device = "cuda:0"')
+        valid = f'{valid}\n[runtime]\ngpu_uuid = "{gpu_uuid}"\n'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gpu.toml"
+            path.write_text(valid)
+            config = load_neural_config(path)
+            self.assertEqual(config.device, "cuda:0")
+            self.assertEqual(config.runtime_gpu_uuid, gpu_uuid)
+
+            invalid_configs = (
+                valid.rsplit("\n[runtime]\n", 1)[0],
+                valid.replace(gpu_uuid, "GPU-00000000-0000-0000-0000-000000000000"),
+                valid.replace(gpu_uuid, "not-a-uuid"),
+                valid.replace(f'gpu_uuid = "{gpu_uuid}"', "gpu_uuid = true"),
+                valid.replace(f'gpu_uuid = "{gpu_uuid}"', f'gpu_uuid = "{gpu_uuid}"\nextra = 1'),
+                valid.replace('device = "cuda:0"', 'device = "cuda"'),
+                valid.replace('device = "cuda:0"', 'device = "cuda:1"'),
+                source + f'\n[runtime]\ngpu_uuid = "{gpu_uuid}"\n',
+            )
+            for invalid in invalid_configs:
+                with self.subTest(invalid=invalid[-80:]):
+                    path.write_text(invalid)
+                    with self.assertRaises(ValueError):
+                        load_neural_config(path)
+
+        cpu = load_neural_config(Path("configs/neural/standalone.toml"))
+        self.assertEqual(cpu.device, "cpu")
+        self.assertIsNone(cpu.runtime_gpu_uuid)
+        calibration = load_neural_config(Path("configs/neural/calibration.toml"))
+        self.assertEqual(calibration.calibration_gpu_uuid, gpu_uuid)
+        self.assertIsNone(calibration.runtime_gpu_uuid)
+
     def test_authored_learner_identity_and_architecture_contract(self):
         standalone = load_neural_config(Path("configs/neural/standalone.toml"))
         run = load_neural_config(Path("configs/neural/run.toml"))

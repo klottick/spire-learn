@@ -100,9 +100,11 @@ faults or uncertain effects. B16 was the fastest tested standalone size at
 40.724 delivered slots/s; peak Torch allocation was 205.455 MiB. Small-batch
 CPU/GPU probes showed no GPU benefit. The [calibration report](../artifacts/development/neural-combat/task-8/calibration/calibration-continuation-runtime-report.md)
 records the exact boundaries, prior failures, continuation guard, and cleanup.
-These results do not establish policy strength or general GPU training support;
-the general train/evaluate runtime remains CPU-only. Task 8 evidence is accepted
-after parent and independent review; no additional cohort is authorized.
+These results do not establish policy strength or general GPU training support.
+The general train/evaluate runtime now has an authored device-aware extension
+with fake-driven coverage; its bounded two-mode GPU proof remains unrun and
+unreleased. Task 8 evidence is accepted after parent and independent review;
+no additional cohort is authorized by that evidence.
 
 The single approved Task 7 CPU training smoke completed once under the parent's
 release gate. It passed exactly two tests with zero skips, within the shared

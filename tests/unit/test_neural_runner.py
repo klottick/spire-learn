@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack, contextmanager
 from dataclasses import replace
+import builtins
+import copy
+import os
 from pathlib import Path
 import random
 import struct
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -29,6 +34,264 @@ from spire_learn.neural.ppo import UpdateMetrics
 
 ROOT = Path(__file__).resolve().parents[2]
 FINGERPRINT = "02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78"
+GPU_UUID = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"
+GPU_NAME = "NVIDIA GeForce RTX 5090"
+GPU_DRIVER = "595.91.07"
+
+
+class _AssemblyGenerator:
+    def __init__(self, device, events):
+        self.device = device
+        self.events = events
+        self.seed = None
+        self.states = []
+
+    def manual_seed(self, seed):
+        self.seed = seed
+        self.events.append(("manual_seed", self.device, seed))
+
+    def set_state(self, state):
+        self.states.append(state)
+        self.events.append(("set_state", self.device, state))
+
+    def get_state(self):
+        return f"state:{self.device}:{self.seed}"
+
+
+class _AssemblyCuda:
+    def __init__(self, events):
+        self.events = events
+
+    def is_available(self):
+        self.events.append("cuda_available")
+        return True
+
+    def device_count(self):
+        self.events.append("cuda_device_count")
+        return 1
+
+    def set_device(self, index):
+        self.events.append(("cuda_set_device", index))
+
+    def init(self):
+        self.events.append("cuda_init")
+
+    def get_device_properties(self, index):
+        self.events.append(("cuda_properties", index))
+        return SimpleNamespace(name=GPU_NAME, total_memory=32 * 1024**3)
+
+    def get_device_capability(self, index):
+        self.events.append(("cuda_capability", index))
+        return (12, 0)
+
+    def get_arch_list(self):
+        self.events.append("cuda_arch_list")
+        return ["sm_120"]
+
+    def mem_get_info(self, index):
+        self.events.append(("cuda_mem_get_info", index))
+        return 16 * 1024**3, 32 * 1024**3
+
+    def set_per_process_memory_fraction(self, fraction, index):
+        self.events.append(("cuda_memory_fraction", fraction, index))
+
+
+class _AssemblyTorch:
+    __version__ = "2.14.1+cu130"
+
+    def __init__(self, events):
+        self.events = events
+        self.version = SimpleNamespace(cuda="13.0")
+        self.cuda = _AssemblyCuda(events)
+        self.intraop = 4
+        self.interop = 1
+        self.generators = []
+        self.optim = SimpleNamespace(Adam=self._adam)
+        self.adams = []
+
+    def Generator(self, *, device):
+        self.events.append(("generator", device))
+        generator = _AssemblyGenerator(device, self.events)
+        self.generators.append(generator)
+        return generator
+
+    def get_num_threads(self):
+        return self.intraop
+
+    def set_num_threads(self, count):
+        self.events.append(("set_num_threads", count))
+        self.intraop = count
+
+    def get_num_interop_threads(self):
+        return self.interop
+
+    def set_num_interop_threads(self, count):
+        self.events.append(("set_num_interop_threads", count))
+        self.interop = count
+
+    def _adam(self, parameters, *, lr, eps):
+        optimizer = _AssemblyAdam()
+        self.adams.append(optimizer)
+        self.events.append(("adam", lr, eps))
+        return optimizer
+
+
+class _AssemblyAdam:
+    def __init__(self):
+        self.param_groups = []
+        self.loaded_states = []
+
+    def load_state_dict(self, state):
+        self.loaded_states.append(state)
+
+
+class _AssemblyPolicy:
+    def __init__(self):
+        self._behavior_policy_version = 0
+        self.loaded_weights = []
+
+    def parameters(self):
+        return (object(),)
+
+    def load_state_dict(self, weights, *, strict):
+        self.loaded_weights.append((weights, strict))
+
+
+class _AssemblyDriver:
+    def __init__(self, events):
+        self.events = events
+        self.schema = SimpleNamespace(descriptor_digest="fake-schema")
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+        self.events.append("driver_close")
+
+
+class _AssemblyCollector:
+    def __init__(self, driver, policy, config, **kwargs):
+        self.driver = driver
+        self.policy = policy
+        self.config = config
+        self.partial_rollout = None
+        self.learned_combat_policy = kwargs.get("learned_combat_policy", True)
+        self.budget = kwargs["budget"]
+        self._recovery = kwargs.get("recovery") or CollectorRecovery(
+            0, 0, (0,) * config.rollout_rows
+        )
+        self.close_calls = 0
+
+    @property
+    def recovery_state(self):
+        return self._recovery
+
+    def close(self):
+        self.close_calls += 1
+        self.driver.close()
+
+
+@contextmanager
+def _patch_runtime_assembly(
+    events,
+    *,
+    torch_module=None,
+    driver=None,
+    policy=None,
+    policy_factory=None,
+    preflight=None,
+    loader=None,
+    reject_torch_import=False,
+):
+    from spire_learn.neural import model, runner
+    import spire_learn.neural.envs as envs
+
+    selected_driver = driver or _AssemblyDriver(events)
+    selected_policy = policy or _AssemblyPolicy()
+    original_import = builtins.__import__
+
+    def traced_import(name, *args, **kwargs):
+        if name == "torch":
+            events.append("torch_import")
+            if reject_torch_import:
+                raise AssertionError("unexpected Torch import")
+        return original_import(name, *args, **kwargs)
+
+    def make_driver(config, cases):
+        events.append("make_driver")
+        return selected_driver
+
+    def build_policy(schema, model_config, *, seed, device):
+        events.append(("build_policy", seed, device))
+        if policy_factory is not None:
+            return policy_factory(schema, model_config, seed=seed, device=device)
+        return selected_policy
+
+    def nvidia_query(argv, **kwargs):
+        events.append("nvidia_smi")
+        return SimpleNamespace(stdout=f"{GPU_UUID}, {GPU_NAME}, {GPU_DRIVER}, 32768, 16384\n")
+
+    with ExitStack() as stack:
+        if torch_module is not None:
+            stack.enter_context(patch.dict(sys.modules, {"torch": torch_module}))
+        stack.enter_context(patch("builtins.__import__", side_effect=traced_import))
+        stack.enter_context(patch.object(envs, "make_driver", side_effect=make_driver))
+        stack.enter_context(patch.object(model, "build_policy", side_effect=build_policy))
+        stack.enter_context(patch.object(runner, "Collector", _AssemblyCollector))
+        stack.enter_context(patch("spire_learn.neural.device.subprocess.run", side_effect=nvidia_query))
+        if preflight is not None:
+            stack.enter_context(patch.object(runner, "preflight_checkpoint", side_effect=preflight, create=True))
+        if loader is not None:
+            stack.enter_context(patch.object(runner, "load_checkpoint", side_effect=loader))
+        yield selected_driver, selected_policy
+
+
+def _resume_bundle(config, run_metadata_fields):
+    from spire_learn.neural import runner
+
+    progress = {name: 0 for name in runner._PROGRESS_FIELDS}
+    progress["elapsed_seconds"] = 0.0
+    recovery = {
+        "next_seed_ordinal": 0,
+        "next_decision_sequence": 0,
+        "next_episode_ordinals": [0] * config.rollout_rows,
+    }
+    run_metadata = {
+        "mode": config.mode,
+        "operation": "train",
+        "split": "train",
+        "partition": "train",
+        "config_sha256": config.config_sha256,
+        "manifest_sha256": config.manifest_sha256,
+        "environment_revision": config.environment_revision,
+        "collector_recovery": recovery,
+        "cumulative_prefix": dict(progress),
+        **run_metadata_fields,
+    }
+    training_state = {
+        "optimizer_step": 0,
+        "next_environment_seed_ordinal": 0,
+        "next_decision_sequence": 0,
+        "counters": dict(progress),
+        "behavior_policy_version": 0,
+    }
+    metadata = {"run_metadata": run_metadata, "training_state": training_state}
+    policy_state = bytearray(b"policy-rng-state")
+    minibatch_state = bytearray(b"minibatch-rng-state")
+    curriculum_state = random.Random(31).getstate()
+    controller_state = random.Random(47).getstate()
+    optimizer_state = {"state": {"unmodified": object()}}
+    loaded = SimpleNamespace(
+        metadata=metadata,
+        model_tensors={"weight": object()},
+        rng_state={
+            "policy": policy_state,
+            "minibatch": minibatch_state,
+            "curriculum": curriculum_state,
+            "controller": controller_state,
+        },
+        optimizer_state=optimizer_state,
+    )
+    return metadata, loaded, policy_state, minibatch_state, curriculum_state, controller_state, optimizer_state
 
 
 def _frame(value: int) -> CombatFrame:
@@ -871,6 +1134,303 @@ class NeuralRunnerTests(unittest.TestCase):
             self.assertIn(evaluation.choose_reference(
                 frame, schema, kind="legal-random", rng=random.Random(4)
             ), {0, 1, 3, 4})
+
+    def test_cuda_runtime_uses_cuda_policy_rng_and_cpu_shuffle_rng_after_qualification(self):
+        from spire_learn.neural import runner
+
+        config = replace(self.train_config, device="cuda:0", runtime_gpu_uuid=GPU_UUID)
+        events = []
+        torch_module = _AssemblyTorch(events)
+        with patch.dict(os.environ, {
+            "SPIRE_LEARN_RUN_NEURAL_GPU_RUNTIME": "1",
+            "SPIRE_LEARN_NEURAL_GPU_UUID": GPU_UUID,
+        }):
+            with _patch_runtime_assembly(events, torch_module=torch_module) as (driver, policy):
+                runtime = runner.create_runtime(config, purpose="train")
+                self.assertLess(events.index("torch_import"), events.index("nvidia_smi"))
+                self.assertLess(events.index("nvidia_smi"), events.index("make_driver"))
+                self.assertLess(events.index("make_driver"), events.index(("build_policy", config.seed_streams.policy, "cuda:0")))
+                self.assertEqual(runtime.policy_generator.device, "cuda:0")
+                self.assertEqual(runtime.shuffle_generator.device, "cpu")
+                self.assertEqual(runtime.device_report["gpu_uuid"], GPU_UUID)
+                self.assertEqual([item.device for item in torch_module.generators], ["cuda:0", "cpu"])
+                self.assertEqual(
+                    [item.seed for item in torch_module.generators],
+                    [config.seed_streams.policy, config.seed_streams.optimizer],
+                )
+                self.assertEqual(policy.loaded_weights, [])
+                runtime.close()
+                runtime.close()
+        self.assertEqual(driver.close_calls, 1)
+
+    def test_cuda_runtime_execution_gate_rejects_before_torch_import_or_driver(self):
+        from spire_learn.neural import runner
+
+        config = replace(self.train_config, device="cuda:0", runtime_gpu_uuid=GPU_UUID)
+        events = []
+        with patch.dict(os.environ, {}, clear=True):
+            with _patch_runtime_assembly(events, reject_torch_import=True) as (driver, _policy):
+                with self.assertRaisesRegex(RuntimeError, "SPIRE_LEARN_RUN_NEURAL_GPU_RUNTIME=1"):
+                    runner.create_runtime(config, purpose="train")
+        self.assertNotIn("torch_import", events)
+        self.assertNotIn("make_driver", events)
+        self.assertEqual(driver.close_calls, 0)
+
+    def test_resume_preflights_before_torch_and_keeps_rng_and_adam_payloads_unchanged(self):
+        from spire_learn.neural import runner
+
+        config = replace(self.train_config, device="cuda:0", runtime_gpu_uuid=GPU_UUID)
+        fields = {
+            "runtime_device": "cuda:0",
+            "policy_rng_backend": "cuda",
+            "runtime_gpu_uuid": GPU_UUID,
+        }
+        metadata, loaded, policy_state, minibatch_state, curriculum_state, controller_state, optimizer_state = (
+            _resume_bundle(config, fields)
+        )
+        events = []
+
+        def preflight(path, expected, *, purpose):
+            events.append("preflight")
+            self.assertEqual(purpose, "resume")
+            return SimpleNamespace(metadata=metadata)
+
+        def load(path, expected, *, purpose, device):
+            events.append("load_checkpoint")
+            self.assertEqual((purpose, device), ("resume", "cpu"))
+            return loaded
+
+        with patch.dict(os.environ, {
+            "SPIRE_LEARN_RUN_NEURAL_GPU_RUNTIME": "1",
+            "SPIRE_LEARN_NEURAL_GPU_UUID": GPU_UUID,
+        }):
+            torch_module = _AssemblyTorch(events)
+            with _patch_runtime_assembly(
+                events, torch_module=torch_module, preflight=preflight, loader=load,
+            ) as (driver, policy):
+                runtime = runner.create_runtime(
+                    config, purpose="resume", checkpoint=Path("/tmp/fake-resume"),
+                )
+                self.assertLess(events.index("preflight"), events.index("torch_import"))
+                self.assertLess(events.index("nvidia_smi"), events.index("load_checkpoint"))
+                self.assertLess(events.index("load_checkpoint"), events.index("make_driver"))
+                self.assertEqual(policy.loaded_weights[0][1], True)
+                self.assertEqual(set(policy.loaded_weights[0][0]), {"weight"})
+                self.assertIs(runtime.policy_generator.states[0], policy_state)
+                self.assertIs(runtime.shuffle_generator.states[0], minibatch_state)
+                self.assertEqual(runtime.curriculum_rng.getstate(), curriculum_state)
+                self.assertEqual(runtime.controller_rng.getstate(), controller_state)
+                self.assertIs(torch_module.adams[0].loaded_states[0], optimizer_state)
+                self.assertEqual(runtime.device_report["gpu_uuid"], GPU_UUID)
+
+                with patch.object(runner, "save_checkpoint") as save:
+                    runtime.save(Path("/tmp/fake-checkpoint-output"), "resume")
+                saved_metadata = save.call_args.kwargs["metadata"]
+                saved_run_metadata = saved_metadata["run_metadata"]
+                self.assertEqual(
+                    {name: saved_run_metadata[name] for name in (
+                        "runtime_device", "policy_rng_backend", "runtime_gpu_uuid",
+                    )},
+                    fields,
+                )
+                manifest = runner._manifest_projection(
+                    config, runtime, policy_kind="checkpoint",
+                    action_selection="seeded-sampling", allow_final=False,
+                )
+                self.assertEqual(manifest["runtime_device_report"], runtime.device_report)
+                summary = runner._base_summary(
+                    config, runtime, status="complete", stop_reason="test",
+                    run_dir=None, elapsed=0.0, overshoot=0.0, records=(),
+                    diagnostics=None, recovery=runtime.collector_recovery,
+                    fatal_error=None, policy_kind="checkpoint",
+                    action_selection="seeded-sampling", allow_final=False,
+                )
+                self.assertEqual(summary["runtime_device_report"], runtime.device_report)
+                runtime.close()
+        self.assertEqual(driver.close_calls, 1)
+
+    def test_resume_device_mismatch_rejects_before_torch_gate_or_driver(self):
+        from spire_learn.neural import runner
+
+        config = replace(self.train_config, device="cuda:0", runtime_gpu_uuid=GPU_UUID)
+        mismatched_fields = {
+            "runtime_device": "cpu", "policy_rng_backend": "cpu", "runtime_gpu_uuid": None,
+        }
+        metadata, _loaded, *_rest = _resume_bundle(config, mismatched_fields)
+        events = []
+
+        def preflight(path, expected, *, purpose):
+            events.append("preflight")
+            return SimpleNamespace(metadata=metadata)
+
+        with patch.dict(os.environ, {}, clear=True):
+            with _patch_runtime_assembly(
+                events, preflight=preflight, reject_torch_import=True,
+            ) as (driver, _policy):
+                with self.assertRaisesRegex(ValueError, "does not match the selected config"):
+                    runner.create_runtime(
+                        config, purpose="resume", checkpoint=Path("/tmp/fake-resume"),
+                    )
+        self.assertEqual(events, ["preflight"])
+        self.assertEqual(driver.close_calls, 0)
+
+    def test_resume_manifest_mismatch_rejects_from_preflight_metadata_before_torch(self):
+        from spire_learn.neural import runner
+
+        config = replace(self.train_config, device="cuda:0", runtime_gpu_uuid=GPU_UUID)
+        fields = {
+            "runtime_device": "cuda:0",
+            "policy_rng_backend": "cuda",
+            "runtime_gpu_uuid": GPU_UUID,
+        }
+        metadata, _loaded, *_rest = _resume_bundle(config, fields)
+        preflight_metadata = copy.deepcopy(metadata)
+        preflight_metadata["run_metadata"]["manifest_sha256"] = "f" * 64
+        events = []
+
+        def preflight(path, expected, *, purpose):
+            events.append("preflight")
+            return SimpleNamespace(metadata=preflight_metadata)
+
+        with patch.dict(os.environ, {}, clear=True):
+            with _patch_runtime_assembly(
+                events, preflight=preflight, reject_torch_import=True,
+            ) as (driver, _policy):
+                with self.assertRaisesRegex(ValueError, "manifest hash does not match"):
+                    runner.create_runtime(
+                        config, purpose="resume", checkpoint=Path("/tmp/fake-resume"),
+                    )
+        self.assertEqual(events, ["preflight"])
+        self.assertEqual(driver.close_calls, 0)
+
+    def test_loaded_resume_metadata_is_rechecked_before_native_driver_factory(self):
+        from spire_learn.neural import runner
+
+        config = replace(self.train_config, device="cuda:0", runtime_gpu_uuid=GPU_UUID)
+        fields = {
+            "runtime_device": "cuda:0",
+            "policy_rng_backend": "cuda",
+            "runtime_gpu_uuid": GPU_UUID,
+        }
+        metadata, loaded, *_rest = _resume_bundle(config, fields)
+        preflight_metadata = copy.deepcopy(metadata)
+        loaded.metadata["run_metadata"].update({
+            "runtime_device": "cpu", "policy_rng_backend": "cpu", "runtime_gpu_uuid": None,
+        })
+        events = []
+
+        def preflight(path, expected, *, purpose):
+            events.append("preflight")
+            return SimpleNamespace(metadata=preflight_metadata)
+
+        def load(path, expected, *, purpose, device):
+            events.append("load_checkpoint")
+            return loaded
+
+        with patch.dict(os.environ, {
+            "SPIRE_LEARN_RUN_NEURAL_GPU_RUNTIME": "1",
+            "SPIRE_LEARN_NEURAL_GPU_UUID": GPU_UUID,
+        }):
+            torch_module = _AssemblyTorch(events)
+            with _patch_runtime_assembly(
+                events, torch_module=torch_module, preflight=preflight, loader=load,
+            ) as (driver, _policy):
+                with self.assertRaisesRegex(ValueError, "does not match the selected config"):
+                    runner.create_runtime(
+                        config, purpose="resume", checkpoint=Path("/tmp/fake-resume"),
+                    )
+        self.assertIn("load_checkpoint", events)
+        self.assertNotIn("make_driver", events)
+        self.assertEqual(driver.close_calls, 0)
+
+    def test_warm_start_and_evaluation_load_cpu_weights_without_restoring_training_state(self):
+        from spire_learn.neural import runner
+
+        cases = (
+            (replace(self.train_config, device="cuda:0", runtime_gpu_uuid=GPU_UUID), "warm_start"),
+            (replace(self.selection_config, device="cuda:0", runtime_gpu_uuid=GPU_UUID), "evaluate"),
+        )
+        for config, purpose in cases:
+            with self.subTest(purpose=purpose):
+                events = []
+                loaded = SimpleNamespace(metadata={}, model_tensors={"weight": object()})
+                load_calls = []
+
+                def preflight(path, expected, *, purpose):
+                    return SimpleNamespace(metadata={})
+
+                def load(path, expected, *, purpose, device):
+                    load_calls.append((purpose, device))
+                    return loaded
+
+                with patch.dict(os.environ, {
+                    "SPIRE_LEARN_RUN_NEURAL_GPU_RUNTIME": "1",
+                    "SPIRE_LEARN_NEURAL_GPU_UUID": GPU_UUID,
+                }):
+                    torch_module = _AssemblyTorch(events)
+                    with _patch_runtime_assembly(
+                        events, torch_module=torch_module, preflight=preflight, loader=load,
+                    ) as (driver, policy):
+                        runtime = runner.create_runtime(
+                            config, purpose=purpose, checkpoint=Path("/tmp/fake-portable"),
+                            action_selection="deterministic",
+                        )
+                        self.assertEqual(load_calls, [(purpose, "cpu")])
+                        self.assertEqual(policy.loaded_weights[0][1], True)
+                        self.assertEqual(runtime.policy_generator.device, "cuda:0")
+                        self.assertEqual(runtime.shuffle_generator.device, "cpu")
+                        self.assertEqual(torch_module.generators[0].seed, config.seed_streams.policy)
+                        self.assertEqual(torch_module.generators[1].seed, config.seed_streams.optimizer)
+                        if purpose == "warm_start":
+                            self.assertIsNotNone(runtime.optimizer)
+                            self.assertEqual(torch_module.adams[0].loaded_states, [])
+                        else:
+                            self.assertIsNone(runtime.optimizer)
+                            self.assertEqual(torch_module.adams, [])
+                        runtime.close()
+                self.assertEqual(driver.close_calls, 1)
+
+    def test_reference_policy_stays_torch_free_and_closes_driver_once(self):
+        from spire_learn.neural import runner
+
+        events = []
+        with _patch_runtime_assembly(events, reject_torch_import=True) as (driver, _policy):
+            runtime = runner.create_runtime(
+                self.selection_config, purpose="evaluate", policy_kind="legal-random",
+                action_selection="seeded-sampling",
+            )
+            self.assertIsNone(runtime.torch)
+            self.assertIsNone(runtime.optimizer)
+            self.assertIsInstance(runtime.policy_generator, random.Random)
+            self.assertEqual(runtime.device_report["device"], "cpu")
+            runtime.close()
+            runtime.close()
+        self.assertNotIn("torch_import", events)
+        self.assertNotIn("nvidia_smi", events)
+        self.assertEqual(driver.close_calls, 1)
+
+    def test_cuda_assembly_failure_preserves_keyboard_interrupt_and_closes_driver_once(self):
+        from spire_learn.neural import runner
+
+        config = replace(self.train_config, device="cuda:0", runtime_gpu_uuid=GPU_UUID)
+        events = []
+        interrupt = KeyboardInterrupt("stop requested")
+
+        def fail_policy(*args, **kwargs):
+            raise interrupt
+
+        with patch.dict(os.environ, {
+            "SPIRE_LEARN_RUN_NEURAL_GPU_RUNTIME": "1",
+            "SPIRE_LEARN_NEURAL_GPU_UUID": GPU_UUID,
+        }):
+            torch_module = _AssemblyTorch(events)
+            with _patch_runtime_assembly(
+                events, torch_module=torch_module, policy_factory=fail_policy,
+            ) as (driver, _policy):
+                with self.assertRaises(KeyboardInterrupt) as caught:
+                    runner.create_runtime(config, purpose="train")
+        self.assertIs(caught.exception, interrupt)
+        self.assertEqual(driver.close_calls, 1)
 
 
 if __name__ == "__main__":

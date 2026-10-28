@@ -52,8 +52,17 @@ Final configs require the explicit `--allow-final` flag. Selection and final
 cases are separate, and evaluation never invokes the optimizer. `calibrate`
 uses an isolated CUDA path with a strict calibration config and qualified UUID.
 The recorded one-use cohort has completed; the command above validates only
-and does not authorize another execution. General `train`/`evaluate` runtime
-construction remains CPU-only until a separate scoped GPU extension is accepted.
+and does not authorize another execution. General `train`/`evaluate` now has
+an authored device-aware extension. Its pure tests do not establish GPU runtime
+compatibility; the bounded two-mode GPU proof remains unrun and unreleased.
+
+General CUDA configs require exactly `device = "cuda:0"` and a `[runtime]`
+table containing only the qualified `gpu_uuid`. Actual execution additionally
+requires the protected GPU opt-in and matching UUID before Torch loads; config
+validation does not initialize hardware. CPU configs and stateless reference
+policies remain available without a CUDA query. Resume requires the original
+config and matching RNG backend/device metadata; warm start and evaluation use
+portable CPU-deserialized weights without restoring training progress.
 
 Exit code `0` means the bounded operation finished and wrote sound artifacts; it
 does not mean the policy learned or won. Code `2` marks invalid configuration or
@@ -118,9 +127,9 @@ The [runtime report](../artifacts/development/neural-combat/task-8/calibration/c
 records exact input identities, timing boundaries, previous preflight failures,
 the one-use continuation, preservation and successful container cleanup.
 The shared legacy diagnostic-sampling budget remains separate from these real
-actor decisions. General GPU training still needs the narrow device-aware
-runner and checkpoint/RNG integration described in the [Task 9 readiness
-record](../artifacts/development/neural-combat/task-9-readiness.md).
+actor decisions. The general device-aware runner and checkpoint/RNG extension
+is described in the [runtime design](superpowers/specs/2026-10-28-neural-gpu-runtime-design.md).
+It still needs its separately reviewed bounded GPU proof.
 No longer learning, frozen selection, final evaluation or new cohort is
 authorized by this documentation.
 

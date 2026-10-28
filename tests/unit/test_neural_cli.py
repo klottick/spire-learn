@@ -32,7 +32,9 @@ class NeuralCliTests(unittest.TestCase):
     def test_help_and_config_validation_are_optional_import_free_in_fresh_process(self):
         program = r'''
 import builtins
+from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 blocked = {"numpy", "gymnasium", "torch", "torchrl", "tensordict", "spire_lab"}
@@ -57,6 +59,20 @@ for mode in ("standalone", "run"):
         if split == "final":
             args.append("--allow-final")
         assert main(args) == 0
+source = Path("configs/neural/standalone.toml").read_text()
+source = source.replace(
+    'manifest_path = "../cases/neural/train.json"',
+    f'manifest_path = "{Path("configs/cases/neural/train.json").resolve()}"',
+).replace(
+    'output_root = "../../artifacts/development/neural-combat/runs/standalone"',
+    f'output_root = "{Path("artifacts/development/neural-combat/runs/config-validation-gpu").resolve()}"',
+)
+source = source.replace('device = "cpu"', 'device = "cuda:0"')
+source += '\n[runtime]\ngpu_uuid = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"\n'
+with tempfile.TemporaryDirectory() as directory:
+    gpu_config = Path(directory) / "standalone-gpu.toml"
+    gpu_config.write_text(source)
+    assert main(["train", "--config", str(gpu_config), "--validate-only"]) == 0
 assert main(["calibrate", "--config", "configs/neural/calibration.toml", "--validate-only"]) == 0
 unittest.defaultTestLoader.discover("tests")
 assert attempts == [], attempts

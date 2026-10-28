@@ -14,6 +14,7 @@ import platform
 import random
 import struct
 import time
+from types import SimpleNamespace
 from typing import Any, Protocol
 import uuid
 
@@ -22,6 +23,7 @@ from spire_learn.neural.artifacts import NeuralWriter
 from spire_learn.neural.checkpoint import (
     identity_payload,
     load_checkpoint,
+    preflight_checkpoint,
     save_checkpoint,
 )
 from spire_learn.neural.collector import Collector, CollectorRecovery
@@ -32,6 +34,13 @@ from spire_learn.neural.contracts import (
     NeuralIdentity,
     Rollout,
     StepRecord,
+)
+from spire_learn.neural.device import (
+    RuntimeDevicePlan,
+    plan_runtime_device,
+    qualify_runtime_device,
+    require_runtime_execution_gate,
+    validate_resume_device,
 )
 from spire_learn.neural.evaluation import REFERENCE_POLICIES, choose_reference
 from spire_learn.neural.ppo import UpdateFault, UpdateMetrics, ppo_update
@@ -307,6 +316,7 @@ def _config_projection(config: NeuralConfig) -> dict[str, object]:
         "observation_version": config.observation_version,
         "replay_version": config.replay_version,
         "device": config.device,
+        "runtime_gpu_uuid": config.runtime_gpu_uuid,
         "seed_streams": {
             "policy": config.seed_streams.policy,
             "optimizer": config.seed_streams.optimizer,
@@ -392,6 +402,10 @@ def _manifest_projection(
         "policy_kind": policy_kind,
         "controller_id": getattr(runtime, "controller_id", policy_kind),
         "action_selection": action_selection,
+        "runtime_device_report": (
+            dict(runtime.device_report)
+            if isinstance(getattr(runtime, "device_report", None), Mapping) else None
+        ),
         "run_noncombat_controller_id": "legal-random-v1" if config.mode == "run" else None,
         "parent_checkpoint": str(getattr(runtime, "parent_checkpoint", None)) if getattr(runtime, "parent_checkpoint", None) is not None else None,
         "allow_final": allow_final,
@@ -858,6 +872,10 @@ def _base_summary(
         "config_sha256": config.config_sha256,
         "manifest_sha256": config.manifest_sha256,
         "environment_revision": config.environment_revision,
+        "runtime_device_report": (
+            dict(runtime.device_report)
+            if isinstance(getattr(runtime, "device_report", None), Mapping) else None
+        ),
         "common_view_fingerprint": config.common_view_fingerprint,
         "run_observation_fingerprint": config.run_observation_fingerprint,
         "case_accounting": accounting,
@@ -1703,7 +1721,9 @@ class _NeuralTrainingRuntime:
         shuffle_generator: Any | None,
         curriculum_rng: random.Random,
         controller_rng: random.Random,
-    budget: Any,
+        device_plan: RuntimeDevicePlan,
+        device_report: Mapping[str, object],
+        budget: Any,
         recovery: CollectorRecovery | None,
         recovered_progress: Mapping[str, object] | None = None,
         parent_checkpoint: Path | None = None,
@@ -1720,6 +1740,8 @@ class _NeuralTrainingRuntime:
         self.shuffle_generator = shuffle_generator
         self.curriculum_rng = curriculum_rng
         self.controller_rng = controller_rng
+        self.device_plan = device_plan
+        self.device_report = dict(device_report)
         self.budget = budget
         self.operation_limits = RuntimeOperationLimits()
         self.collector_recovery = recovery
@@ -1856,6 +1878,9 @@ class _NeuralTrainingRuntime:
             "config_sha256": self.config.config_sha256,
             "manifest_sha256": self.config.manifest_sha256,
             "environment_revision": self.config.environment_revision,
+            "runtime_device": self.device_plan.device,
+            "policy_rng_backend": self.device_plan.policy_rng_backend,
+            "runtime_gpu_uuid": self.device_plan.gpu_uuid,
             "collector_recovery": recovery_projection,
             "cumulative_prefix": counters,
             "policy_kind": "checkpoint",
@@ -1957,13 +1982,11 @@ def create_runtime(
     policy_kind: str = "checkpoint",
     action_selection: str = "seeded-sampling",
 ) -> TrainingRuntime:
-    """Lazily assemble the selected CPU environment, model and training runtime."""
+    """Lazily assemble the selected device, model and training runtime."""
     if not isinstance(config, NeuralConfig):
         raise TypeError("config must be a NeuralConfig")
     if purpose not in {"train", "resume", "warm_start", "evaluate"}:
         raise ValueError("purpose must be train, resume, warm_start, or evaluate")
-    if config.device != "cpu":
-        raise ValueError("Task 7 runtime currently supports the qualified CPU device only")
     if purpose in {"train", "resume", "warm_start"} and (config.operation != "train" or config.split != "train"):
         raise ValueError("training runtimes require config.operation=train and split=train")
     if purpose == "evaluate" and (config.operation != "evaluate" or config.split not in {"selection", "final"}):
@@ -1988,23 +2011,52 @@ def create_runtime(
         if policy_kind == "end-turn-last-v1" and action_selection != "deterministic":
             raise ValueError("end-turn-last-v1 evaluation is deterministic")
 
+    device_plan = plan_runtime_device(config)
+    if (purpose == "evaluate" and policy_kind in REFERENCE_POLICIES
+            and device_plan.device != "cpu"):
+        raise ValueError("stateless reference policies require a CPU runtime config")
+
     selected_identity = _selected_identity(config)
     loaded = None
     recovery = None
     recovered_progress: dict[str, object] = {}
+    load_purpose = None
     if checkpoint is not None:
         load_purpose = "resume" if purpose == "resume" else "warm_start" if purpose == "warm_start" else "evaluate"
-        loaded = load_checkpoint(Path(checkpoint), selected_identity, purpose=load_purpose, device="cpu")
+        preflight = preflight_checkpoint(
+            Path(checkpoint), selected_identity, purpose=load_purpose,
+        )
         if purpose == "resume":
-            recovery, recovered_progress = _checkpoint_recovery(loaded, config)
+            run_metadata = preflight.metadata.get("run_metadata")
+            if not isinstance(run_metadata, Mapping):
+                raise ValueError("resume checkpoint is missing run metadata")
+            validate_resume_device(run_metadata, device_plan)
+            _checkpoint_recovery(SimpleNamespace(metadata=preflight.metadata), config)
 
     needs_torch = not (purpose == "evaluate" and policy_kind in REFERENCE_POLICIES)
     torch = None
     if needs_torch:
+        require_runtime_execution_gate(device_plan)
         import torch as torch_module
 
         torch = torch_module
+        device_report = qualify_runtime_device(torch, device_plan)
         from spire_learn.neural.model import build_policy
+    else:
+        device_report = qualify_runtime_device(None, device_plan)
+
+    if checkpoint is not None:
+        assert load_purpose is not None
+        loaded = load_checkpoint(Path(checkpoint), selected_identity, purpose=load_purpose, device="cpu")
+        if purpose == "resume":
+            loaded_metadata = getattr(loaded, "metadata", None)
+            if not isinstance(loaded_metadata, Mapping):
+                raise ValueError("resume checkpoint metadata must be a mapping")
+            run_metadata = loaded_metadata.get("run_metadata")
+            if not isinstance(run_metadata, Mapping):
+                raise ValueError("resume checkpoint is missing run metadata")
+            validate_resume_device(run_metadata, device_plan)
+            recovery, recovered_progress = _checkpoint_recovery(loaded, config)
 
     from spire_learn.neural.envs import make_driver
     driver = make_driver(config, config.cases)
@@ -2022,16 +2074,19 @@ def create_runtime(
             policy_generator = random.Random(config.seed_streams.policy)
         else:
             assert torch is not None
-            policy = build_policy(driver.schema, config.model, seed=config.seed_streams.policy, device="cpu")
+            policy = build_policy(
+                driver.schema, config.model, seed=config.seed_streams.policy,
+                device=device_plan.device,
+            )
             if loaded is not None:
                 policy.load_state_dict(dict(loaded.model_tensors), strict=True)
                 training_state = loaded.metadata.get("training_state")
                 if (purpose in {"resume", "evaluate"} and isinstance(training_state, Mapping)
                         and training_state.get("behavior_policy_version") is not None):
                     policy._behavior_policy_version = training_state["behavior_policy_version"]
-            torch_generator = torch.Generator(device="cpu")
+            torch_generator = torch.Generator(device=device_plan.policy_generator_device)
             torch_generator.manual_seed(config.seed_streams.policy)
-            shuffle_generator = torch.Generator(device="cpu")
+            shuffle_generator = torch.Generator(device=device_plan.shuffle_generator_device)
             shuffle_generator.manual_seed(config.seed_streams.optimizer)
             if purpose == "resume":
                 assert loaded is not None and loaded.rng_state is not None
@@ -2092,6 +2147,8 @@ def create_runtime(
             shuffle_generator=shuffle_generator,
             curriculum_rng=curriculum_rng,
             controller_rng=controller_rng,
+            device_plan=device_plan,
+            device_report=device_report,
             budget=budget,
             recovery=recovery,
             recovered_progress=recovered_progress,

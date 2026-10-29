@@ -102,8 +102,17 @@ CPU/GPU probes showed no GPU benefit. The [calibration report](../artifacts/deve
 records the exact boundaries, prior failures, continuation guard, and cleanup.
 These results do not establish policy strength or general GPU training support.
 The general train/evaluate runtime now has an authored device-aware extension
-with fake-driven coverage; its bounded two-mode GPU proof remains unrun and
-unreleased. Task 8 evidence is accepted after parent and independent review;
+with fake-driven coverage and an accepted bounded RTX 5090 proof. The single
+reviewed cohort passed exactly two tests with zero skips: 64 actions (32 per
+mode), 40 learned and 24 fixed-controller decisions, five resets and eight
+accepted Adam steps, with no simulator faults or uncertain effects. Both modes
+saved final checkpoints and passed same-backend state/RNG/recovery and retained-frame
+CPU portability checks. All 20 closed evidence files verified, and the owned
+container was removed. The [retained runtime
+review](../artifacts/development/neural-combat/task-9/gpu-proof/runtime-review-gpu-proof-20261029-e.md)
+records exact limits and prior failed attempts. This is bounded plumbing evidence;
+no longer learning, held-out selection, final evaluation or additional cohort is
+authorized. Task 8 evidence is accepted after parent and independent review;
 no additional cohort is authorized by that evidence.
 
 The single approved Task 7 CPU training smoke completed once under the parent's

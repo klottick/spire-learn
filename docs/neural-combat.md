@@ -54,7 +54,14 @@ uses an isolated CUDA path with a strict calibration config and qualified UUID.
 The recorded one-use cohort has completed; the command above validates only
 and does not authorize another execution. General `train`/`evaluate` now has
 an authored device-aware extension. Its pure tests do not establish GPU runtime
-compatibility; the bounded two-mode GPU proof remains unrun and unreleased.
+compatibility. The single reviewed GPU proof has now passed both standalone
+B4/h8 and Run B1/h32: two tests, zero skips, 64 environment actions, 40 learned
+decisions and eight accepted optimizer steps. Run contributed eight learned
+and 24 fixed-controller decisions. Each mode made one finite changed-weight
+update, saved its checkpoint and passed exact same-backend state/RNG/recovery
+comparisons plus retained-frame CPU portability. The [retained review](../artifacts/development/neural-combat/task-9/gpu-proof/runtime-review-gpu-proof-20261029-e.md)
+records the closed evidence and limitations. No held-out gameplay or longer
+learning has run.
 
 General CUDA configs require exactly `device = "cuda:0"` and a `[runtime]`
 table containing only the qualified `gpu_uuid`. Actual execution additionally
@@ -129,7 +136,11 @@ the one-use continuation, preservation and successful container cleanup.
 The shared legacy diagnostic-sampling budget remains separate from these real
 actor decisions. The general device-aware runner and checkpoint/RNG extension
 is described in the [runtime design](superpowers/specs/2026-10-28-neural-gpu-runtime-design.md).
-It still needs its separately reviewed bounded GPU proof.
+Its bounded two-mode GPU proof is accepted after parent and independent
+source/evidence review. Saved elapsed prefixes end at the checkpoint snapshot;
+post-snapshot serialization/finalization/close time is outside the saved prefix.
+The proof's shared deadline includes that work in this attempt; it does not
+establish whole-lifecycle cumulative charging across future resumes.
 No longer learning, frozen selection, final evaluation or new cohort is
 authorized by this documentation.
 

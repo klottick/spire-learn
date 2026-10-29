@@ -35,7 +35,13 @@ records performance, memory, cleanup and qualifications. Task 8 is accepted
 after parent and independent source/evidence review. These are bounded plumbing and performance results;
 no playing-strength or frozen-policy evaluation is claimed. The general
 training runner now has an authored device-aware extension with pure-test
-coverage; its bounded two-mode GPU proof remains unrun and unreleased.
+coverage. The reviewed bounded GPU proof passed both standalone and normal Run
+mode: two tests, 64 environment actions, 40 learned decisions and eight accepted
+optimizer steps. Both final checkpoints passed same-backend state restoration
+and CPU portability comparisons. See the [retained runtime
+review](artifacts/development/neural-combat/task-9/gpu-proof/runtime-review-gpu-proof-20261029-e.md).
+This establishes bounded plumbing; longer learning and held-out selection remain
+unapproved, and no playing-strength claim is made.
 See the [retained CPU runtime
 report](artifacts/development/neural-combat/task-7/task-7-training-smoke-runtime-report.md),
 [development and evaluation checks](docs/development.md), and [neural combat

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -184,6 +185,50 @@ class NeuralDeviceTests(unittest.TestCase):
         self.assertEqual(report["compiled_architecture"], "sm_120")
         self.assertEqual(report["allocator_cap_bytes"], 8 * 1024**3)
         json.dumps(report, allow_nan=False)
+
+    def test_cuda_qualification_normalizes_version_subclasses_for_neural_artifacts(self):
+        device = _device_module()
+        plan = device.plan_runtime_device(_cuda_config())
+        torch = FakeTorch()
+
+        class FakeTorchVersion(str):
+            pass
+
+        torch.__version__ = FakeTorchVersion(device.TORCH_VERSION)
+        torch.version.cuda = FakeTorchVersion(device.TORCH_CUDA_VERSION)
+        inventory = SimpleNamespace(stdout=f"{GPU_UUID}, {GPU_NAME}, {GPU_DRIVER}, 32768, 16384\n")
+        with patch.object(device.subprocess, "run", return_value=inventory):
+            report = device.qualify_runtime_device(torch, plan)
+
+        from spire_learn.neural import artifacts
+
+        with tempfile.TemporaryDirectory() as temporary:
+            writer = artifacts.NeuralWriter.create(Path(temporary), "version-metadata")
+            try:
+                with patch.object(artifacts, "collect_provenance", return_value={
+                    "learner": None,
+                    "gym_checkout": None,
+                    "distributions": {},
+                    "native_build_info": None,
+                }):
+                    writer.start(
+                        {"device": "cuda:0"},
+                        {"runtime_qualification": report},
+                    )
+            finally:
+                writer.close()
+
+            persisted = json.loads(
+                (Path(temporary) / "version-metadata" / "manifest.json").read_text(encoding="utf-8")
+            )["manifest"]["runtime_qualification"]
+        self.assertIs(type(report["torch_version"]), str)
+        self.assertEqual(report["torch_version"], device.TORCH_VERSION)
+        self.assertIs(type(report["torch_cuda_version"]), str)
+        self.assertEqual(report["torch_cuda_version"], device.TORCH_CUDA_VERSION)
+        self.assertIs(type(persisted["torch_version"]), str)
+        self.assertEqual(persisted["torch_version"], device.TORCH_VERSION)
+        self.assertIs(type(persisted["torch_cuda_version"]), str)
+        self.assertEqual(persisted["torch_cuda_version"], device.TORCH_CUDA_VERSION)
 
     def test_cuda_qualification_rejects_cuda_versions_that_only_share_the_13_0_prefix(self):
         device = _device_module()

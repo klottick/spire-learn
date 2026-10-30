@@ -101,10 +101,15 @@ class RuntimeOperationLimits:
 
     max_updates: int | None = None
     monotonic_deadline: float | None = None
+    max_environment_actions: int | None = None
 
     def __post_init__(self) -> None:
         if self.max_updates is not None and (type(self.max_updates) is not int or self.max_updates < 0):
             raise ValueError("max_updates must be a non-negative integer or None")
+        if self.max_environment_actions is not None and (
+            type(self.max_environment_actions) is not int or self.max_environment_actions < 0
+        ):
+            raise ValueError("max_environment_actions must be a non-negative integer or None")
         if self.monotonic_deadline is not None:
             if type(self.monotonic_deadline) not in (int, float):
                 raise TypeError("monotonic_deadline must be a primitive number or None")
@@ -595,7 +600,7 @@ def _collection_budget_stop(config: NeuralConfig, runtime: Any) -> str | None:
     local = _current_collection(runtime)
     local_env = local.attempted_environment_slots if local is not None else 0
     local_learned = local.learned_decisions if local is not None else 0
-    remaining_environment = config.budgets.max_environment_actions - env_prefix - local_env
+    remaining_environment = _collection_environment_ceiling(config, runtime) - local_env
     remaining_learned = config.budgets.max_training_decisions - learned_prefix - local_learned
     if remaining_environment < config.rollout_rows:
         return "environment_action_budget"
@@ -613,6 +618,21 @@ def _collection_budget_stop(config: NeuralConfig, runtime: Any) -> str | None:
     if max_actor_rows < 1:
         return "optimizer_step_budget"
     return None
+
+
+def _collection_environment_ceiling(config: NeuralConfig, runtime: Any) -> int:
+    """Collector-local attempt ceiling after subtracting the restored prefix."""
+    prefix = getattr(runtime, "recovered_progress", {})
+    if not isinstance(prefix, Mapping):
+        raise ValueError("runtime recovered progress must be a mapping")
+    restored = prefix.get("attempted_environment_slots", 0)
+    if type(restored) is not int or restored < 0:
+        raise ValueError("runtime recovered environment-action prefix is invalid")
+    ceiling = config.budgets.max_environment_actions
+    operational = _operation_limits(runtime).max_environment_actions
+    if operational is not None:
+        ceiling = min(ceiling, operational)
+    return max(0, ceiling - restored)
 
 
 def _collection_learned_ceiling(config: NeuralConfig, runtime: Any) -> int:
@@ -1155,7 +1175,7 @@ def train(
             try:
                 rollout = runtime.collector.collect(
                     max_learned_decisions=_collection_learned_ceiling(config, runtime),
-                    max_env_actions=config.budgets.max_environment_actions - int(prefix.get("attempted_environment_slots", 0)),
+                    max_env_actions=_collection_environment_ceiling(config, runtime),
                     policy_version=_current_policy_version(runtime),
                 )
             except BaseException as error:

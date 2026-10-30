@@ -1,0 +1,1793 @@
+{
+  "schema": "spire-learn-sustained-campaign-v1",
+  "state": "prepared_not_released",
+  "base_commit": "930951cb77329273e06ece73d5ba88a2f18def19",
+  "runtime_pins": {
+    "python": "3.12",
+    "torch": "2.14.1+cu130",
+    "gym_revision": "533dad1c8aec86df624b3742b6b3ad1dbf1d0033",
+    "common_fingerprint": "02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78",
+    "run_observation_fingerprint": "30905db1b7a520482d3ea8aa2e63ddb7f78b7c081de89d87268151f29cf4c7f8",
+    "cuda_lock_sha256": "92022c4b8f68dd7c5bad091b558744ffb30c627292135b7ab18a179f2fd65b45",
+    "native_extension_sha256": "071069cea66fbf0bc7277002c6b8a21f138194cf692326595109a6741a5178e9",
+    "container_image": "python@sha256:57d96f71de145a98e7ceca18ee4ade77bba4103a33a72dfaea026b23625c6bf0",
+    "gpu_uuid": "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d",
+    "train_device": "cuda:0",
+    "selection_device": "cpu",
+    "cpu_threads": 4,
+    "interop_threads": 1,
+    "host_memory_bytes": 8589934592,
+    "gpu_memory_bytes": 8589934592,
+    "minimum_free_gpu_bytes": 12884901888,
+    "pids_max": 512,
+    "nvidia_cdi_profile": {
+      "path": "configs/runtime/task9-nvidia-cdi-profile.json",
+      "raw_sha256": "83214eaa2b2568accc8350ac1cd05955d5cfdf1594a6234d383863d6ceabe937",
+      "profile_id": "task9-nvidia-cdi-1.20.0-595.91.07-v1"
+    }
+  },
+  "budgets": {
+    "campaign": {
+      "whole_wall_seconds": 28800,
+      "one_runtime_job_at_a_time": true
+    },
+    "profile": {
+      "whole_wall_seconds": 900,
+      "environment_attempts": 8192,
+      "sample_rows": 16384,
+      "optimizer_attempts": 256,
+      "trace_episodes": 8,
+      "trace_actions_per_episode": 32,
+      "trace_decision_bytes": 65536,
+      "trace_total_bytes": 16777216
+    },
+    "replica": {
+      "whole_wall_seconds": 6000,
+      "learned_decisions": 500000,
+      "environment_attempts": 1000000,
+      "optimizer_attempts": 32768,
+      "max_segments": 256,
+      "training_sample_attempts": 500000
+    },
+    "segment": {
+      "whole_wall_seconds": 600,
+      "environment_attempts": 4096,
+      "standalone_updates": 8,
+      "run_updates": 32,
+      "initial_reset_slots": 16,
+      "reset_rule": "environment_attempts_plus_initial_slots_per_admitted_segment"
+    },
+    "evaluation": {
+      "whole_wall_seconds": 2700,
+      "operations": 704,
+      "reset_slots_per_operation": 1,
+      "actions_per_operation": 256,
+      "reserved_action_slots": 180224,
+      "optimizer_attempts": 0
+    },
+    "shared": {
+      "whole_wall_seconds": 1200
+    },
+    "storage": {
+      "new_bytes": 12884901888,
+      "cumulative_bytes": 42949672960,
+      "minimum_free_bytes": 32212254720,
+      "pruning": false
+    },
+    "unchanged_guards": {
+      "consumed_ids": 65536,
+      "event_log_bytes": 67108864
+    }
+  },
+  "parents": {
+    "standalone-b": {
+      "path": "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/training/standalone-b/20261030T210525Z-c7d37fcacba143709d2e08ca9eb9c21c/checkpoint-final",
+      "inventory": {
+        "metadata.json": {
+          "sha256": "d8c5c7e9da0262134cd6e383d76654bbd57517a75171becb5d26fde1f0dd2ff7",
+          "size_bytes": 17150
+        },
+        "model.pt": {
+          "sha256": "fc44f89afd409abd68bf2397d28c11f49584ea2c017f090e6da0b2408c16ecd9",
+          "size_bytes": 1089216
+        },
+        "training.pt": {
+          "sha256": "ecff01b35c77c9da4aae7a4ff0506276aa91db36a9f972b725ba2ce061ada6fb",
+          "size_bytes": 2211765
+        }
+      }
+    },
+    "run-b": {
+      "path": "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/training/run-b/20261030T211527Z-ae4d78e1c60f4788834657f31a5bb144/checkpoint-final",
+      "inventory": {
+        "metadata.json": {
+          "sha256": "e5df0bf5f052c6f579cfd93afe1716da3b099835a71cd73313541fd21877f252",
+          "size_bytes": 17101
+        },
+        "model.pt": {
+          "sha256": "9dfe0eca385c89aeb62e9cfb9f130ea7a9abc2574d9216554c5c1a0f412ee452",
+          "size_bytes": 1089216
+        },
+        "training.pt": {
+          "sha256": "c483f22130ed1f92a8797d93528ea8d47250b5620c6b56d931d441d2c69ae1b4",
+          "size_bytes": 2211765
+        }
+      }
+    }
+  },
+  "diagnostic_checkpoints": {
+    "standalone-a": {
+      "path": "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/training/standalone-a/20261030T204522Z-bb8ee549fe1a4817bdc444bf474327c9/checkpoint-final",
+      "inventory": {
+        "metadata.json": {
+          "sha256": "59e9cbd80d7696298759169640814756d8102b081b21d4c9495b913332ba6e2d",
+          "size_bytes": 17150
+        },
+        "model.pt": {
+          "sha256": "e75ce4a34a46e3bc076548b9ef8ca6caf80dc7e1a9e56c9ca8da41481b1ab557",
+          "size_bytes": 1089216
+        },
+        "training.pt": {
+          "sha256": "7a887f788f7904c25445fb598360d224ff4e14527e449b7786b85a4888d81036",
+          "size_bytes": 2211765
+        }
+      }
+    }
+  },
+  "sources": {
+    "configs/cases/neural/train.json": "1bbb41954481cc411dfa9e5ecc5d1cd63d6ba568a81f256269a0bc4163640ed4",
+    "configs/cases/neural/final.json": "5b300377431bf16821799bdbd0a706ed634d3c568323a8a2e2ac1c59e58572b9",
+    "configs/neural/experiments/task9-v1/study.json": "c4939fc7d882fadb265fbc5a4ced42c7809e6482720dc4bac7698188aa14f555",
+    "configs/neural/experiments/task9-v1/standalone-b.toml": "c1e3eda0e7bbe7140022d1832cb694455a17c6e007eae2935e6cec0e4cf8b3a4",
+    "configs/neural/experiments/task9-v1/run-b.toml": "a8c1412d4977c90645c2e122f43e4f178beb1524b02e0f82d73a23bb2ab1c989",
+    "configs/neural/experiments/task9-v1/selection/case-00-standalone.toml": "29910b52ff03c81f55ec71dfcc2702b6ee74a0f42804baa95183b8d1b00f2430",
+    "configs/neural/experiments/task9-v1/selection/case-00-run.toml": "987348367c6a286409a8f55b3bb79f46735edd41cd82239f9b87e1dc2b96ae6a",
+    "artifacts/development/neural-combat/sustained-v1/preparation/parent-checkpoints.json": "72237b90c6211fb24900f7481aa7b101e9a8da208d16ba68b6fa7f180fb237e2"
+  },
+  "files": {
+    "configs/cases/neural/sustained-v1/train.json": {
+      "raw_sha256": "a8054f166dfd9af8ff0939ad26e7b030345fcb58395aac003e02a2cb29ec2d76",
+      "size_bytes": 117222
+    },
+    "configs/cases/neural/sustained-v1/selection.json": {
+      "raw_sha256": "a06eca99f4603c86630bab73004003f56d5874621b7ee660912767955df5249b",
+      "size_bytes": 56368
+    },
+    "configs/neural/experiments/sustained-v1/standalone-1.toml": {
+      "raw_sha256": "6579ef05b2f3ea90ce537c443ac69e1907b75476e104c75cf15d603de872a0ae",
+      "size_bytes": 1851
+    },
+    "configs/neural/experiments/sustained-v1/run-1.toml": {
+      "raw_sha256": "ae7f3f0595bd37dd9ae406d9d631e18a372ac62782e10d0f4ac6c1a190981e04",
+      "size_bytes": 2012
+    },
+    "configs/neural/experiments/sustained-v1/standalone-2.toml": {
+      "raw_sha256": "7233c040bc55bc31f7cbc10a3684f2b154f54989e7f1a613a65b60a289ddada7",
+      "size_bytes": 1851
+    },
+    "configs/neural/experiments/sustained-v1/run-2.toml": {
+      "raw_sha256": "375eb48e27e434e267f6c18bac3692bb87a56c975f9faecc93da218dfeec24fb",
+      "size_bytes": 2012
+    },
+    "configs/cases/neural/sustained-v1/selection/case-00.json": {
+      "raw_sha256": "07d7f977ba0b036ca3ba53408b0c820b965682014fe8e54eb017ce46f90cb139",
+      "size_bytes": 1521
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-00.toml": {
+      "raw_sha256": "996f9bc14062d324360f6fc46e2208042ead8aac0f4562c7f4db0fbfeda14f88",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-01.json": {
+      "raw_sha256": "9f4369f4a8d265784bfb0998c6b225a95a1f141a94ca97985e6dc88c09b6c28e",
+      "size_bytes": 1522
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-01.toml": {
+      "raw_sha256": "59392b105b58fdc8e11b3ffa748b4c360b32d03a679ab9dea0471afcbc7b17d6",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-02.json": {
+      "raw_sha256": "1785e37da2051161dac46ea747a8d3d496936720df7e90993b85c2976f749c2f",
+      "size_bytes": 1523
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-02.toml": {
+      "raw_sha256": "ace53663273aa501921dfe22ca688cc6357f961fe74e5d29a48257cc4bfb97ce",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-03.json": {
+      "raw_sha256": "cea2dd9762161ce559152f9af8c36b48bf7f196a69bdafc611cdf614cdbb7886",
+      "size_bytes": 1526
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-03.toml": {
+      "raw_sha256": "d57ac8ddbff01cfaf665302457d44c1724c8851458ed8b67fc4c107c7ef80716",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-04.json": {
+      "raw_sha256": "cb0c8b5da84c2da4a1954d8d43f43b7ed801436fbd7267483659e186a2c9be5d",
+      "size_bytes": 1525
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-04.toml": {
+      "raw_sha256": "60716d7e64cecc8ff5fcd7c5f735f1b00d351824055ac7cd5d1e296bc973bc0f",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-05.json": {
+      "raw_sha256": "e1958d8297e6fabb426c424edcbbc2708c832afc895b91e07452602ddd497e23",
+      "size_bytes": 1528
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-05.toml": {
+      "raw_sha256": "92e03eca25c4f0b386bded462ca1b12cff8921ff9189f952b4b7428602a6c6a5",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-06.json": {
+      "raw_sha256": "e53af6c7acad5173acaddfc38e02f09ff481687332ca8862e5cfdcfd95efef1d",
+      "size_bytes": 1525
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-06.toml": {
+      "raw_sha256": "88711cd86df751d998090e3cede353cddf737434fb24e710bf7b4395e1da32b8",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-07.json": {
+      "raw_sha256": "03bc68e11d9866993cd0216f2586eb9a0b935099c2bd36fa96c456cfe9234c05",
+      "size_bytes": 1525
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-07.toml": {
+      "raw_sha256": "f6648497ca9956e6d490dbfb00fd3f296b30d90b75c5f39db7714cc3e6f76e11",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-08.json": {
+      "raw_sha256": "de14bfc1974cb1944adda94252cafdcce2930111dc50c876578085f3e9d9ce5b",
+      "size_bytes": 1523
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-08.toml": {
+      "raw_sha256": "309ae42b3ee80ac1c84b723ba2f05ed37c822e588bf658a151b66ee8b5ce664a",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-09.json": {
+      "raw_sha256": "31a8701265ad8a16c6f469191206cc04bc8783dc070b1d5c2eac9ee2961ba1d3",
+      "size_bytes": 1528
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-09.toml": {
+      "raw_sha256": "4f3d4029a6fb2729244dbe286634c6e09bf93e3b25cc45d9fd8492580d44005f",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-10.json": {
+      "raw_sha256": "d6089e291f63aeb500d71795a3727ff06f5535a6389aece66db1922879e66806",
+      "size_bytes": 1522
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-10.toml": {
+      "raw_sha256": "43ee77154f2cfd411bcb309fa41e25bd979f59f6d254fd8a7e17ee2002ba34a2",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-11.json": {
+      "raw_sha256": "16f67526440acd0490ed6193926a5329aff54cc35de040f1d61f094deec01692",
+      "size_bytes": 1523
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-11.toml": {
+      "raw_sha256": "66d983cf10eba73acec7fb30cc37f6377753fe172b87a904c9756ae5d2bec6ef",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-12.json": {
+      "raw_sha256": "a4cfc5f64b31cb3b4da7b1aef966489dba2ac9888d4647496f0fb32f55646681",
+      "size_bytes": 1524
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-12.toml": {
+      "raw_sha256": "d3110493e2c0fd14320c867987e2edceed98e027c7fc728172f95ae8a9044163",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-13.json": {
+      "raw_sha256": "16bcec94b5f13ba363c12f053e2e1816ad5748a698695651c376c120f64460ce",
+      "size_bytes": 1521
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-13.toml": {
+      "raw_sha256": "f9a1ad3ff1b89ea265ec4e2f69cb011f1ff515180551654f06eb572ce9149287",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-14.json": {
+      "raw_sha256": "1fae3494adf9a7dbc3ee50d110f06766a3d382185a547b2fcc3e45442167d14e",
+      "size_bytes": 1522
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-14.toml": {
+      "raw_sha256": "10c01d85d82da0b0216cb89555057054898ed9ce67bdab99519fccd74d7a11db",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-15.json": {
+      "raw_sha256": "8c502e72111f4d04f6d7481451a8f20ea447be6b90d7b5811461dde099ccc99e",
+      "size_bytes": 1523
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-15.toml": {
+      "raw_sha256": "8cacc24747aed8a90931547bf077376db664b67fab333c27b99cb7450905eba3",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-16.json": {
+      "raw_sha256": "04f43dad91ba8fbfe058c090463d45d40153eaf7a83b769d91274285d14be95e",
+      "size_bytes": 1691
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-16.toml": {
+      "raw_sha256": "644ed164c5e921a1a8b92a2aed9c3d40dcc55da67792ab2c986ff97ebabcdc51",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-17.json": {
+      "raw_sha256": "806602dc693eafd9d5005fdc45182655faf4a292f90f387d46550ce26f4701f1",
+      "size_bytes": 1693
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-17.toml": {
+      "raw_sha256": "044196ea7d9b54a69250978fbb533068d982ceccb60bc80462a466e9e8a57db6",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-18.json": {
+      "raw_sha256": "28110e6342a5a94b00d7968656aa44670030758570e06c46336b389e1e2d6de7",
+      "size_bytes": 1695
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-18.toml": {
+      "raw_sha256": "dda2d800d1a542b5ce08f906b3b85228048c5caafa3d787a4eaaa84db967fd1b",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-19.json": {
+      "raw_sha256": "1c47f9e91d1e7a7413bd803cd06eef8eeb52bbf701c3a0929dbaa1668ce8ba74",
+      "size_bytes": 1695
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-19.toml": {
+      "raw_sha256": "bdf067c0ca914dca1f4f9c795696bdc37d8ffb72bd630f1a54098b29aa8a0291",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-20.json": {
+      "raw_sha256": "581679df8e765516618b4c704aff016d86c070b9fc3727041f94a812425e5091",
+      "size_bytes": 1693
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-20.toml": {
+      "raw_sha256": "d855b677a48e9d8d6f617d03f2764925ff6da84bd31c5e40124a112c4d4d1563",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-21.json": {
+      "raw_sha256": "dd515241cb4863a1ce2fd332d2a23c24bfffd991385745429317924e3341b47e",
+      "size_bytes": 1692
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-21.toml": {
+      "raw_sha256": "2868401c959574275d05f9a0d39f8675057ca2d378a79503138846fc8bd8ef1b",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-22.json": {
+      "raw_sha256": "ceb90cd6a8be1273589730997c6f8d3c0ed33e5df1acfd2de3b11a3da11ddb2b",
+      "size_bytes": 1693
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-22.toml": {
+      "raw_sha256": "15493aafaeb7acc5bad282b7b61acf07defafc12b051be8883e63c00588135aa",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-23.json": {
+      "raw_sha256": "d2e0410cbf1d30ee05be03d7aecbbd38af36cd38844355017bc642352be9e2f0",
+      "size_bytes": 1694
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-23.toml": {
+      "raw_sha256": "ddcecff20ec0f16213653a2165c3798202a77526b8a501a45e02cb4404a8f06d",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-24.json": {
+      "raw_sha256": "c15c76df9e886cf836b74823c1ddb4654b9674d6eed5a68b8afb3ba704319f63",
+      "size_bytes": 1516
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-24.toml": {
+      "raw_sha256": "4a4bc3cd24b19aac48570607b994f3c0c1df0de7f2bb4ad9babb40451097b43d",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-25.json": {
+      "raw_sha256": "539451c122ca1269c4a94e83ae422e8763b1bc81aca90667d8ffcbee90101350",
+      "size_bytes": 1520
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-25.toml": {
+      "raw_sha256": "10f46f91c9d8131fb2dc41d2ffcf7839b342a0c2951a585dcbd5396249b01315",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-26.json": {
+      "raw_sha256": "53e33a4687478384d852b16981bc51e4b63d00a98927e61027cd3114e04a3bcf",
+      "size_bytes": 1522
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-26.toml": {
+      "raw_sha256": "dfc00cb6c1b7472d57525c3091d5f703515b2b0ccd7f8558b27ea1436d6e0475",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-27.json": {
+      "raw_sha256": "dfc5d423845a739ef1926331d4f25906817c740be5ba3d0bee97bcb5fc6de462",
+      "size_bytes": 1519
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-27.toml": {
+      "raw_sha256": "53ccf43e3505e9cfb9395f7418c450af2a16c0f841c63306a4b685867c84ee86",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-28.json": {
+      "raw_sha256": "91db48b5d0d2e94b8f94e9b5e552d7ff4ce8edf8b7d7e9bbe5589ffb7ef4dc0f",
+      "size_bytes": 1522
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-28.toml": {
+      "raw_sha256": "10c88bb8c5592e9688aafa03c63dd1da11ea3faa66f36e57bf29ac48b6bb2925",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-29.json": {
+      "raw_sha256": "5dd80c9a7339cdd98d8d434a506486df374926dc4bfdce70d9692f89dffabda5",
+      "size_bytes": 1516
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-29.toml": {
+      "raw_sha256": "15f425202c99936a43b43390902ad1d41b89abc17fb6c206ef1431091b37c460",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-30.json": {
+      "raw_sha256": "09412d374f9485406a0dd9e1a3870db2859d0cb8119a01677340ad0dc6422a0d",
+      "size_bytes": 1517
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-30.toml": {
+      "raw_sha256": "9335dd43d58d6756daaa7a1307f1abc87fdb88b0b841684d1084f80f7066b998",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-31.json": {
+      "raw_sha256": "08562b89dcc906b9a56cf1f605dd073bfe010f75860af1c8cef76d50a3486428",
+      "size_bytes": 1518
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-31.toml": {
+      "raw_sha256": "459888348748da4150302184483c9b76dc9adc56f137a4435129b5f5ab423116",
+      "size_bytes": 1812
+    },
+    "configs/cases/neural/sustained-v1/selection/case-32.json": {
+      "raw_sha256": "c0cf92a3f6941d3011d771b4dfabf0d5b0d5ef7d3724368d1f8403b99a130935",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-32.toml": {
+      "raw_sha256": "0210e33fac22031f3796927675f3ddc7dadc33a4294790e953aaec656a056154",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-33.json": {
+      "raw_sha256": "002bc7598918bda31b46f7cd2ee42bc35554bb5f3a7dcfe790bfe467b56d6191",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-33.toml": {
+      "raw_sha256": "2a8e7e5889a693c4a7401becca157d14039eeb16b9e7ab71acad0c271a48a065",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-34.json": {
+      "raw_sha256": "1ae319124cff5917c2269474e8ac06d5954c9b47dc4fb81a995fef5d3d587a16",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-34.toml": {
+      "raw_sha256": "01cd15fc309ec6e843e41c9dc7703a0f9d92b6d151fd50cc024935b7f5cec372",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-35.json": {
+      "raw_sha256": "8d75106e7bb73cc63c8b007078e0ea243ae4beb51274c6ff8a87190df30d0a46",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-35.toml": {
+      "raw_sha256": "3a2e49ac47aadf17b7c693f3197aabe38885097de2ce1aedbc8c378af956009e",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-36.json": {
+      "raw_sha256": "f80058cb791c9187418c2064ebe47dd1140aa2c067426d98d071af35b1cf8d6c",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-36.toml": {
+      "raw_sha256": "4b8ab60398103b262ca0c80528693eadb2508fed32be9a55e15a60b18f9421b4",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-37.json": {
+      "raw_sha256": "c306ba56b54cd5e38377eb0b2541b52aa859e6c4c2c5f11f11a73616be5778df",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-37.toml": {
+      "raw_sha256": "01655cd144f9bb92ab6177d3e621152c52756b42b02e6113a59ef7d13c440b24",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-38.json": {
+      "raw_sha256": "51a0970d162d9c3863f7ad4e4ff49fc7a76c258bc124f9f62eb9f77ecefa2e25",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-38.toml": {
+      "raw_sha256": "c189f0c12bd0610beeb33f631d366b0da04630f3bb281bec42f74118f77f2de3",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-39.json": {
+      "raw_sha256": "0556e426ed6f1bb0f2bd18bb540f8488d38b69a69ddcd5f5cf0ac05f05a09f33",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-39.toml": {
+      "raw_sha256": "4338ed5486cf956f1f3442fe958545e8298f3a50fb2dd0c3884b137f77f05d69",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-40.json": {
+      "raw_sha256": "ec03cd3c8e920a29e408fb53e73436fdd7228b89882d813d1962894d64025f19",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-40.toml": {
+      "raw_sha256": "2b98b96a0756e53978bd12acc717fd62c49f66e76bfbd6a42dd16e6c787f3d8a",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-41.json": {
+      "raw_sha256": "726fef4570f17a836d337256b5db42a97f98f0ca0fb290b92e0917de7c16fb7f",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-41.toml": {
+      "raw_sha256": "aa09f06883989c7b17ac2e52640f1caae0f695a97902c0c72611cef6a3a8db42",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-42.json": {
+      "raw_sha256": "d7c071707e66e7f27e7b70abf2688580b094f80c4f4b37f050a5d01d312065d3",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-42.toml": {
+      "raw_sha256": "44f013f4a994cba802bafff33a75593c99502d68663d91ff3bde28fc3da7c228",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-43.json": {
+      "raw_sha256": "21b82f592c4c8012ab5bfdf952a80eb1694e0986a2f7ec7b09efc57f63b96d21",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-43.toml": {
+      "raw_sha256": "3ca0428e75a0e3437d842635d5df99177ca482ab40ed02e02f12b38d808e86c7",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-44.json": {
+      "raw_sha256": "26aa13afb872dba164e6de0e79f2e09ffde000c31c1f51c2a5c1407100215b18",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-44.toml": {
+      "raw_sha256": "719b6bdc37877e7af4223bc181d7cbd2a74d5adf263cbf53cc0737ca9369e274",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-45.json": {
+      "raw_sha256": "c4946921c3115fb97dbddfb7549aa276e3989f28d0e00fdf60bdedd7b3d29898",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-45.toml": {
+      "raw_sha256": "a7450afc28d096b13c48f4e1d58bb142e2b8f4faf19440e939e67e8f17c37e18",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-46.json": {
+      "raw_sha256": "7e3903c49b97ccb88bfb8633ba09fbb0e13163390a1e4bc726a04dc0b295d0e0",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-46.toml": {
+      "raw_sha256": "f2b1f58d629812f21aa1cf018b09bc5b44d26c423acabd423bcbe6e1fa788a69",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-47.json": {
+      "raw_sha256": "46650cc280307567b86d5ef4249e4ed049e3ce2f94f7aa4502da0e9b7d60b11f",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-47.toml": {
+      "raw_sha256": "271ec92b2be37cd434e78bb6f9c8dca77b937ac2e50780435a758a3d6db9b36a",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-48.json": {
+      "raw_sha256": "3d17c49c4eb80137a25f60318e9fd22029c02e0d6cd53f3e3ba9a41866ebc1dd",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-48.toml": {
+      "raw_sha256": "ade6b997fb0fc0befd0e21d1fdbbab0adae5c8fc79d1b287921bd6cc0fd10bd3",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-49.json": {
+      "raw_sha256": "7dc335c51ce3980bec6ad62d5347c736228d270cf2f1e47c15ae5463a3506f42",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-49.toml": {
+      "raw_sha256": "e95ee424ece7019432b055f8131571e1c067d7a4595153936a717f9d8baf3008",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-50.json": {
+      "raw_sha256": "9482c1dd71b2616b7ec46225627b500fc16b2e7c9a407cf68e5e037a8a7a96f1",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-50.toml": {
+      "raw_sha256": "63d90083883953c9dba06303570977a494e66b0e0bf08c15bf2f3dd253d788f6",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-51.json": {
+      "raw_sha256": "cffb8a15b9ab115efa13dc5515fd14f1811affe3cf7159e21a0df39de77c3308",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-51.toml": {
+      "raw_sha256": "33183cea0db48469d8efa4d46e4e34ef3d0bb2792b58613cf622afee98d4b803",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-52.json": {
+      "raw_sha256": "6a5f3ccad0fc39bb6baeb41156732f87db21173aa9ad04b84eb971782bb7972f",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-52.toml": {
+      "raw_sha256": "7fbcf06de35ccf50b1acf996239d6d54cfebd891d512be203451144ca921e6a5",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-53.json": {
+      "raw_sha256": "bc5eb9429b4e59f9c5d635f8b4e58e968485b9735ee9c648111662821fd7ff30",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-53.toml": {
+      "raw_sha256": "96546033e69a0bffd3c99daaf9d7bd081f610f586258ec282b0410ae6c3735a8",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-54.json": {
+      "raw_sha256": "a3674a456e8e00cbe983c69760bdd5e7dde708b5da25e751ca6421c10247ed52",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-54.toml": {
+      "raw_sha256": "9490af89cc8877ffa011c30d57c5b861d6becd25beb5f468a975b8ed788747e8",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-55.json": {
+      "raw_sha256": "0cd04b880d5a9346835631c02c437b712312607ced9e31ac6e43a62bac196ff9",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-55.toml": {
+      "raw_sha256": "9b495ccb8e309419f37063971623843218db682d9eab20a026767529624fe6df",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-56.json": {
+      "raw_sha256": "580d28713ee7e8f62db6a90f3e6d91ff47658ecd50847b9a6b2f1ac92946dca6",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-56.toml": {
+      "raw_sha256": "4da5bb1db2fc36c41b3e8de1441c7267cc0973d83de3109d1883a950ef35fc2d",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-57.json": {
+      "raw_sha256": "c93cbd3807f164fb636564464ccbb65d1f62b74af80cfd04e5b9049abd8891e1",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-57.toml": {
+      "raw_sha256": "1781cb04900bff12d78a7c16be1ca61a07d17fa38cd3436ed4e579e3726dd30c",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-58.json": {
+      "raw_sha256": "cfb8d86d2e70db61735e62c4a001a8a53825487a6ff4915e7b5d9317a2ae6412",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-58.toml": {
+      "raw_sha256": "5e2bca66334092104bac7180d944269ae52251d6a282d1ad971db345302518ff",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-59.json": {
+      "raw_sha256": "a689fa9f7fe1bc747d378cff7b63c02c6311671fc71a08fe75bc47348133e9c4",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-59.toml": {
+      "raw_sha256": "a6d902a0e2817fca8d896f7409cedf6310907a651a13bc7e1557d4dc53c534da",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-60.json": {
+      "raw_sha256": "6c3335419430a93109b173dee6696dd2a288b692a52b9cffa4a2dda328cbcc33",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-60.toml": {
+      "raw_sha256": "afec379fdf17a234629857a14f281db30afeb4973812818dadce5462cc9b96d5",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-61.json": {
+      "raw_sha256": "32737414cb30e9ad98e88be4376edff1c38119589bbb483e679f5013ad0d62c6",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-61.toml": {
+      "raw_sha256": "6cfa40705ff581579a1ce2e154a9b12d6cdd0a3e0ad3074eca295d0bd54fd219",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-62.json": {
+      "raw_sha256": "ecb0558dd774c04fd39323b61ab84b5351706095eb27453e82e5cab5d530164a",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-62.toml": {
+      "raw_sha256": "8bde20b271645e212d696f97ed81b596be39aa00265d463b917d8251f44306e7",
+      "size_bytes": 1973
+    },
+    "configs/cases/neural/sustained-v1/selection/case-63.json": {
+      "raw_sha256": "231977066f90be99b149098102ddd37339d4575b39796000d779bc4ccf730b2f",
+      "size_bytes": 423
+    },
+    "configs/neural/experiments/sustained-v1/selection/case-63.toml": {
+      "raw_sha256": "46e6decc1130d678b02c1820df7c39b56d0cd71be3c71dee9b6e847fcb15520d",
+      "size_bytes": 1973
+    }
+  },
+  "training": {
+    "order": [
+      "standalone-1",
+      "run-1",
+      "standalone-2",
+      "run-2"
+    ],
+    "manifest": {
+      "path": "configs/cases/neural/sustained-v1/train.json",
+      "canonical_sha256": "9161a03c9fb704f8d206d55b4cfa1350f937ed77e07eb86f20474c4319467f9a"
+    },
+    "runs": [
+      {
+        "policy_id": "standalone-1",
+        "mode": "standalone",
+        "parent_id": "standalone-b",
+        "seeds": {
+          "policy": 1101103,
+          "optimizer": 1102207,
+          "curriculum": 1103301,
+          "noncombat": 1104409
+        },
+        "config": {
+          "path": "configs/neural/experiments/sustained-v1/standalone-1.toml",
+          "config_sha256": "853f2de917af7581960e288b2c9e55c2252448e8bef32af10df73342e246d119",
+          "raw_sha256": "6579ef05b2f3ea90ce537c443ac69e1907b75476e104c75cf15d603de872a0ae"
+        },
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/training/standalone-1",
+        "rollout": {
+          "rows": 16,
+          "steps": 32
+        }
+      },
+      {
+        "policy_id": "run-1",
+        "mode": "run",
+        "parent_id": "run-b",
+        "seeds": {
+          "policy": 1301103,
+          "optimizer": 1302207,
+          "curriculum": 1303301,
+          "noncombat": 1304409
+        },
+        "config": {
+          "path": "configs/neural/experiments/sustained-v1/run-1.toml",
+          "config_sha256": "ca01c62fd413ea7ac72ed504c34299adad036fc219f95a5a85a664c7fece5917",
+          "raw_sha256": "ae7f3f0595bd37dd9ae406d9d631e18a372ac62782e10d0f4ac6c1a190981e04"
+        },
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/training/run-1",
+        "rollout": {
+          "rows": 1,
+          "steps": 128
+        }
+      },
+      {
+        "policy_id": "standalone-2",
+        "mode": "standalone",
+        "parent_id": "standalone-b",
+        "seeds": {
+          "policy": 1201103,
+          "optimizer": 1202207,
+          "curriculum": 1203301,
+          "noncombat": 1204409
+        },
+        "config": {
+          "path": "configs/neural/experiments/sustained-v1/standalone-2.toml",
+          "config_sha256": "85d3061bafca47dd663b149da07d9e1fd30acb49805b1e5eaff1bda9e777da9b",
+          "raw_sha256": "7233c040bc55bc31f7cbc10a3684f2b154f54989e7f1a613a65b60a289ddada7"
+        },
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/training/standalone-2",
+        "rollout": {
+          "rows": 16,
+          "steps": 32
+        }
+      },
+      {
+        "policy_id": "run-2",
+        "mode": "run",
+        "parent_id": "run-b",
+        "seeds": {
+          "policy": 1401103,
+          "optimizer": 1402207,
+          "curriculum": 1403301,
+          "noncombat": 1404409
+        },
+        "config": {
+          "path": "configs/neural/experiments/sustained-v1/run-2.toml",
+          "config_sha256": "de50ace3c4665d94d1066c1612d2859fedb429e64a31268e0a189b329352f764",
+          "raw_sha256": "375eb48e27e434e267f6c18bac3692bb87a56c975f9faecc93da218dfeec24fb"
+        },
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/training/run-2",
+        "rollout": {
+          "rows": 1,
+          "steps": 128
+        }
+      }
+    ]
+  },
+  "selection": {
+    "manifest": {
+      "path": "configs/cases/neural/sustained-v1/selection.json",
+      "canonical_sha256": "8f20c01eb59fdea5327321bf2c5a0a495b54a3cc6db48cf0025e2a73f7391cf6"
+    },
+    "case_bindings": [
+      {
+        "case_index": 0,
+        "case_id": "sustained-selection-standalone-00",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:00",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676352,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-00.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-00.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-00",
+        "config_sha256": "add09e79a47fc1110433d45be7d83ae48a189e5168420f15ebba435e57830532",
+        "config_raw_sha256": "996f9bc14062d324360f6fc46e2208042ead8aac0f4562c7f4db0fbfeda14f88",
+        "manifest_sha256": "9a40bdc08ae6dad55d4d4a1bd957d867ac69ece5223d4c6eef5802fb42a244db",
+        "manifest_raw_sha256": "07d7f977ba0b036ca3ba53408b0c820b965682014fe8e54eb017ce46f90cb139"
+      },
+      {
+        "case_index": 1,
+        "case_id": "sustained-selection-standalone-01",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:01",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676353,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-01.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-01.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-01",
+        "config_sha256": "9854af88faba887f8953dd1364a9412f0a2f60cc1d5a02b7c5d0d953b631d92e",
+        "config_raw_sha256": "59392b105b58fdc8e11b3ffa748b4c360b32d03a679ab9dea0471afcbc7b17d6",
+        "manifest_sha256": "f3202353a82e41842005d9f88b0d54681f30a66bf82125b8e94d343824a4817b",
+        "manifest_raw_sha256": "9f4369f4a8d265784bfb0998c6b225a95a1f141a94ca97985e6dc88c09b6c28e"
+      },
+      {
+        "case_index": 2,
+        "case_id": "sustained-selection-standalone-02",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:02",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676354,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-02.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-02.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-02",
+        "config_sha256": "e200fb7453fd123f0fe3a055fcddab4342a1d9a8302cae90abed83e8ef5a410b",
+        "config_raw_sha256": "ace53663273aa501921dfe22ca688cc6357f961fe74e5d29a48257cc4bfb97ce",
+        "manifest_sha256": "47c1f1b055a8781974ad1085686b1de9296bb89bdb767a1733446ca42de806c5",
+        "manifest_raw_sha256": "1785e37da2051161dac46ea747a8d3d496936720df7e90993b85c2976f749c2f"
+      },
+      {
+        "case_index": 3,
+        "case_id": "sustained-selection-standalone-03",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:03",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676355,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-03.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-03.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-03",
+        "config_sha256": "44b3d79d4418ae01bf31a7e6c1801ca5ac7f5d6a200117148d1a595718f98aa3",
+        "config_raw_sha256": "d57ac8ddbff01cfaf665302457d44c1724c8851458ed8b67fc4c107c7ef80716",
+        "manifest_sha256": "690d67aa4a036cdb89caf4f9dfc4d9c941e0ac1665d8b6e8668f00fcc3a0ca82",
+        "manifest_raw_sha256": "cea2dd9762161ce559152f9af8c36b48bf7f196a69bdafc611cdf614cdbb7886"
+      },
+      {
+        "case_index": 4,
+        "case_id": "sustained-selection-standalone-04",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:04",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676356,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-04.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-04.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-04",
+        "config_sha256": "126d27146945241c85bdee07d7a443590acaf82f1716ed8d99f559da8da9fedc",
+        "config_raw_sha256": "60716d7e64cecc8ff5fcd7c5f735f1b00d351824055ac7cd5d1e296bc973bc0f",
+        "manifest_sha256": "62cf68317a28b7dd7919e647555059265b9028b80df39ee1873abc21d9b2dc5c",
+        "manifest_raw_sha256": "cb0c8b5da84c2da4a1954d8d43f43b7ed801436fbd7267483659e186a2c9be5d"
+      },
+      {
+        "case_index": 5,
+        "case_id": "sustained-selection-standalone-05",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:05",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676357,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-05.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-05.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-05",
+        "config_sha256": "9af698bec97454ba7b5586166eba77186fbd0c76912ec9083feae66aa9fb4c1b",
+        "config_raw_sha256": "92e03eca25c4f0b386bded462ca1b12cff8921ff9189f952b4b7428602a6c6a5",
+        "manifest_sha256": "fcaa7c42c9547faefbe4f84ab41592cf9ce04d675541cceeb8b4c2e1900f6b7f",
+        "manifest_raw_sha256": "e1958d8297e6fabb426c424edcbbc2708c832afc895b91e07452602ddd497e23"
+      },
+      {
+        "case_index": 6,
+        "case_id": "sustained-selection-standalone-06",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:06",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676358,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-06.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-06.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-06",
+        "config_sha256": "14bfaa6efe7776180168cdda63af2ede969d582778222e0c36409b798171e80d",
+        "config_raw_sha256": "88711cd86df751d998090e3cede353cddf737434fb24e710bf7b4395e1da32b8",
+        "manifest_sha256": "81a3db7ad257ca4fd6ea6c15ded7dcbe99c9af248f7518a5c22b6aa1e023820e",
+        "manifest_raw_sha256": "e53af6c7acad5173acaddfc38e02f09ff481687332ca8862e5cfdcfd95efef1d"
+      },
+      {
+        "case_index": 7,
+        "case_id": "sustained-selection-standalone-07",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:07",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676359,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-07.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-07.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-07",
+        "config_sha256": "607356bc76493edfd566241eaace0802d68ec0579808acb02076ecc6b7d940bf",
+        "config_raw_sha256": "f6648497ca9956e6d490dbfb00fd3f296b30d90b75c5f39db7714cc3e6f76e11",
+        "manifest_sha256": "6f9d30ce17d842f4bc05d4aeb469edcdb9b5a0949097034e69e3f45495b52f94",
+        "manifest_raw_sha256": "03bc68e11d9866993cd0216f2586eb9a0b935099c2bd36fa96c456cfe9234c05"
+      },
+      {
+        "case_index": 8,
+        "case_id": "sustained-selection-standalone-08",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:08",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676360,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-08.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-08.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-08",
+        "config_sha256": "a7960a8bf390d6266f623b423e5a5067554034832ac9b250eebc0ca9c5d829fb",
+        "config_raw_sha256": "309ae42b3ee80ac1c84b723ba2f05ed37c822e588bf658a151b66ee8b5ce664a",
+        "manifest_sha256": "54fc3cb03df4eaf7a6fde1718850005c5c0a080f147959e0aeb07fe273c8138c",
+        "manifest_raw_sha256": "de14bfc1974cb1944adda94252cafdcce2930111dc50c876578085f3e9d9ce5b"
+      },
+      {
+        "case_index": 9,
+        "case_id": "sustained-selection-standalone-09",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:09",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676361,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-09.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-09.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-09",
+        "config_sha256": "771d9a9c8f514c51ee490c001b74e8b1e4056ae664210476bfd756786725820a",
+        "config_raw_sha256": "4f3d4029a6fb2729244dbe286634c6e09bf93e3b25cc45d9fd8492580d44005f",
+        "manifest_sha256": "d41d14f52d663412a255b88b0e644c906a963052372c4176577995ca93f162ae",
+        "manifest_raw_sha256": "31a8701265ad8a16c6f469191206cc04bc8783dc070b1d5c2eac9ee2961ba1d3"
+      },
+      {
+        "case_index": 10,
+        "case_id": "sustained-selection-standalone-10",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:10",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676362,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-10.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-10.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-10",
+        "config_sha256": "7f73bc08f7f728bf8853c16a229c3a424fba4e79315bd0697fe0f38c8a648399",
+        "config_raw_sha256": "43ee77154f2cfd411bcb309fa41e25bd979f59f6d254fd8a7e17ee2002ba34a2",
+        "manifest_sha256": "402ddb67f3965979899e1d1d0408801b29d6d50e2b6d3a83be6e727ec5667af9",
+        "manifest_raw_sha256": "d6089e291f63aeb500d71795a3727ff06f5535a6389aece66db1922879e66806"
+      },
+      {
+        "case_index": 11,
+        "case_id": "sustained-selection-standalone-11",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:11",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676363,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-11.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-11.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-11",
+        "config_sha256": "8098445ab5dad84c48200e65395dbb1d8e13a72808d1428aff46dc67456cad4b",
+        "config_raw_sha256": "66d983cf10eba73acec7fb30cc37f6377753fe172b87a904c9756ae5d2bec6ef",
+        "manifest_sha256": "817cccfd047c2d604758717a00ab90634c4d3bec628e9ce95057bb3e4fe4f4e0",
+        "manifest_raw_sha256": "16f67526440acd0490ed6193926a5329aff54cc35de040f1d61f094deec01692"
+      },
+      {
+        "case_index": 12,
+        "case_id": "sustained-selection-standalone-12",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:12",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676364,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-12.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-12.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-12",
+        "config_sha256": "c047f55130047066dcdecd057440f673ca9313c569fb480824baf5f8d3ef5a5c",
+        "config_raw_sha256": "d3110493e2c0fd14320c867987e2edceed98e027c7fc728172f95ae8a9044163",
+        "manifest_sha256": "f2577bdf746372cad158563c1cbda2733c1591f7a4a76a43c5f8f6b5448b1bc7",
+        "manifest_raw_sha256": "a4cfc5f64b31cb3b4da7b1aef966489dba2ac9888d4647496f0fb32f55646681"
+      },
+      {
+        "case_index": 13,
+        "case_id": "sustained-selection-standalone-13",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:13",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676365,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-13.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-13.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-13",
+        "config_sha256": "9e5e42c3270b455bab7e5506b7ab1b91441d8eb77f943a7a07878dbb0aa7ae26",
+        "config_raw_sha256": "f9a1ad3ff1b89ea265ec4e2f69cb011f1ff515180551654f06eb572ce9149287",
+        "manifest_sha256": "602d7a3cb0ef48f2c5d73ee2ec07e85126adc5bded665df428ecdca108d2dc7c",
+        "manifest_raw_sha256": "16bcec94b5f13ba363c12f053e2e1816ad5748a698695651c376c120f64460ce"
+      },
+      {
+        "case_index": 14,
+        "case_id": "sustained-selection-standalone-14",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:14",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676366,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-14.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-14.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-14",
+        "config_sha256": "8b9dcf9a35602212bd706e11dd6c724b93bc20d23712acd919ce9f96a70098f0",
+        "config_raw_sha256": "10c01d85d82da0b0216cb89555057054898ed9ce67bdab99519fccd74d7a11db",
+        "manifest_sha256": "7431df4994519bd825e9de822421a64ee5b37f162c572c46b60da2ee759f611a",
+        "manifest_raw_sha256": "1fae3494adf9a7dbc3ee50d110f06766a3d382185a547b2fcc3e45442167d14e"
+      },
+      {
+        "case_index": 15,
+        "case_id": "sustained-selection-standalone-15",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:15",
+        "mode": "standalone",
+        "cohort": "familiar",
+        "environment_seed": 1099512676367,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-15.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-15.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-15",
+        "config_sha256": "b5a28d9f1e4e9b5eb0fd38b98527eed21de12f26eb30a1a20289ff43e19fb128",
+        "config_raw_sha256": "8cacc24747aed8a90931547bf077376db664b67fab333c27b99cb7450905eba3",
+        "manifest_sha256": "ab239c03ed190312431e949ff05b942a6a96f54fe0e9daaf1a4158e69f8b1eee",
+        "manifest_raw_sha256": "8c502e72111f4d04f6d7481451a8f20ea447be6b90d7b5811461dde099ccc99e"
+      },
+      {
+        "case_index": 16,
+        "case_id": "sustained-selection-standalone-16",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:16",
+        "mode": "standalone",
+        "cohort": "deck",
+        "environment_seed": 1099512676368,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-16.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-16.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-16",
+        "config_sha256": "9fe3fc0df9c8effd38cec7cc96d4e4042282dfe97e2152fc0431acbeb94b6a13",
+        "config_raw_sha256": "644ed164c5e921a1a8b92a2aed9c3d40dcc55da67792ab2c986ff97ebabcdc51",
+        "manifest_sha256": "79c1ce03c3ad662690a1cd9e37d2799fc0b20cf5a26c6334afc72a64be22de9b",
+        "manifest_raw_sha256": "04f43dad91ba8fbfe058c090463d45d40153eaf7a83b769d91274285d14be95e"
+      },
+      {
+        "case_index": 17,
+        "case_id": "sustained-selection-standalone-17",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:17",
+        "mode": "standalone",
+        "cohort": "deck",
+        "environment_seed": 1099512676369,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-17.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-17.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-17",
+        "config_sha256": "181833e1a7cae3cb87d4a62b407baa9373a8748ed245b16761e7b305db8f0200",
+        "config_raw_sha256": "044196ea7d9b54a69250978fbb533068d982ceccb60bc80462a466e9e8a57db6",
+        "manifest_sha256": "7953d7b0594605f1925e797626bd661ab226c5577c674171e83a1df0f38d3a48",
+        "manifest_raw_sha256": "806602dc693eafd9d5005fdc45182655faf4a292f90f387d46550ce26f4701f1"
+      },
+      {
+        "case_index": 18,
+        "case_id": "sustained-selection-standalone-18",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:18",
+        "mode": "standalone",
+        "cohort": "deck",
+        "environment_seed": 1099512676370,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-18.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-18.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-18",
+        "config_sha256": "b42d3c89bbb646db2aff38f717f77e2ade780ffd452f5ec854670b638570c023",
+        "config_raw_sha256": "dda2d800d1a542b5ce08f906b3b85228048c5caafa3d787a4eaaa84db967fd1b",
+        "manifest_sha256": "abd39111c9bd7826db9aa1bc09962591149013ea0af4866ed4b5942f830c5d09",
+        "manifest_raw_sha256": "28110e6342a5a94b00d7968656aa44670030758570e06c46336b389e1e2d6de7"
+      },
+      {
+        "case_index": 19,
+        "case_id": "sustained-selection-standalone-19",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:19",
+        "mode": "standalone",
+        "cohort": "deck",
+        "environment_seed": 1099512676371,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-19.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-19.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-19",
+        "config_sha256": "19d740c001701445c41644a7e2b5ebbe323d226c9288e01c287c06d8efc8b049",
+        "config_raw_sha256": "bdf067c0ca914dca1f4f9c795696bdc37d8ffb72bd630f1a54098b29aa8a0291",
+        "manifest_sha256": "afde9d56de0751f9873c191ea5762a8bfce5171614bfe391bef62a62356ef28f",
+        "manifest_raw_sha256": "1c47f9e91d1e7a7413bd803cd06eef8eeb52bbf701c3a0929dbaa1668ce8ba74"
+      },
+      {
+        "case_index": 20,
+        "case_id": "sustained-selection-standalone-20",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:20",
+        "mode": "standalone",
+        "cohort": "deck",
+        "environment_seed": 1099512676372,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-20.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-20.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-20",
+        "config_sha256": "b07f138ee30a0fbebda420035ad27c958ff29edb449ae1110d777ded62c07d44",
+        "config_raw_sha256": "d855b677a48e9d8d6f617d03f2764925ff6da84bd31c5e40124a112c4d4d1563",
+        "manifest_sha256": "24de4e57b32825f1134bf50ff4c3d086e5b49cfecf8e0eb5d0c4bd812a2ca725",
+        "manifest_raw_sha256": "581679df8e765516618b4c704aff016d86c070b9fc3727041f94a812425e5091"
+      },
+      {
+        "case_index": 21,
+        "case_id": "sustained-selection-standalone-21",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:21",
+        "mode": "standalone",
+        "cohort": "deck",
+        "environment_seed": 1099512676373,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-21.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-21.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-21",
+        "config_sha256": "df5512dc1d4d7079ea409dab166d5f1503273d194f03b74b9f614adc1b76f4c8",
+        "config_raw_sha256": "2868401c959574275d05f9a0d39f8675057ca2d378a79503138846fc8bd8ef1b",
+        "manifest_sha256": "e9586313348de5f08929d99d1099a2ca9b639aea5a495930ef657fcd69d84ded",
+        "manifest_raw_sha256": "dd515241cb4863a1ce2fd332d2a23c24bfffd991385745429317924e3341b47e"
+      },
+      {
+        "case_index": 22,
+        "case_id": "sustained-selection-standalone-22",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:22",
+        "mode": "standalone",
+        "cohort": "deck",
+        "environment_seed": 1099512676374,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-22.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-22.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-22",
+        "config_sha256": "308dab53c2b35bcf169b009c766b7168cbf52782f6ccb77825039365f35cd233",
+        "config_raw_sha256": "15493aafaeb7acc5bad282b7b61acf07defafc12b051be8883e63c00588135aa",
+        "manifest_sha256": "179de8830da0ce15a5a837029c02a7cddee923bddfba7fff001c0d8c8ff162f1",
+        "manifest_raw_sha256": "ceb90cd6a8be1273589730997c6f8d3c0ed33e5df1acfd2de3b11a3da11ddb2b"
+      },
+      {
+        "case_index": 23,
+        "case_id": "sustained-selection-standalone-23",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:23",
+        "mode": "standalone",
+        "cohort": "deck",
+        "environment_seed": 1099512676375,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-23.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-23.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-23",
+        "config_sha256": "b69a2175f98fd8cf99baecd5c16e0d6042fc4b64f3b2c6a8cd944bb3b5ced869",
+        "config_raw_sha256": "ddcecff20ec0f16213653a2165c3798202a77526b8a501a45e02cb4404a8f06d",
+        "manifest_sha256": "adae0b42c8cf13a78428177cfb778349d31f85d965113d33347fa97d81fd53fa",
+        "manifest_raw_sha256": "d2e0410cbf1d30ee05be03d7aecbbd38af36cd38844355017bc642352be9e2f0"
+      },
+      {
+        "case_index": 24,
+        "case_id": "sustained-selection-standalone-24",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:24",
+        "mode": "standalone",
+        "cohort": "hp",
+        "environment_seed": 1099512676376,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-24.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-24.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-24",
+        "config_sha256": "69cd1e039b53d5d7896c57d5f80073a1af2f217b6af7a4d366dc87991600e54c",
+        "config_raw_sha256": "4a4bc3cd24b19aac48570607b994f3c0c1df0de7f2bb4ad9babb40451097b43d",
+        "manifest_sha256": "ca7d703fd9552b10caca45dc23a687b2b2306ef1c0aa916483bf5c0ee7e10c67",
+        "manifest_raw_sha256": "c15c76df9e886cf836b74823c1ddb4654b9674d6eed5a68b8afb3ba704319f63"
+      },
+      {
+        "case_index": 25,
+        "case_id": "sustained-selection-standalone-25",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:25",
+        "mode": "standalone",
+        "cohort": "hp",
+        "environment_seed": 1099512676377,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-25.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-25.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-25",
+        "config_sha256": "1549e04f3e8740029c4fc46fdf6d2e91ff15f09329fbb4a731fda54e5054f0e6",
+        "config_raw_sha256": "10f46f91c9d8131fb2dc41d2ffcf7839b342a0c2951a585dcbd5396249b01315",
+        "manifest_sha256": "5b43c7928f6797db5ecf57de35cb2798f07c70edaf99194a41aa1cfe70f7c129",
+        "manifest_raw_sha256": "539451c122ca1269c4a94e83ae422e8763b1bc81aca90667d8ffcbee90101350"
+      },
+      {
+        "case_index": 26,
+        "case_id": "sustained-selection-standalone-26",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:26",
+        "mode": "standalone",
+        "cohort": "hp",
+        "environment_seed": 1099512676378,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-26.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-26.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-26",
+        "config_sha256": "08d96f7ff3fb8097a7f024d3de587d0c5a60a86a0cf2d2138d0519a8b1892f2f",
+        "config_raw_sha256": "dfc00cb6c1b7472d57525c3091d5f703515b2b0ccd7f8558b27ea1436d6e0475",
+        "manifest_sha256": "54c28e2868dfa4c6b4068a49e20ac3252e84715c5c48f812271f0e8fd994e7d0",
+        "manifest_raw_sha256": "53e33a4687478384d852b16981bc51e4b63d00a98927e61027cd3114e04a3bcf"
+      },
+      {
+        "case_index": 27,
+        "case_id": "sustained-selection-standalone-27",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:27",
+        "mode": "standalone",
+        "cohort": "hp",
+        "environment_seed": 1099512676379,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-27.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-27.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-27",
+        "config_sha256": "d9215274aad5bbf799684915010c20a28d540945e5103555bd57e8db06d6533a",
+        "config_raw_sha256": "53ccf43e3505e9cfb9395f7418c450af2a16c0f841c63306a4b685867c84ee86",
+        "manifest_sha256": "027aa7fb28c1dd5af62e075f404ae9b121230853c71efcc8bc87389433a18d14",
+        "manifest_raw_sha256": "dfc5d423845a739ef1926331d4f25906817c740be5ba3d0bee97bcb5fc6de462"
+      },
+      {
+        "case_index": 28,
+        "case_id": "sustained-selection-standalone-28",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:28",
+        "mode": "standalone",
+        "cohort": "hp",
+        "environment_seed": 1099512676380,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-28.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-28.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-28",
+        "config_sha256": "05e69818a69069f5d54f37a67f8db913d32cae1ba5c3b2d6bef21bae196c6239",
+        "config_raw_sha256": "10c88bb8c5592e9688aafa03c63dd1da11ea3faa66f36e57bf29ac48b6bb2925",
+        "manifest_sha256": "62801ea17c2c37111ab6f364d24659a6ce3f458cecdebde30326913b2b25fc0f",
+        "manifest_raw_sha256": "91db48b5d0d2e94b8f94e9b5e552d7ff4ce8edf8b7d7e9bbe5589ffb7ef4dc0f"
+      },
+      {
+        "case_index": 29,
+        "case_id": "sustained-selection-standalone-29",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:29",
+        "mode": "standalone",
+        "cohort": "hp",
+        "environment_seed": 1099512676381,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-29.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-29.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-29",
+        "config_sha256": "22d1ff9601fe84720ecf526df23f732ecade4498ddc01abfb70aa2cb4c7f9a9d",
+        "config_raw_sha256": "15f425202c99936a43b43390902ad1d41b89abc17fb6c206ef1431091b37c460",
+        "manifest_sha256": "8f1e4cac817d78278214813c788560dfac74f83cd043d7a186a2402ade886d07",
+        "manifest_raw_sha256": "5dd80c9a7339cdd98d8d434a506486df374926dc4bfdce70d9692f89dffabda5"
+      },
+      {
+        "case_index": 30,
+        "case_id": "sustained-selection-standalone-30",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:30",
+        "mode": "standalone",
+        "cohort": "hp",
+        "environment_seed": 1099512676382,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-30.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-30.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-30",
+        "config_sha256": "d37f37f5314ac55656e2f3dc704b8b109af586c0cc79420e6396b8aebd6ca2d7",
+        "config_raw_sha256": "9335dd43d58d6756daaa7a1307f1abc87fdb88b0b841684d1084f80f7066b998",
+        "manifest_sha256": "f6d43e67512e339bf428f645f940cb9c2bc0b53d0654a3021d374cb1e0eb0f32",
+        "manifest_raw_sha256": "09412d374f9485406a0dd9e1a3870db2859d0cb8119a01677340ad0dc6422a0d"
+      },
+      {
+        "case_index": 31,
+        "case_id": "sustained-selection-standalone-31",
+        "lineage_id": "lineage:sustained-v1:selection:standalone:31",
+        "mode": "standalone",
+        "cohort": "hp",
+        "environment_seed": 1099512676383,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-31.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-31.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-standalone-31",
+        "config_sha256": "8b0890988a1d52002cc4c6088c470e36bccd66736b4f69cdd0729b250eb3220f",
+        "config_raw_sha256": "459888348748da4150302184483c9b76dc9adc56f137a4435129b5f5ab423116",
+        "manifest_sha256": "dda59bcc9347ddff0445a1b83e75f9acff4556684001477e29e7c0b165f6b8cb",
+        "manifest_raw_sha256": "08562b89dcc906b9a56cf1f605dd073bfe010f75860af1c8cef76d50a3486428"
+      },
+      {
+        "case_index": 32,
+        "case_id": "sustained-selection-run-32",
+        "lineage_id": "lineage:sustained-v1:selection:run:32",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676384,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-32.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-32.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-32",
+        "config_sha256": "0a0c7d22fefd2b98e09cdcd9ebc53128a4708a42eda8be430ab95c294b4aa9e3",
+        "config_raw_sha256": "0210e33fac22031f3796927675f3ddc7dadc33a4294790e953aaec656a056154",
+        "manifest_sha256": "5a741a0a513f5def9fe22ffe00a66b9d2e5838e0b03615308d4899972147402a",
+        "manifest_raw_sha256": "c0cf92a3f6941d3011d771b4dfabf0d5b0d5ef7d3724368d1f8403b99a130935"
+      },
+      {
+        "case_index": 33,
+        "case_id": "sustained-selection-run-33",
+        "lineage_id": "lineage:sustained-v1:selection:run:33",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676385,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-33.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-33.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-33",
+        "config_sha256": "182f00ff806591e4efff004324f24cff5e9e67fe7adb9899f039a9f4afa3e6c1",
+        "config_raw_sha256": "2a8e7e5889a693c4a7401becca157d14039eeb16b9e7ab71acad0c271a48a065",
+        "manifest_sha256": "115fa32447ce76ce0e0b1b0a94fed313b240a84b4f7b2ca482b1f701acbf4fb5",
+        "manifest_raw_sha256": "002bc7598918bda31b46f7cd2ee42bc35554bb5f3a7dcfe790bfe467b56d6191"
+      },
+      {
+        "case_index": 34,
+        "case_id": "sustained-selection-run-34",
+        "lineage_id": "lineage:sustained-v1:selection:run:34",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676386,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-34.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-34.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-34",
+        "config_sha256": "9cdd5f82551b138519ecd162f99da7ad831a5f263d417be57bdb59f3465183a4",
+        "config_raw_sha256": "01cd15fc309ec6e843e41c9dc7703a0f9d92b6d151fd50cc024935b7f5cec372",
+        "manifest_sha256": "b83601bac76c4d8556d1d9e558b449aa8f5fe3c15f44e6960079089ba8ca81c2",
+        "manifest_raw_sha256": "1ae319124cff5917c2269474e8ac06d5954c9b47dc4fb81a995fef5d3d587a16"
+      },
+      {
+        "case_index": 35,
+        "case_id": "sustained-selection-run-35",
+        "lineage_id": "lineage:sustained-v1:selection:run:35",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676387,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-35.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-35.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-35",
+        "config_sha256": "9677cc25c291d1117163711f428bc8104d395fc4a72ee023814c92303bb7a72c",
+        "config_raw_sha256": "3a2e49ac47aadf17b7c693f3197aabe38885097de2ce1aedbc8c378af956009e",
+        "manifest_sha256": "b16c8e513f078a03f52ed8df210e26cebe5e40317b5a46cd9525144701dbe2f7",
+        "manifest_raw_sha256": "8d75106e7bb73cc63c8b007078e0ea243ae4beb51274c6ff8a87190df30d0a46"
+      },
+      {
+        "case_index": 36,
+        "case_id": "sustained-selection-run-36",
+        "lineage_id": "lineage:sustained-v1:selection:run:36",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676388,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-36.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-36.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-36",
+        "config_sha256": "6f1fef744c55fc67fa5b826effff8da15f7ae8933d25865a1ad75df36f14985a",
+        "config_raw_sha256": "4b8ab60398103b262ca0c80528693eadb2508fed32be9a55e15a60b18f9421b4",
+        "manifest_sha256": "744bba6566f1e43a1a2b3bc8aae3df368476c4c181afe963f7e1b6237a48a9ff",
+        "manifest_raw_sha256": "f80058cb791c9187418c2064ebe47dd1140aa2c067426d98d071af35b1cf8d6c"
+      },
+      {
+        "case_index": 37,
+        "case_id": "sustained-selection-run-37",
+        "lineage_id": "lineage:sustained-v1:selection:run:37",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676389,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-37.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-37.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-37",
+        "config_sha256": "896425e36f98926099cf8555026064769228ab34a06fcdea4d1681a2b0267d19",
+        "config_raw_sha256": "01655cd144f9bb92ab6177d3e621152c52756b42b02e6113a59ef7d13c440b24",
+        "manifest_sha256": "e015255b75013480793561a00150ab885bbaaf0d17e7551d54c3028ea72331db",
+        "manifest_raw_sha256": "c306ba56b54cd5e38377eb0b2541b52aa859e6c4c2c5f11f11a73616be5778df"
+      },
+      {
+        "case_index": 38,
+        "case_id": "sustained-selection-run-38",
+        "lineage_id": "lineage:sustained-v1:selection:run:38",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676390,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-38.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-38.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-38",
+        "config_sha256": "188ba8de81640201110e9872406c3dbfd5362f77f6dbea4fe3228587e2957143",
+        "config_raw_sha256": "c189f0c12bd0610beeb33f631d366b0da04630f3bb281bec42f74118f77f2de3",
+        "manifest_sha256": "5e01b931a5a2ea1d653bfb6363eab3ab3de57523817d21416d28bd2c3fedf006",
+        "manifest_raw_sha256": "51a0970d162d9c3863f7ad4e4ff49fc7a76c258bc124f9f62eb9f77ecefa2e25"
+      },
+      {
+        "case_index": 39,
+        "case_id": "sustained-selection-run-39",
+        "lineage_id": "lineage:sustained-v1:selection:run:39",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676391,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-39.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-39.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-39",
+        "config_sha256": "1984e239b459c5f8bb77415a39acae509113997bacdf07bbd9ffc54bf78f9dc6",
+        "config_raw_sha256": "4338ed5486cf956f1f3442fe958545e8298f3a50fb2dd0c3884b137f77f05d69",
+        "manifest_sha256": "4b0ffa8b09d26dab1d4a4411b91eee278c8ce4ead58d291c4f9c37bf3a6c5385",
+        "manifest_raw_sha256": "0556e426ed6f1bb0f2bd18bb540f8488d38b69a69ddcd5f5cf0ac05f05a09f33"
+      },
+      {
+        "case_index": 40,
+        "case_id": "sustained-selection-run-40",
+        "lineage_id": "lineage:sustained-v1:selection:run:40",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676392,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-40.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-40.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-40",
+        "config_sha256": "bd5fd0bd8b1585da7f6b8a436a5e0595b15f336220f5e843de564c8dfd8dfbf7",
+        "config_raw_sha256": "2b98b96a0756e53978bd12acc717fd62c49f66e76bfbd6a42dd16e6c787f3d8a",
+        "manifest_sha256": "35d8751432ce14768b2266d2eef8da81c4622d3258498b98a4738f0085b4aa0a",
+        "manifest_raw_sha256": "ec03cd3c8e920a29e408fb53e73436fdd7228b89882d813d1962894d64025f19"
+      },
+      {
+        "case_index": 41,
+        "case_id": "sustained-selection-run-41",
+        "lineage_id": "lineage:sustained-v1:selection:run:41",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676393,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-41.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-41.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-41",
+        "config_sha256": "19fc6cbfe08e53db27ed4f670a59a466a335d3c8eaca25e678666bb377a5433a",
+        "config_raw_sha256": "aa09f06883989c7b17ac2e52640f1caae0f695a97902c0c72611cef6a3a8db42",
+        "manifest_sha256": "1c15c41f74c840c815c2ce94774a71ababbbd34ea2ebc2239765c73a388b07a6",
+        "manifest_raw_sha256": "726fef4570f17a836d337256b5db42a97f98f0ca0fb290b92e0917de7c16fb7f"
+      },
+      {
+        "case_index": 42,
+        "case_id": "sustained-selection-run-42",
+        "lineage_id": "lineage:sustained-v1:selection:run:42",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676394,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-42.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-42.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-42",
+        "config_sha256": "4023b0d534ef56c54f824d8030030d9793d231dd71646df933249af7d5d85532",
+        "config_raw_sha256": "44f013f4a994cba802bafff33a75593c99502d68663d91ff3bde28fc3da7c228",
+        "manifest_sha256": "3ab31004bd3be25b7dc45bd0f562a5e011d980ee85378d596eea1a274cc1789a",
+        "manifest_raw_sha256": "d7c071707e66e7f27e7b70abf2688580b094f80c4f4b37f050a5d01d312065d3"
+      },
+      {
+        "case_index": 43,
+        "case_id": "sustained-selection-run-43",
+        "lineage_id": "lineage:sustained-v1:selection:run:43",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676395,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-43.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-43.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-43",
+        "config_sha256": "672fd9482bf049d29f3d695b72cf5d2dea024e89173c3b366dbd90fcd9b57e2a",
+        "config_raw_sha256": "3ca0428e75a0e3437d842635d5df99177ca482ab40ed02e02f12b38d808e86c7",
+        "manifest_sha256": "c57bdb7ac92ce9d78deedab1b993abb4217cc98c1847340f7b90a95cc9a0f139",
+        "manifest_raw_sha256": "21b82f592c4c8012ab5bfdf952a80eb1694e0986a2f7ec7b09efc57f63b96d21"
+      },
+      {
+        "case_index": 44,
+        "case_id": "sustained-selection-run-44",
+        "lineage_id": "lineage:sustained-v1:selection:run:44",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676396,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-44.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-44.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-44",
+        "config_sha256": "88fd901276d80226de2d4206b5bc09301ef9aa88b78bc5aecd3d6c31a79b920c",
+        "config_raw_sha256": "719b6bdc37877e7af4223bc181d7cbd2a74d5adf263cbf53cc0737ca9369e274",
+        "manifest_sha256": "555e3c6b17ce276d65f1e1f455208a275dbfd17228ac8a00366d554f6f619090",
+        "manifest_raw_sha256": "26aa13afb872dba164e6de0e79f2e09ffde000c31c1f51c2a5c1407100215b18"
+      },
+      {
+        "case_index": 45,
+        "case_id": "sustained-selection-run-45",
+        "lineage_id": "lineage:sustained-v1:selection:run:45",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676397,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-45.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-45.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-45",
+        "config_sha256": "82cd54d8526eae2517ffa9cee3b0f7158b5a7eb33889c70666333b8c2bcf545b",
+        "config_raw_sha256": "a7450afc28d096b13c48f4e1d58bb142e2b8f4faf19440e939e67e8f17c37e18",
+        "manifest_sha256": "382a27caa4e4c977fee14a7c69d3cb9c37928066e334a06f2adcf9d02fa16a63",
+        "manifest_raw_sha256": "c4946921c3115fb97dbddfb7549aa276e3989f28d0e00fdf60bdedd7b3d29898"
+      },
+      {
+        "case_index": 46,
+        "case_id": "sustained-selection-run-46",
+        "lineage_id": "lineage:sustained-v1:selection:run:46",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676398,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-46.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-46.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-46",
+        "config_sha256": "d111ca9ba2d4d7a11f1cac954a35027b746e9ff7a4512a73489b082352aab99d",
+        "config_raw_sha256": "f2b1f58d629812f21aa1cf018b09bc5b44d26c423acabd423bcbe6e1fa788a69",
+        "manifest_sha256": "f9106aa5a3cdd2445abcdf4d395eb8538fd45d880a77bfb4c1995b52fe837520",
+        "manifest_raw_sha256": "7e3903c49b97ccb88bfb8633ba09fbb0e13163390a1e4bc726a04dc0b295d0e0"
+      },
+      {
+        "case_index": 47,
+        "case_id": "sustained-selection-run-47",
+        "lineage_id": "lineage:sustained-v1:selection:run:47",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676399,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-47.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-47.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-47",
+        "config_sha256": "b1b212993c463f018607232eb0a575000382b44d7631445464b96985c700b99f",
+        "config_raw_sha256": "271ec92b2be37cd434e78bb6f9c8dca77b937ac2e50780435a758a3d6db9b36a",
+        "manifest_sha256": "1d88492bef4e65a8df03392458e0b5bef80ec73849beb4d1abc6e3902cb4f6bc",
+        "manifest_raw_sha256": "46650cc280307567b86d5ef4249e4ed049e3ce2f94f7aa4502da0e9b7d60b11f"
+      },
+      {
+        "case_index": 48,
+        "case_id": "sustained-selection-run-48",
+        "lineage_id": "lineage:sustained-v1:selection:run:48",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676400,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-48.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-48.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-48",
+        "config_sha256": "c70b4c9c0bd23932f432d8cd0b373ca21cec10f0c03c9919c36b8a112d0bc4ea",
+        "config_raw_sha256": "ade6b997fb0fc0befd0e21d1fdbbab0adae5c8fc79d1b287921bd6cc0fd10bd3",
+        "manifest_sha256": "64568cc0a2f25e5db86eecfd9cfe02029d77fa6eb9eea7f5f2ba870902cfd0a9",
+        "manifest_raw_sha256": "3d17c49c4eb80137a25f60318e9fd22029c02e0d6cd53f3e3ba9a41866ebc1dd"
+      },
+      {
+        "case_index": 49,
+        "case_id": "sustained-selection-run-49",
+        "lineage_id": "lineage:sustained-v1:selection:run:49",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676401,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-49.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-49.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-49",
+        "config_sha256": "31b68e8d8708f8419194c3797ff32689f3efb52aca682f6328ac37ca7c832927",
+        "config_raw_sha256": "e95ee424ece7019432b055f8131571e1c067d7a4595153936a717f9d8baf3008",
+        "manifest_sha256": "1b60a4266664385b4a7dafdc90c4e04e64be1ffd97cda004ea7e85201ffc93f9",
+        "manifest_raw_sha256": "7dc335c51ce3980bec6ad62d5347c736228d270cf2f1e47c15ae5463a3506f42"
+      },
+      {
+        "case_index": 50,
+        "case_id": "sustained-selection-run-50",
+        "lineage_id": "lineage:sustained-v1:selection:run:50",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676402,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-50.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-50.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-50",
+        "config_sha256": "9148b43fb2b223abc719723707089b9715c1a11756362399625a8f3392608dd5",
+        "config_raw_sha256": "63d90083883953c9dba06303570977a494e66b0e0bf08c15bf2f3dd253d788f6",
+        "manifest_sha256": "b5478a75d3b9e22f9a5374ddc8cf473a3afc84e83ed8e0582d493bee41e88fc3",
+        "manifest_raw_sha256": "9482c1dd71b2616b7ec46225627b500fc16b2e7c9a407cf68e5e037a8a7a96f1"
+      },
+      {
+        "case_index": 51,
+        "case_id": "sustained-selection-run-51",
+        "lineage_id": "lineage:sustained-v1:selection:run:51",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676403,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-51.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-51.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-51",
+        "config_sha256": "1e516c5934d9c10f5e484650671d357b916e1d7bf013615d2bf87af548367410",
+        "config_raw_sha256": "33183cea0db48469d8efa4d46e4e34ef3d0bb2792b58613cf622afee98d4b803",
+        "manifest_sha256": "da58fdf2ed1074ec80cf05dcc678195e5ca008a22a8cd9467ca664e5df6727c0",
+        "manifest_raw_sha256": "cffb8a15b9ab115efa13dc5515fd14f1811affe3cf7159e21a0df39de77c3308"
+      },
+      {
+        "case_index": 52,
+        "case_id": "sustained-selection-run-52",
+        "lineage_id": "lineage:sustained-v1:selection:run:52",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676404,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-52.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-52.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-52",
+        "config_sha256": "aeef3559e80367c7bf6e098029f3dd97fde2f0446badace4492f874f2971bb93",
+        "config_raw_sha256": "7fbcf06de35ccf50b1acf996239d6d54cfebd891d512be203451144ca921e6a5",
+        "manifest_sha256": "568acc4853de75828c6acbd04b44259ddd08e9ce347b49164b9a601c289cfa10",
+        "manifest_raw_sha256": "6a5f3ccad0fc39bb6baeb41156732f87db21173aa9ad04b84eb971782bb7972f"
+      },
+      {
+        "case_index": 53,
+        "case_id": "sustained-selection-run-53",
+        "lineage_id": "lineage:sustained-v1:selection:run:53",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676405,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-53.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-53.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-53",
+        "config_sha256": "1188f3c5516e8914df6ca6686a79c43e3fdc4488abbe007197c690fc4299203f",
+        "config_raw_sha256": "96546033e69a0bffd3c99daaf9d7bd081f610f586258ec282b0410ae6c3735a8",
+        "manifest_sha256": "db280dfe7c0338634cc627559ba27e1f35ed5a8663171eb848aedb68b7bcc512",
+        "manifest_raw_sha256": "bc5eb9429b4e59f9c5d635f8b4e58e968485b9735ee9c648111662821fd7ff30"
+      },
+      {
+        "case_index": 54,
+        "case_id": "sustained-selection-run-54",
+        "lineage_id": "lineage:sustained-v1:selection:run:54",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676406,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-54.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-54.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-54",
+        "config_sha256": "f875cb19b51ec5e3ebd99c3dc61160873eea58f28a79a1e033afd3d8e812911c",
+        "config_raw_sha256": "9490af89cc8877ffa011c30d57c5b861d6becd25beb5f468a975b8ed788747e8",
+        "manifest_sha256": "253264387985f89f0d271df29f86f68e4b6fb1b59bc3acc2f4260ca7875a684e",
+        "manifest_raw_sha256": "a3674a456e8e00cbe983c69760bdd5e7dde708b5da25e751ca6421c10247ed52"
+      },
+      {
+        "case_index": 55,
+        "case_id": "sustained-selection-run-55",
+        "lineage_id": "lineage:sustained-v1:selection:run:55",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676407,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-55.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-55.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-55",
+        "config_sha256": "2728d0c222b51463c7b473a679c32db4bf0480c50e7d1c56606ebaa6d5076def",
+        "config_raw_sha256": "9b495ccb8e309419f37063971623843218db682d9eab20a026767529624fe6df",
+        "manifest_sha256": "c8e1685359568071355267191c43aa0d0d04f0ead1a5577c47e02904853f25d8",
+        "manifest_raw_sha256": "0cd04b880d5a9346835631c02c437b712312607ced9e31ac6e43a62bac196ff9"
+      },
+      {
+        "case_index": 56,
+        "case_id": "sustained-selection-run-56",
+        "lineage_id": "lineage:sustained-v1:selection:run:56",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676408,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-56.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-56.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-56",
+        "config_sha256": "1feee9852553c2f27bff5f2e79f7134fc96f8506f8ab8519a9e882f81a0ff64c",
+        "config_raw_sha256": "4da5bb1db2fc36c41b3e8de1441c7267cc0973d83de3109d1883a950ef35fc2d",
+        "manifest_sha256": "fb3b997ca2253dfe35829da0481c3ea2f40bfea72139ae46cb925fc8952c3711",
+        "manifest_raw_sha256": "580d28713ee7e8f62db6a90f3e6d91ff47658ecd50847b9a6b2f1ac92946dca6"
+      },
+      {
+        "case_index": 57,
+        "case_id": "sustained-selection-run-57",
+        "lineage_id": "lineage:sustained-v1:selection:run:57",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676409,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-57.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-57.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-57",
+        "config_sha256": "29c8931b2e56e6b70f266c3a1be39589818593125cd6b1d9ba62576cb70700c7",
+        "config_raw_sha256": "1781cb04900bff12d78a7c16be1ca61a07d17fa38cd3436ed4e579e3726dd30c",
+        "manifest_sha256": "512451621065abbc7f50762188c76baaaaa6b38066d6403ab15691567509f557",
+        "manifest_raw_sha256": "c93cbd3807f164fb636564464ccbb65d1f62b74af80cfd04e5b9049abd8891e1"
+      },
+      {
+        "case_index": 58,
+        "case_id": "sustained-selection-run-58",
+        "lineage_id": "lineage:sustained-v1:selection:run:58",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676410,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-58.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-58.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-58",
+        "config_sha256": "28b9925c45402edafe5f15ffb205f625d26726da869488412b6e84d9ce9205a5",
+        "config_raw_sha256": "5e2bca66334092104bac7180d944269ae52251d6a282d1ad971db345302518ff",
+        "manifest_sha256": "9445d34f0a733f8190ef14c1dec2291deb7db26b19dd89009b87052323bb74b3",
+        "manifest_raw_sha256": "cfb8d86d2e70db61735e62c4a001a8a53825487a6ff4915e7b5d9317a2ae6412"
+      },
+      {
+        "case_index": 59,
+        "case_id": "sustained-selection-run-59",
+        "lineage_id": "lineage:sustained-v1:selection:run:59",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676411,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-59.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-59.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-59",
+        "config_sha256": "37a4f41220b010fd9b6f375e385e6b290af0679f89ed2b8ee63fc23435451972",
+        "config_raw_sha256": "a6d902a0e2817fca8d896f7409cedf6310907a651a13bc7e1557d4dc53c534da",
+        "manifest_sha256": "781f3cf4b317bf8a9427c005e085ab7939820e741ee68bd83c0550fa62013a19",
+        "manifest_raw_sha256": "a689fa9f7fe1bc747d378cff7b63c02c6311671fc71a08fe75bc47348133e9c4"
+      },
+      {
+        "case_index": 60,
+        "case_id": "sustained-selection-run-60",
+        "lineage_id": "lineage:sustained-v1:selection:run:60",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676412,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-60.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-60.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-60",
+        "config_sha256": "e1e07362b8e75cb489272a25cbfba36198aa7a3918b1ecdc82882179cd782a94",
+        "config_raw_sha256": "afec379fdf17a234629857a14f281db30afeb4973812818dadce5462cc9b96d5",
+        "manifest_sha256": "c01ae60d6b48a70bd15507955fe901542b5ce84fc98144493edb56871d202a25",
+        "manifest_raw_sha256": "6c3335419430a93109b173dee6696dd2a288b692a52b9cffa4a2dda328cbcc33"
+      },
+      {
+        "case_index": 61,
+        "case_id": "sustained-selection-run-61",
+        "lineage_id": "lineage:sustained-v1:selection:run:61",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676413,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-61.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-61.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-61",
+        "config_sha256": "b75744d712c29c52a11904f5ed9ba397e59ff22b457e04bfd6a9cb5743a1c2e5",
+        "config_raw_sha256": "6cfa40705ff581579a1ce2e154a9b12d6cdd0a3e0ad3074eca295d0bd54fd219",
+        "manifest_sha256": "35b80d5f3020a42ee15f5146f4ac4b8f204e4f5b1da4da20d11737636508aeb0",
+        "manifest_raw_sha256": "32737414cb30e9ad98e88be4376edff1c38119589bbb483e679f5013ad0d62c6"
+      },
+      {
+        "case_index": 62,
+        "case_id": "sustained-selection-run-62",
+        "lineage_id": "lineage:sustained-v1:selection:run:62",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676414,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-62.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-62.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-62",
+        "config_sha256": "41307f603bb6b37db53286df63fc1b8cb8cf725cc62183efa49cbd6681c4a89f",
+        "config_raw_sha256": "8bde20b271645e212d696f97ed81b596be39aa00265d463b917d8251f44306e7",
+        "manifest_sha256": "2408fc3326e0195d625491a12f9799d0c09643fbc43d24e30d74ff7d9828897e",
+        "manifest_raw_sha256": "ecb0558dd774c04fd39323b61ab84b5351706095eb27453e82e5cab5d530164a"
+      },
+      {
+        "case_index": 63,
+        "case_id": "sustained-selection-run-63",
+        "lineage_id": "lineage:sustained-v1:selection:run:63",
+        "mode": "run",
+        "cohort": "normal_run",
+        "environment_seed": 1099512676415,
+        "config_path": "configs/neural/experiments/sustained-v1/selection/case-63.toml",
+        "manifest_path": "configs/cases/neural/sustained-v1/selection/case-63.json",
+        "output_root": "/learner/artifacts/development/neural-combat/experiments/sustained-v1/selection/sustained-selection-run-63",
+        "config_sha256": "55a6268b1413fa194e61b5989f8b9ad1396489e6090e9f7d984cad83df3815d9",
+        "config_raw_sha256": "46e6decc1130d678b02c1820df7c39b56d0cd71be3c71dee9b6e847fcb15520d",
+        "manifest_sha256": "9b281a556610d80b05d93bed15202397edaeaa93926bfa35a2564efbd1adbf0b",
+        "manifest_raw_sha256": "231977066f90be99b149098102ddd37339d4575b39796000d779bc4ccf730b2f"
+      }
+    ],
+    "sentry_case_ids": [
+      "sustained-selection-standalone-00",
+      "sustained-selection-standalone-04",
+      "sustained-selection-standalone-08",
+      "sustained-selection-standalone-12",
+      "sustained-selection-standalone-16",
+      "sustained-selection-standalone-20",
+      "sustained-selection-standalone-24",
+      "sustained-selection-standalone-28",
+      "sustained-selection-run-32",
+      "sustained-selection-run-33",
+      "sustained-selection-run-34",
+      "sustained-selection-run-35",
+      "sustained-selection-run-36",
+      "sustained-selection-run-37",
+      "sustained-selection-run-38",
+      "sustained-selection-run-39"
+    ],
+    "milestones": {
+      "25": 1500,
+      "50": 3000,
+      "75": 4500
+    },
+    "operations": 704
+  },
+  "interpretation": {
+    "final_split": "not_used",
+    "environment_seed_policy": "environment-seed-for-replica0-v1",
+    "matched_streams": true,
+    "parental_exposure": true,
+    "no_training_adaptation_from_selection": true,
+    "future_checkpoint_hashes": "absent_until_actual_publication",
+    "native_episodes_resume": false,
+    "fault_policy": "halt_no_retry_no_substitute",
+    "qualifications": [
+      "RNG-001",
+      "TIME-001",
+      "finite supported content",
+      "simulator-only evidence",
+      "model-selection evidence",
+      "catalog-relative strata; no Run or parent non-exposure claim"
+    ]
+  }
+}

@@ -557,6 +557,43 @@ class NeuralRunnerTests(unittest.TestCase):
         self.assertEqual(len(runtime.update_calls), 2)
         self.assertEqual(report.summary["optimizer"]["updates"], 2)
 
+    def test_segment_environment_ceiling_bounds_real_fixed_only_run_collector(self):
+        from spire_learn.neural.collector import Collector
+        from spire_learn.neural.runner import RuntimeOperationLimits
+        from spire_learn.experiments.budget import Budget
+        from tests.unit.test_neural_collector import ScriptedDriver, FakePolicy, row, transition
+
+        for operational, lifetime, expected in ((103, 200, 3), (100, 200, 0), (103, 102, 2)):
+            with self.subTest(operational=operational, lifetime=lifetime):
+                config = replace(load_neural_config(ROOT / "configs/neural/run.toml"),
+                                 rollout_steps=128, budgets=NeuralBudget(16, 100, lifetime, 60.0))
+                boundary = row(1, active=False)
+                driver = ScriptedDriver("run", 1, reset_rows=lambda *args: boundary,
+                    steps=[lambda before, actions: (transition(before[0], boundary),)] * 8)
+                policy = FakePolicy(config)
+                policy._behavior_policy_version = 0
+                collector = Collector(driver, policy, config, controller_rng=random.Random(1),
+                    curriculum_rng=random.Random(2), budget=Budget(60.0, lambda: 0.0))
+                runtime = FakeRuntime(config, collector, prefix={"attempted_environment_slots": 100})
+                runtime.operation_limits = RuntimeOperationLimits(max_environment_actions=operational)
+                report, _ = self._run_train(config, runtime)
+                self.assertEqual(report.exit_code, 0, report.summary)
+                self.assertEqual(len(driver.step_calls), expected)
+                self.assertEqual(report.summary["stop_reason"], "environment_action_budget")
+                self.assertEqual(runtime.update_calls, [])
+
+    def test_runtime_limit_positional_deadline_contract_is_preserved(self):
+        from spire_learn.neural.runner import RuntimeOperationLimits
+        limits = RuntimeOperationLimits(2, 15.0)
+        self.assertEqual(limits.monotonic_deadline, 15.0)
+        self.assertIsNone(limits.max_environment_actions)
+
+    def test_operational_environment_ceiling_rejects_invalid_counts(self):
+        from spire_learn.neural.runner import RuntimeOperationLimits
+        for value in (-1, True, 1.5, "3"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                RuntimeOperationLimits(max_environment_actions=value)
+
     def test_shared_deadline_uses_remaining_time_and_zero_stops_before_dispatch(self):
         from spire_learn.neural.runner import RuntimeOperationLimits
 

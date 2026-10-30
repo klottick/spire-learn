@@ -1,0 +1,17 @@
+{
+  "schema": "spire-learn-neural-cases-v1",
+  "split": "selection",
+  "partition": "selection",
+  "cases": [
+    {
+      "case_id": "sustained-selection-run-38",
+      "lineage_id": "lineage:sustained-v1:selection:run:38",
+      "mode": "run",
+      "environment_seed": 1099512676390,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    }
+  ]
+}

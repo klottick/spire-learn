@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from spire_learn.neural.profiling import observed
+
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -289,6 +291,7 @@ def _preflight_close(runtime: Any, report: NeuralReport, label: str = "runtime")
     return NeuralReport(summary, 1, report.run_dir)
 
 
+@observed("frame_hash")
 def _frame_hash(frame: CombatFrame) -> str:
     digest = hashlib.sha256()
     digest.update(frame.schema_fingerprint.encode("ascii"))

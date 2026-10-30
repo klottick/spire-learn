@@ -1,0 +1,71 @@
+{
+  "schema": "spire-learn-neural-cases-v1",
+  "split": "selection",
+  "partition": "selection",
+  "cases": [
+    {
+      "case_id": "task9-selection-standalone-04",
+      "lineage_id": "lineage:task9-selection:standalone:04",
+      "mode": "standalone",
+      "environment_seed": 1099511631876,
+      "cohort": "seen",
+      "entry_id": "task9-entry-standalone-04",
+      "entry": {
+        "id": "task9-entry-standalone-04",
+        "encounter": "two_louse",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    }
+  ]
+}

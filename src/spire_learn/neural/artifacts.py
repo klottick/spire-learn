@@ -7,6 +7,8 @@ serialized from arbitrary dataclasses or live model/environment objects.
 
 from __future__ import annotations
 
+from spire_learn.neural.profiling import observed
+
 from collections.abc import Mapping
 import hashlib
 import json
@@ -170,6 +172,7 @@ class NeuralWriter:
             raise
         self._started = True
 
+    @observed("artifact_event")
     def event(self, record: Mapping[str, object]) -> None:
         self._ensure_open()
         if not self._started:
@@ -203,6 +206,7 @@ class NeuralWriter:
         self._event_count += 1
         self._event_bytes += encoded_size
 
+    @observed("artifact_finalize")
     def finalize(self, summary: Mapping[str, object]) -> None:
         self._ensure_open()
         if not self._started:
@@ -250,6 +254,7 @@ class NeuralWriter:
             raise
         self._finalized = True
 
+    @observed("artifact_close")
     def close(self) -> None:
         if self._closed:
             return

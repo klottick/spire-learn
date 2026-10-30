@@ -7,6 +7,8 @@ native provider methods created there.
 
 from __future__ import annotations
 
+from spire_learn.neural.profiling import observed, span
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import math
@@ -268,10 +270,11 @@ class _StandaloneProvider:
     ) -> tuple[_RawBoundary | None, ...]:
         np = self._numpy
         mask = np.asarray(reset_mask, dtype=np.dtype("bool"))  # type: ignore[attr-defined]
-        observations, info = self._env.reset(  # type: ignore[attr-defined]
-            seed=list(seeds),
-            options={"entry_ids": list(entry_ids), "reset_mask": mask},
-        )
+        with span("native_reset_public_export"):
+            observations, info = self._env.reset(  # type: ignore[attr-defined]
+                seed=list(seeds),
+                options={"entry_ids": list(entry_ids), "reset_mask": mask},
+            )
         try:
             info_rows = _info_slots(info, self.batch_size)
             rows: list[_RawBoundary | None] = []
@@ -287,9 +290,10 @@ class _StandaloneProvider:
     def step(self, actions: tuple[int, ...]) -> tuple[_RawTransition, ...]:
         np = self._numpy
         native_actions = np.asarray(actions, dtype=np.dtype("=i8"))  # type: ignore[attr-defined]
-        observations, rewards, terminated, truncated, info = self._env.step(  # type: ignore[attr-defined]
-            native_actions
-        )
+        with span("native_step_public_export"):
+            observations, rewards, terminated, truncated, info = self._env.step(  # type: ignore[attr-defined]
+                native_actions
+            )
         try:
             info_rows = _info_slots(info, self.batch_size)
             result: list[_RawTransition] = []
@@ -356,20 +360,24 @@ class _RunProvider:
     ) -> tuple[_RawBoundary | None, ...]:
         if len(seeds) != 1 or len(entry_ids) != 1 or len(reset_mask) != 1 or reset_mask != (True,):
             raise DriverInputError("Run reset requires one selected row")
-        result = self._env.reset(seed=seeds[0])  # type: ignore[attr-defined]
+        with span("native_reset_public_export"):
+            result = self._env.reset(seed=seeds[0])  # type: ignore[attr-defined]
         try:
             # The common sidecar and its token are valid only for this decision.
-            view = self._env.combat_view()  # type: ignore[attr-defined]
+            with span("run_combat_public_export"):
+                view = self._env.combat_view()  # type: ignore[attr-defined]
             run_observation, _info = result
             return (self._capture(view, run_observation),)
         except BaseException as error:
             raise _PostReturnFailure(error) from error
 
     def step(self, actions: tuple[int, ...]) -> tuple[_RawTransition, ...]:
-        result = self._env.step(actions[0])  # type: ignore[attr-defined]
+        with span("native_step_public_export"):
+            result = self._env.step(actions[0])  # type: ignore[attr-defined]
         try:
             # Read the sidecar before inspecting or dispatching another decision.
-            view = self._env.combat_view()  # type: ignore[attr-defined]
+            with span("run_combat_public_export"):
+                view = self._env.combat_view()  # type: ignore[attr-defined]
             run_observation, reward, terminated, truncated, _info = result
             ended = _public_scalar(terminated, "Run terminated flag")
             cut = _public_scalar(truncated, "Run truncated flag")
@@ -398,6 +406,7 @@ def _clean_error(error: BaseException) -> str:
     return value
 
 
+@observed("snapshot_validation")
 def _row_from_raw(
     raw: _RawBoundary,
     schema: CombatSchema,

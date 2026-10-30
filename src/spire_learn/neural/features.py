@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from spire_learn.neural.profiling import observed
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -133,6 +135,7 @@ def _copy_tensor(torch: Any, frame: CombatFrame, key: str, device: str) -> Any:
         raise ContractError(f"could not tensorize public frame buffer {key}") from error
 
 
+@observed("features_transfer")
 def encode_frames(
     frames: Sequence[CombatFrame],
     schema: CombatSchema,

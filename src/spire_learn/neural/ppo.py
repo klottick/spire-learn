@@ -10,6 +10,8 @@ Optional tensor imports are deliberately local to :func:`ppo_update`.
 
 from __future__ import annotations
 
+from spire_learn.neural.profiling import span
+
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -339,42 +341,43 @@ def ppo_update(
             )
 
         phase = "freeze-rollout"
-        schema = policy._schema
-        policy_device = next(policy.parameters()).device
-        frames = tuple(record.source for record in actor_records)
-        actions_cpu = tuple(record.choice.original_action_index for record in actor_records)
-        action_values = torch.tensor(actions_cpu, dtype=torch.int64, device="cpu")
-        old_log_probabilities = torch.tensor(
-            [record.choice.log_probability for record in actor_records],
-            dtype=torch.float32,
-            device="cpu",
-        )
-        targets_cpu = torch.tensor(
-            [return_batch.targets[index] for index, record in enumerate(rollout.records)
-             if record.actor_training_mask],
-            dtype=torch.float32,
-            device="cpu",
-        )
-        advantages_cpu = torch.tensor(
-            [return_batch.advantages[index] for index, record in enumerate(rollout.records)
-             if record.actor_training_mask],
-            dtype=torch.float32,
-            device="cpu",
-        )
-        if not torch.isfinite(old_log_probabilities).all().item():
-            raise ContractError("stored behavior log-probabilities must be finite")
-        if not torch.isfinite(targets_cpu).all().item() or not torch.isfinite(advantages_cpu).all().item():
-            raise ContractError("rollout return targets and advantages must be finite")
-        advantage_mean = advantages_cpu.mean()
-        advantage_scale = advantages_cpu.std(unbiased=False)
-        if not torch.isfinite(advantage_scale).item():
-            raise ContractError("normalized rollout advantages must be finite")
-        normalized_advantages_cpu = (advantages_cpu - advantage_mean) / (advantage_scale + 1e-8)
+        with span("ppo_freeze_rollout"):
+            schema = policy._schema
+            policy_device = next(policy.parameters()).device
+            frames = tuple(record.source for record in actor_records)
+            actions_cpu = tuple(record.choice.original_action_index for record in actor_records)
+            action_values = torch.tensor(actions_cpu, dtype=torch.int64, device="cpu")
+            old_log_probabilities = torch.tensor(
+                [record.choice.log_probability for record in actor_records],
+                dtype=torch.float32,
+                device="cpu",
+            )
+            targets_cpu = torch.tensor(
+                [return_batch.targets[index] for index, record in enumerate(rollout.records)
+                 if record.actor_training_mask],
+                dtype=torch.float32,
+                device="cpu",
+            )
+            advantages_cpu = torch.tensor(
+                [return_batch.advantages[index] for index, record in enumerate(rollout.records)
+                 if record.actor_training_mask],
+                dtype=torch.float32,
+                device="cpu",
+            )
+            if not torch.isfinite(old_log_probabilities).all().item():
+                raise ContractError("stored behavior log-probabilities must be finite")
+            if not torch.isfinite(targets_cpu).all().item() or not torch.isfinite(advantages_cpu).all().item():
+                raise ContractError("rollout return targets and advantages must be finite")
+            advantage_mean = advantages_cpu.mean()
+            advantage_scale = advantages_cpu.std(unbiased=False)
+            if not torch.isfinite(advantage_scale).item():
+                raise ContractError("normalized rollout advantages must be finite")
+            normalized_advantages_cpu = (advantages_cpu - advantage_mean) / (advantage_scale + 1e-8)
 
-        # The frozen old policy statistics must match every source frame and
-        # original legal dispatch index before any optimizer call.
+            # The frozen old policy statistics must match every source frame and
+            # original legal dispatch index before any optimizer call.
         phase = "validate-behavior-data"
-        with torch.no_grad():
+        with span("ppo_validate_behavior"), torch.no_grad():
             source_batch = encode_frames(frames, schema, device=str(policy_device))
             source_output = policy(source_batch)
             source_distribution = masked_categorical(source_output.logits, source_batch.action_mask)
@@ -419,46 +422,50 @@ def ppo_update(
                 target_batch = targets_cpu[selected_cpu].to(device=policy_device)
 
                 phase = "forward-loss"
-                optimizer.zero_grad(set_to_none=True)
-                batch = encode_frames(batch_frames, schema, device=str(policy_device))
-                output = policy(batch)
-                distribution = masked_categorical(output.logits, batch.action_mask)
-                new_logp = distribution.log_prob(action_batch)
-                ratio = torch.exp(new_logp - old_logp_batch)
-                unclipped = ratio * advantage_batch
-                clipped = torch.clamp(
-                    ratio,
-                    min=1.0 - config.clip_epsilon,
-                    max=1.0 + config.clip_epsilon,
-                ) * advantage_batch
-                policy_loss_tensor = -torch.minimum(unclipped, clipped).mean()
-                value_loss_tensor = torch.square(output.values - target_batch).mean()
-                entropy_tensor = distribution.entropy.mean()
-                loss = (
-                    policy_loss_tensor
-                    + config.value_coefficient * value_loss_tensor
-                    - config.entropy_coefficient * entropy_tensor
-                )
-                if not torch.isfinite(loss).item():
-                    raise ContractError("PPO loss must be finite before backward")
+                with span("ppo_forward_loss"):
+                    optimizer.zero_grad(set_to_none=True)
+                    batch = encode_frames(batch_frames, schema, device=str(policy_device))
+                    output = policy(batch)
+                    distribution = masked_categorical(output.logits, batch.action_mask)
+                    new_logp = distribution.log_prob(action_batch)
+                    ratio = torch.exp(new_logp - old_logp_batch)
+                    unclipped = ratio * advantage_batch
+                    clipped = torch.clamp(
+                        ratio,
+                        min=1.0 - config.clip_epsilon,
+                        max=1.0 + config.clip_epsilon,
+                    ) * advantage_batch
+                    policy_loss_tensor = -torch.minimum(unclipped, clipped).mean()
+                    value_loss_tensor = torch.square(output.values - target_batch).mean()
+                    entropy_tensor = distribution.entropy.mean()
+                    loss = (
+                        policy_loss_tensor
+                        + config.value_coefficient * value_loss_tensor
+                        - config.entropy_coefficient * entropy_tensor
+                    )
+                    if not torch.isfinite(loss).item():
+                        raise ContractError("PPO loss must be finite before backward")
                 phase = "backward"
-                loss.backward()
-                parameters = tuple(parameter for parameter in policy.parameters() if parameter.grad is not None)
-                if not parameters or any(not torch.isfinite(parameter.grad).all().item() for parameter in parameters):
-                    raise ContractError("PPO gradients must be present and finite before clipping")
+                with span("ppo_backward"):
+                    loss.backward()
+                    parameters = tuple(parameter for parameter in policy.parameters() if parameter.grad is not None)
+                    if not parameters or any(not torch.isfinite(parameter.grad).all().item() for parameter in parameters):
+                        raise ContractError("PPO gradients must be present and finite before clipping")
                 phase = "gradient-clipping"
-                torch.nn.utils.clip_grad_norm_(parameters, config.max_grad_norm, error_if_nonfinite=True)
-                if any(not torch.isfinite(parameter.grad).all().item() for parameter in parameters):
-                    raise ContractError("clipped PPO gradients must be finite")
+                with span("ppo_gradient_clipping"):
+                    torch.nn.utils.clip_grad_norm_(parameters, config.max_grad_norm, error_if_nonfinite=True)
+                    if any(not torch.isfinite(parameter.grad).all().item() for parameter in parameters):
+                        raise ContractError("clipped PPO gradients must be finite")
 
                 phase = "metrics"
-                latest_losses = (
-                    float(policy_loss_tensor.detach().cpu().item()),
-                    float(value_loss_tensor.detach().cpu().item()),
-                    float(entropy_tensor.detach().cpu().item()),
-                )
-                if any(not math.isfinite(value) for value in latest_losses):
-                    raise ContractError("detached PPO metrics must be finite")
+                with span("ppo_metrics"):
+                    latest_losses = (
+                        float(policy_loss_tensor.detach().cpu().item()),
+                        float(value_loss_tensor.detach().cpu().item()),
+                        float(entropy_tensor.detach().cpu().item()),
+                    )
+                    if any(not math.isfinite(value) for value in latest_losses):
+                        raise ContractError("detached PPO metrics must be finite")
                 phase = "optimizer.step"
                 attempted_steps += 1
                 if not attempted_version_bump:

@@ -1,12 +1,42 @@
-# Prepared bounded Ironclad learning study
+# Bounded Ironclad learning study
 
-This Task 9 package is prepared replacement source, without replacement execution
-approval. The single approved attempt `task9-study-20261030-a` stopped at guest
-admission before training; its claim is consumed and its closed evidence and empty
-output remain preserved. The accepted proof/calibration establish bounded plumbing and measured
-calibration only. No learning, held-out playing strength, native coverage or
-original-game transfer is claimed here. The [runbook](../scripts/neural/task9-study-runbook.md)
-defines the protected proposed invocation and artifact interpretation.
+The single approved replacement `task9-study-20261030-b` completed at source
+`17e71f07d736469955ce09a7b0dbb3643052ec9a`: four eligible checkpoints,
+43,163 learned decisions, 3,447 accepted optimizer steps, zero simulator faults
+and all 192 CPU selection operations completed in 47.47 minutes. All five owned
+containers were removed. The original a attempt stopped before training and its
+closed evidence remains preserved. Both one-use claims are consumed; no new
+training or evaluation is authorized.
+
+## Selection results
+
+Each policy was evaluated on the same 16 isolated-combat and 16 normal-Run cases.
+The last column counts combat victories per Run case, not Run victories.
+
+| Policy | Isolated-combat wins | Mean combat victories per Run case |
+| --- | ---: | ---: |
+| standalone-a | 7/16 | 3.5625 |
+| run-a | 16/16 | 5.3125 |
+| standalone-b | 16/16 | 4.8750 |
+| run-b | 16/16 | 5.5625 |
+| legal-random | 15/16 | 2.2500 |
+| end-turn-last-v1 | 16/16 | 4.6250 |
+
+All 96 normal-Run trials ended in death. Standalone A won 7/8 seen cases and
+0/8 held-out-encounter cases; the other three neural checkpoints won 16/16
+isolated fights. Held-out encounters are excluded from standalone training
+only; Run training may encounter them. Run B is a provisional candidate for
+further validation. These small, seed-sensitive selection results establish
+neither significance, final-split performance nor original-game transfer.
+In-Run fight denominators depend on policy survival, and post-cleanup HP includes
+healing. The final split remains untouched. Exact checkpoints, per-case results,
+recorded soft overshoots and prior qualifications are in the [retained runtime report](../artifacts/development/neural-combat/task-9/experiment-package/execution-20261030-b/runtime-report.md).
+
+## Reviewed protocol
+
+The remaining sections describe the reviewed inputs and controls used by the
+completed campaign. They grant no authority to invoke it again. The
+[runbook](../scripts/neural/task9-study-runbook.md) is a historical protocol.
 
 The authoritative authored inputs are [study.json](../configs/neural/experiments/task9-v1/study.json)
 and its exact four training configs, 32 selection configs and parent/one-case
@@ -73,8 +103,8 @@ has a distinct trusted not_started receipt. C validates the actual identities,
 reservation/entry linkage, supported deadline reason, explicit no-effects and
 absence of runner artifacts; all 256 slots remain reserved and counters remain
 unknown. This supports healthy partial selection without retry or refund.
-The evidence is strict-fake source coverage; actual runtime and durability under
-a real crash remain unqualified, and final source re-review is still required.
+Those source tests use strict fakes. The completed study adds actual bounded
+runtime evidence; durability under a real crash remains unqualified.
 
 The replacement routes artifacts to
 `artifacts/development/neural-combat/experiments/task9-v1-attempt-b`; config paths

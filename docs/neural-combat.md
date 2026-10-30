@@ -194,12 +194,19 @@ initialization to preserve the caller's CPU/CUDA RNG states and passed the
 qualified RNG checks before the recorded GPU calibration. Earlier failures and
 the missing original calibration RED transcript remain disclosed in its reports.
 
-## Prepared Task 9 learning study
+## Completed Task 9 learning study
 
-The [bounded study](neural-study.md) and [protected runbook](../scripts/neural/task9-study-runbook.md)
-are source preparation only. Four fresh GPU training phases each have a 600 s
-soft / 900 s whole limit; one CPU selection phase shares 600 s soft / 900 s
-whole across 192 scheduled operations. The whole campaign is bounded to 4,500 s.
-No training or selection in this package has run, and preparation grants no
-execution approval or playing-strength claim. A separate approval binds final
-reviewed source bytes and the mechanical post-training checkpoint inventory.
+The separately approved [bounded study](neural-study.md) completed once at
+source `17e71f0`: four eligible training checkpoints, 43,163 learned decisions,
+3,447 accepted optimizer steps, zero simulator faults and all 192 CPU selection
+operations completed. Three neural checkpoints won all 16 isolated cases;
+Standalone A won 7. Run B averaged 5.5625 combat victories per normal-Run trial,
+versus 4.625 for the heuristic, but every normal-Run trial ended in death.
+These are seed-sensitive selection results; the final split remains untouched.
+
+Actual outputs remain under
+`artifacts/development/neural-combat/experiments/task9-v1-attempt-b`; config paths
+remain under `configs/neural/experiments/task9-v1`. The [runbook](../scripts/neural/task9-study-runbook.md)
+records the historical bounded protocol. Campaign `task9-study-20261030-b` and
+the original a claim are consumed. No retry, extension or new workload is
+authorized by this documentation.

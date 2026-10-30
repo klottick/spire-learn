@@ -21,7 +21,7 @@ contract; planned gym capabilities are not implemented learner support.
 
 ## Current state
 
-This is a local, dependency-light learner scaffold, not a trained agent. The
+This is a local, dependency-light learner with initial Ironclad combat checkpoints. The
 public combat model, PPO update path, collection, checkpoint and Task 7 training
 and evaluation runner are authored. The single approved Task 7 CPU smoke ran
 once: both mode tests passed with zero skips, recording 396 learned decisions,
@@ -40,8 +40,12 @@ mode: two tests, 64 environment actions, 40 learned decisions and eight accepted
 optimizer steps. Both final checkpoints passed same-backend state restoration
 and CPU portability comparisons. See the [retained runtime
 review](artifacts/development/neural-combat/task-9/gpu-proof/runtime-review-gpu-proof-20261029-e.md).
-This establishes bounded plumbing; longer learning and held-out selection remain
-unapproved, and no playing-strength claim is made.
+The separately approved bounded study then trained four checkpoints across
+43,163 learned decisions and completed all 192 CPU selection comparisons, with
+zero simulator faults. Results are mixed and seed-sensitive: see the
+[study results](docs/neural-study.md). All normal-Run trials ended in death;
+no full-Run victory, final-evaluation or original-game-transfer claim is made.
+The one-use campaign is complete; no further workload is approved.
 See the [retained CPU runtime
 report](artifacts/development/neural-combat/task-7/task-7-training-smoke-runtime-report.md),
 [development and evaluation checks](docs/development.md), and [neural combat

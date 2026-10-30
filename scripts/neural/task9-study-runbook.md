@@ -1,10 +1,17 @@
-# Task 9 protected study: prepared, unrun
+# Task 9 protected study: historical completed protocol
 
-Source preparation authorizes no experiment. No live approval/context/claim is
-included here. Parent final source synthesis, independent combined review,
-verification, explicit commit and separate user approval precede execution.
-Existing GPU proof and calibration are historical evidence, never replayed.
-No installs, Gym edits, service/model stops or original-game claims are implied.
+The reviewed protocol below was invoked once for approved campaign
+`task9-study-20261030-b` at source `17e71f07d736469955ce09a7b0dbb3643052ec9a`.
+It completed all five phases and 192 selection operations in 47.47 minutes;
+see the [study results](../../docs/neural-study.md). The original a and successful
+b claims are consumed, their evidence/outputs remain retained, and no rerun or
+extension is authorized. The executed source snapshot remains immutable.
+
+The remaining sections preserve the reviewed pre-execution protocol and its
+qualification history. Their preparation/proposal wording grants no current
+execution authority. Another campaign requires separately reviewed fresh input
+and output identities plus explicit approval. No installs, Gym edits, service
+stops or original-game-transfer claims are implied.
 
 ## Exact proposed campaign
 

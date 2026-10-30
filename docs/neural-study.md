@@ -1,7 +1,9 @@
 # Prepared bounded Ironclad learning study
 
-This Task 9 package is prepared source, not an executed study or an execution
-approval. The accepted proof/calibration establish bounded plumbing and measured
+This Task 9 package is prepared replacement source, without replacement execution
+approval. The single approved attempt `task9-study-20261030-a` stopped at guest
+admission before training; its claim is consumed and its closed evidence and empty
+output remain preserved. The accepted proof/calibration establish bounded plumbing and measured
 calibration only. No learning, held-out playing strength, native coverage or
 original-game transfer is claimed here. The [runbook](../scripts/neural/task9-study-runbook.md)
 defines the protected proposed invocation and artifact interpretation.
@@ -73,3 +75,45 @@ absence of runner artifacts; all 256 slots remain reserved and counters remain
 unknown. This supports healthy partial selection without retry or refund.
 The evidence is strict-fake source coverage; actual runtime and durability under
 a real crash remain unqualified, and final source re-review is still required.
+
+The replacement routes artifacts to
+`artifacts/development/neural-combat/experiments/task9-v1-attempt-b`; config paths
+remain under `configs/neural/experiments/task9-v1`. Only output routing and its
+canonical/raw config bindings changed; cases, seeds, schedule, model/PPO and
+budgets are unchanged. The proposed future campaign identity is
+`task9-study-20261030-b`. No replacement approval or claim is created by this
+source correction.
+
+The [authored NVIDIA CDI profile](../configs/runtime/task9-nvidia-cdi-profile.json)
+is bound by raw hash in the study and staged context/source. Host checks pin the
+CDI spec and hook binary before claim acquisition and throughout closure. Docker
+continues to request the exact qualified GPU UUID. GPU guest admission recognizes
+only legacy exact values or the pinned post-OCI `NVIDIA_VISIBLE_DEVICES=void` plus
+`NVIDIA_CTK_LIBCUDA_DIR=/usr/lib/x86_64-linux-gnu`; all other controlled values and
+unknown-key rejection remain strict. CPU selection gets no CDI exceptions.
+
+The measured CDI profile admits nineteen exact regular RO driver files, one
+specific NVIDIA persistence-daemon socket, and one UUID-named runtime tmpfs.
+The RO socket remains connectable driver IPC (UID105/GID108,0777), not read-only
+IPC. The tmpfs is root-owned01777 and actor-writable, limited to4096 bytes with
+zero available bytes at admission and one root-owned0444 `nvct-params` child
+bound to the same params file. Its inode capacity/access are recorded; no separate
+hard inode quota is claimed. Container memory/PID bounds remain. Exactly one
+operator-declared RW application bind remains; this is not a claim of one
+globally writable mount. A replacement approval must explicitly disclose both
+runtime exceptions. Metadata probes and pure/fake source tests do not establish
+learning or release another training invocation.
+
+Successful parent-phase admission emits one C-owned stderr line beginning
+`SPIRE_LEARN_TASK9_ADMISSION_V1 `, with JSON schema
+`spire-learn-task9-guest-admission-v1`. The record binds campaign/phase, raw
+context/study/profile identities and actual process/group, safe CDI environment
+and socket/scratch/params observations, including inode/access accounting and
+the no-hard-inode-quota qualification. Existing bounded host command capture and
+closed inventory retain it. Serialization, a payload including marker/newline
+above16KiB, short/failed write or failed flush denies entry before learner/factory
+setup. Process-control exceptions retain precedence. No application file is
+created before B's empty-output check, and B's receipt schema is unchanged.
+Selection children remain verified and emit no duplicate phase admission lines.
+A record proves those admission checks passed; subsequent transport/learner/closure
+results still determine effects and campaign completion.

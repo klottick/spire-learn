@@ -17,6 +17,12 @@ import sys
 import tomllib
 from typing import Any
 
+if __package__ in (None, ''):
+    sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
+from scripts.neural.task9_nvidia_cdi import (
+    PROFILE_PATH, PROFILE_SHA256, PROFILE_ID, load_runtime_profile,
+)
+
 from spire_learn.neural.cases import load_neural_cases, validate_neural_case_lineage
 from spire_learn.neural.config import load_neural_config
 
@@ -52,6 +58,7 @@ TRAINING_CASES = "configs/cases/neural/train.json"
 PARENT_SELECTION = "configs/cases/neural/task9-selection.json"
 ENTRY_TEMPLATE = "configs/cases/neural/selection.json"
 FINAL_CASES = "configs/cases/neural/final.json"
+ARTIFACT_PREFIX = "artifacts/development/neural-combat/experiments/task9-v1-attempt-b"
 BASE_PACKAGE = "configs/neural/experiments/task9-v1"
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
@@ -104,6 +111,7 @@ _RUNTIME_PINS: dict[str, object] = {
     "gpu_memory_bytes": 8 * 1024**3,
     "minimum_free_gpu_bytes": 12 * 1024**3,
     "pids_max": 512,
+    "nvidia_cdi_profile": {"path": PROFILE_PATH,"raw_sha256": PROFILE_SHA256,"profile_id": PROFILE_ID},
 }
 _BUDGETS: dict[str, object] = {
     "training": {
@@ -552,6 +560,7 @@ def validate_study(root: Path, study_path: Path) -> dict[str, object]:
 
     if not _same_json_value(study["runtime_pins"], _RUNTIME_PINS):
         raise ValueError("runtime pins differ from the specified qualified environment")
+    load_runtime_profile(root_path)
     if not _same_json_value(study["budgets"], _BUDGETS):
         raise ValueError("study caps, seeds, and storage budgets differ from the specification")
     interpretation = _exact_keys(study["interpretation"],
@@ -625,7 +634,7 @@ def validate_study(root: Path, study_path: Path) -> dict[str, object]:
         output_root = _bound_path(root_path, run["output_root"],
                                   f"training output root {policy_id}")
         if (output_root != config.output_root
-                or run["output_root"] != f"artifacts/development/neural-combat/experiments/task9-v1/training/{policy_id}"):
+                or run["output_root"] != f"{ARTIFACT_PREFIX}/training/{policy_id}"):
             raise ValueError(f"training output root for {policy_id} must be its unique relative slot")
         if run["output_root"] in output_roots:
             raise ValueError("training/evaluation output roots must be unique")
@@ -743,7 +752,7 @@ def validate_study(root: Path, study_path: Path) -> dict[str, object]:
         if config.seed_streams != type(config.seed_streams)(**EVAL_SEEDS):
             raise ValueError(f"selection config {binding['case_id']} eval seed quartet differs")
         expected_output = (
-            f"artifacts/development/neural-combat/experiments/task9-v1/selection/{record['case_id']}"
+            f"{ARTIFACT_PREFIX}/selection/{record['case_id']}"
         )
         if binding["output_root"] != expected_output or config.output_root != _bound_path(
                 root_path, expected_output, f"selection output root {record['case_id']}"):

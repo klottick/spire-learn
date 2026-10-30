@@ -68,12 +68,14 @@ venv on CPU; never use legacy+cpu validators or install a CPU stack.
 
 The existing CUDA venv and lock under task-8/runtime-output/cuda-setup-20261028-a
 are separate RO mounts at /runtime/venv-cuda and /runtime/requirements-cuda.lock.
-Only public src/configs and five actual imported helpers are staged under the
+Only public src/configs and six actual imported helpers (including task9_nvidia_cdi) are staged under the
 host control directory and mounted RO at original /learner paths. No tests,
 .git, private artifacts, runtime binaries or old claims enter source staging.
 Approval/snapshot/claims/context mount RO at /control. Only the exact authored
-training root (or selection root) is RW; no writable ancestor, extra RW bind,
-tmpfs, host home/socket/client config/Gym mount.
+training root (or selection root) is the sole operator-declared RW bind; no
+writable ancestor, extra application bind, host home/client config/Gym mount or
+Docker-management socket. The pinned CDI runtime exceptions below are separate
+from application binds; one is an actor-writable tmpfs and one is NVIDIA IPC.
 
 TrainingRoot is strictly empty at guest entry. B reserves once then creates
 .runtime/{tmp,cache,torch,torch-extensions,cuda,triton,home} before factory.
@@ -197,10 +199,57 @@ unreadable evidence retains256/unresolved and bounded diagnostics. This consumer
 check agrees with B's corrected unresolved reservation accounting; neither a
 readable file nor this audit establishes filesystem durability after a failed sync.
 
-Training alone may admit RO regular NVIDIA compute/utility files at explicitly
-listed library/utility directories, exact utility basenames and the pinned
-595.91.07/SONAME families in controls. Production mount facts establish regular
-file type with lstat. Whole directories, writable/unrelated files and all such
-selection GPU exposure stay forbidden. Synthetic tests establish admission
-logic only; actual NVIDIA mount topology remains unqualified pending separately
-approved execution. No runtime probe was performed to prepare this allowance.
+The failed approved attempt a is stopped with a consumed claim. Preserve its
+closed source/evidence and empty `experiments/task9-v1/training/standalone-a`.
+Replacement authored outputs use `experiments/task9-v1-attempt-b`, while config
+filenames remain under `configs/neural/experiments/task9-v1`. Proposed campaign
+ID is `task9-study-20261030-b`; new review and explicit user approval are required
+before training. Never rearm, resume, delete or populate the original attempt.
+
+The raw-hash-bound profile at `configs/runtime/task9-nvidia-cdi-profile.json`
+qualifies the measured Toolkit1.20.0/driver595.91.07 transformation. Host admission
+hashes the fixed public CDI spec and hook executable without running them, before
+claim acquisition and during failed/successful phase and final closure checks.
+Requested Docker Config.Env and DeviceRequests retain the exact GPU UUID. Guest
+validation separately accepts only exact legacy values or the pinned CDI void
+sentinel and exact LIBCUDA_DIR; observed facts are never rewritten. Runtime GPU
+UUID/count and qualified native/lock/device checks stay independent and exact.
+Bounded field-specific diagnostics name a mismatched controlled value or mount;
+unknown extra environment values are withheld.
+
+CDI GPU mode requires the nineteen exact regular RO driver/firmware/OpenCL
+mounts with lstat/nonwritable access evidence. Firmware mountinfo uses the pinned
+image's `/usr/lib/firmware` spelling. No generic /usr or /run directory is allowed.
+The exact `/run/nvidia-persistenced/socket` exception is a RO-mounted Unix socket
+UID105/GID108,0777,with effective write access: driver IPC remains connectable.
+No other socket, including any Docker-management endpoint, is allowed.
+
+One `/run/nvidia-ctk-hook<UUID>` runtime tmpfs is root0:0,01777,actor-writable,
+capacity<=4096 bytes,zero available bytes at admission. It must contain only the
+root-owned regular0444/nonwritable `nvct-params`, whose device/inode/size match
+the nonwritable params override at `/proc/driver/nvidia/params`. Type, filesystem,
+owner, mode, access, inode accounting and no nested/link/extra mount checks fail
+closed; the /proc exemption cannot bypass those checks. Inode capacity is observed,
+not a separate hard inode quota. Existing8GiB memory/PID caps remain. Exactly one
+RW application bind remains, not one globally writable mount. CPU selection gets
+none of these CDI environment, driver-file, socket, scratch or params exceptions.
+
+Two metadata-only probes established the admission mismatch and runtime mount
+shape without optional runtime imports or training calls. The correction is
+source/fake-tested preparation only. The replacement approval must explicitly
+include the persistence IPC and writable4096-byte runtime scratch exceptions;
+no metadata probe or source test grants a replacement training invocation.
+
+Successful parent-phase admission emits one C-owned stderr line beginning
+`SPIRE_LEARN_TASK9_ADMISSION_V1 `, with JSON schema
+`spire-learn-task9-guest-admission-v1`. The record binds campaign/phase, raw
+context/study/profile identities and actual process/group, safe CDI environment
+and socket/scratch/params observations, including inode/access accounting and
+the no-hard-inode-quota qualification. Existing bounded host command capture and
+closed inventory retain it. Serialization, a payload including marker/newline
+above16KiB, short/failed write or failed flush denies entry before learner/factory
+setup. Process-control exceptions retain precedence. No application file is
+created before B's empty-output check, and B's receipt schema is unchanged.
+Selection children remain verified and emit no duplicate phase admission lines.
+A record proves those admission checks passed; subsequent transport/learner/closure
+results still determine effects and campaign completion.

@@ -4,7 +4,7 @@ operation = "train"
 split = "train"
 partition = "train"
 manifest_path = "../../../../configs/cases/neural/train.json"
-output_root = "../../../../artifacts/development/neural-combat/experiments/task9-v1/training/standalone-b"
+output_root = "../../../../artifacts/development/neural-combat/experiments/task9-v1-attempt-b/training/standalone-b"
 device = "cuda:0"
 
 [environment]

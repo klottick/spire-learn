@@ -4,7 +4,7 @@ operation = "evaluate"
 split = "selection"
 partition = "selection"
 manifest_path = "../../../../../configs/cases/neural/task9-selection-case-10-standalone.json"
-output_root = "../../../../../artifacts/development/neural-combat/experiments/task9-v1/selection/task9-selection-standalone-10"
+output_root = "../../../../../artifacts/development/neural-combat/experiments/task9-v1-attempt-b/selection/task9-selection-standalone-10"
 device = "cpu"
 
 [environment]

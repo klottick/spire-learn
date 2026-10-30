@@ -1,0 +1,67 @@
+{
+  "schema": "spire-learn-task9-nvidia-cdi-profile-v1",
+  "profile_id": "task9-nvidia-cdi-1.20.0-595.91.07-v1",
+  "toolkit": {
+    "version": "1.20.0",
+    "commit": "5505e2f94d9aaa08561490db974ba3cd676af209"
+  },
+  "host_inputs": {
+    "cdi_spec": {
+      "path": "/var/run/cdi/nvidia.yaml",
+      "sha256": "8b1609ef31b3c4a6fd60991ce491d6c59f427df669c7c6ee3fb93697fab691ec"
+    },
+    "hook": {
+      "path": "/usr/bin/nvidia-cdi-hook",
+      "sha256": "12556bcbc901d5d698f126f38200c90553e4ddf71bfd768b7f5e6460b8cb454f"
+    }
+  },
+  "driver_version": "595.91.07",
+  "gpu_uuid": "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d",
+  "post_oci_environment": {
+    "NVIDIA_VISIBLE_DEVICES": "void",
+    "NVIDIA_CTK_LIBCUDA_DIR": "/usr/lib/x86_64-linux-gnu"
+  },
+  "driver_files": [
+    "/etc/OpenCL/vendors/nvidia.icd",
+    "/usr/bin/nvidia-cuda-mps-control",
+    "/usr/bin/nvidia-cuda-mps-server",
+    "/usr/bin/nvidia-debugdump",
+    "/usr/bin/nvidia-persistenced",
+    "/usr/bin/nvidia-smi",
+    "/usr/lib/firmware/nvidia/595.91.07/gsp_ga10x.bin",
+    "/usr/lib/firmware/nvidia/595.91.07/gsp_tu10x.bin",
+    "/usr/lib/x86_64-linux-gnu/libcuda.so.595.91.07",
+    "/usr/lib/x86_64-linux-gnu/libcudadebugger.so.595.91.07",
+    "/usr/lib/x86_64-linux-gnu/libnvidia-cfg.so.595.91.07",
+    "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.595.91.07",
+    "/usr/lib/x86_64-linux-gnu/libnvidia-nvvm.so.595.91.07",
+    "/usr/lib/x86_64-linux-gnu/libnvidia-nvvm70.so.4",
+    "/usr/lib/x86_64-linux-gnu/libnvidia-opencl.so.595.91.07",
+    "/usr/lib/x86_64-linux-gnu/libnvidia-pkcs11-openssl3.so.595.91.07",
+    "/usr/lib/x86_64-linux-gnu/libnvidia-pkcs11.so.595.91.07",
+    "/usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.595.91.07",
+    "/usr/lib/x86_64-linux-gnu/libnvidia-tileiras.so.595.91.07"
+  ],
+  "socket": {
+    "path": "/run/nvidia-persistenced/socket",
+    "uid": 105,
+    "gid": 108,
+    "mode": 511,
+    "effective_write_access": true
+  },
+  "scratch": {
+    "path_pattern": "/run/nvidia-ctk-hook[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+    "uid": 0,
+    "gid": 0,
+    "mode": 1023,
+    "capacity_max_bytes": 4096,
+    "child": "nvct-params",
+    "child_mode": 292,
+    "params_path": "/proc/driver/nvidia/params"
+  },
+  "supplementary_group_ids": [
+    44,
+    991,
+    1000
+  ]
+}

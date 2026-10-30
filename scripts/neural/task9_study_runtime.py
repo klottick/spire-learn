@@ -28,7 +28,7 @@ from typing import Any
 
 STUDY_RELATIVE = PurePosixPath("configs/neural/experiments/task9-v1/study.json")
 SELECTION_OUTPUT_RELATIVE = PurePosixPath(
-    "artifacts/development/neural-combat/experiments/task9-v1/selection"
+    "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/selection"
 )
 TRAINING_ORDER = ("standalone-a", "run-a", "standalone-b", "run-b")
 TRAINING_SCRATCH_DIRS = (

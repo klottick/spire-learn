@@ -32,6 +32,7 @@ def _copy_study_checkout(root: Path) -> Path:
     scripts.mkdir(parents=True)
     shutil.copy2(ROOT / "scripts/neural/task9_study_package.py", scripts)
     shutil.copy2(ROOT / "scripts/neural/task9_study_runtime.py", scripts)
+    shutil.copy2(ROOT / "scripts/neural/task9_nvidia_cdi.py", scripts)
     return root
 
 
@@ -257,7 +258,7 @@ def _freeze_four_training_bindings(root: Path):
         item["policy_id"]: root / item["output_root"] / "operation-receipt.json"
         for item in study["training"]["runs"]
     }
-    destination = root / "artifacts/development/neural-combat/experiments/task9-v1/selection/control/checkpoint-bindings.json"
+    destination = root / "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/selection/control/checkpoint-bindings.json"
     return freeze_checkpoint_bindings(root, STUDY_RELATIVE, receipts, destination), receipts, destination
 
 
@@ -272,16 +273,16 @@ def _freeze_training_policies(root: Path, available: tuple[str, ...]):
             root / item["output_root"] / "operation-receipt.json"
             if policy_id in available else None
         )
-    destination = root / "artifacts/development/neural-combat/experiments/task9-v1/selection/control/checkpoint-bindings.json"
+    destination = root / "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/selection/control/checkpoint-bindings.json"
     return freeze_checkpoint_bindings(root, STUDY_RELATIVE, receipt_paths, destination), receipt_paths, destination
 
 
 def _selection_receipt_path(root: Path, operation_id: str) -> Path:
-    return root / "artifacts/development/neural-combat/experiments/task9-v1/selection/control/operations" / f"{operation_id}.json"
+    return root / "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/selection/control/operations" / f"{operation_id}.json"
 
 
 def _selection_reservation_path(root: Path, operation_id: str) -> Path:
-    return root / "artifacts/development/neural-combat/experiments/task9-v1/selection/control/operations" / f"{operation_id}.reservation.json"
+    return root / "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/selection/control/operations" / f"{operation_id}.reservation.json"
 
 
 class NeuralStudyRuntimeTests(unittest.TestCase):
@@ -752,7 +753,7 @@ class NeuralStudyRuntimeTests(unittest.TestCase):
                     self.assertEqual(policy["training_receipt"]["run_id"],
                                      receipts[policy["policy_id"]]["run_id"])
                     self.assertTrue(policy["checkpoint_directory"].startswith(
-                        "artifacts/development/neural-combat/experiments/task9-v1/training/"))
+                        "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/training/"))
                     self.assertEqual(set(policy["inventory"]),
                                      {"metadata.json", "model.pt", "training.pt"})
                     self.assertEqual(len(policy["inventory"]["model.pt"]["sha256"]), 64)
@@ -885,7 +886,7 @@ class NeuralStudyRuntimeTests(unittest.TestCase):
                 _, _, binding_path = _freeze_four_training_bindings(root)
                 study = json.loads((root / STUDY_RELATIVE).read_text(encoding="utf-8"))
                 schedule = study["selection"]["schedule"]
-                output_dir = root / "artifacts/development/neural-combat/experiments/task9-v1/selection"
+                output_dir = root / "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/selection"
                 selection_calls = []
 
                 def factory(config, *, purpose, checkpoint, policy_kind, action_selection):
@@ -1009,7 +1010,7 @@ class NeuralStudyRuntimeTests(unittest.TestCase):
                 self.assertEqual(bindings["stop_required_policy_ids"], ["standalone-a"])
 
                 selection = study["selection"]["schedule"]
-                output_dir = root / "artifacts/development/neural-combat/experiments/task9-v1/selection"
+                output_dir = root / "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/selection"
                 child_calls = []
                 result = run_selection_schedule(
                     root, STUDY_RELATIVE, bindings_path, output_dir,
@@ -1310,7 +1311,7 @@ class NeuralStudyRuntimeTests(unittest.TestCase):
                         raise RuntimeError("injected final schedule clock failure")
                     return 0.0
 
-                output_dir = root / "artifacts/development/neural-combat/experiments/task9-v1/selection"
+                output_dir = root / "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/selection"
                 schedule_result = run_selection_schedule(
                     root, STUDY_RELATIVE, bindings_path, output_dir,
                     deadline=0.0, clock=schedule_clock,
@@ -1338,7 +1339,7 @@ class NeuralStudyRuntimeTests(unittest.TestCase):
                         raise RuntimeError("injected final clock failure after context refusal")
                     return 0.0
 
-                output_dir = root / "artifacts/development/neural-combat/experiments/task9-v1/selection"
+                output_dir = root / "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/selection"
                 missing_context_result = run_selection_schedule(
                     root, STUDY_RELATIVE, bindings_path, output_dir,
                     deadline=600.0, clock=missing_context_clock,
@@ -1429,7 +1430,7 @@ class NeuralStudyRuntimeTests(unittest.TestCase):
             root = _copy_study_checkout(Path(directory) / "checkout")
             with patch.object(config_module, "__file__", str(root / "src/spire_learn/neural/config.py")):
                 _, _, bindings_path = _freeze_training_policies(root, ())
-                output_dir = root / "artifacts/development/neural-combat/experiments/task9-v1/selection"
+                output_dir = root / "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/selection"
                 child_calls = []
                 result = run_selection_schedule(
                     root, STUDY_RELATIVE, bindings_path, output_dir,
@@ -1455,7 +1456,7 @@ class NeuralStudyRuntimeTests(unittest.TestCase):
             with patch.object(config_module, "__file__", str(root / "src/spire_learn/neural/config.py")):
                 _training_receipt(root, "standalone-a")
                 _, _, bindings_path = _freeze_training_policies(root, ("standalone-a",))
-                output_dir = root / "artifacts/development/neural-combat/experiments/task9-v1/selection"
+                output_dir = root / "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/selection"
 
                 def child_timeout(*args, **kwargs):
                     self.assertEqual(kwargs["output_limit_bytes"], 64 * 1024)
@@ -1489,7 +1490,7 @@ class NeuralStudyRuntimeTests(unittest.TestCase):
             root = _copy_study_checkout(Path(directory) / "checkout")
             with patch.object(config_module, "__file__", str(root / "src/spire_learn/neural/config.py")):
                 _, _, bindings_path = _freeze_training_policies(root, ())
-                output_dir = root / "artifacts/development/neural-combat/experiments/task9-v1/selection"
+                output_dir = root / "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/selection"
                 original_exclusive_json = importlib.import_module(
                     "scripts.neural.task9_study_runtime"
                 )._exclusive_json

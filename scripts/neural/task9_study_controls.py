@@ -34,10 +34,12 @@ from scripts.neural.task8_gpu_setup_helpers import (
     verify_image_inspect, verify_gpu_inventory, _inventory_entries,
 )
 
+from scripts.neural import task9_nvidia_cdi as cdi
+
 PHASES = ('standalone-a', 'run-a', 'standalone-b', 'run-b', 'selection')
 STUDY = Path('configs/neural/experiments/task9-v1/study.json')
-STUDY_SHA256 = '6643421fd08fce0520231d4614a704dcc9e4fdf9e5a56e2240bfecae32f08946'
-EXPERIMENT = Path('artifacts/development/neural-combat/experiments/task9-v1')
+STUDY_SHA256 = 'c4939fc7d882fadb265fbc5a4ced42c7809e6482720dc4bac7698188aa14f555'
+EXPERIMENT = Path('artifacts/development/neural-combat/experiments/task9-v1-attempt-b')
 SELECTION = EXPERIMENT / 'selection'
 BINDINGS = SELECTION / 'control/checkpoint-bindings.json'
 RUNTIME = Path('artifacts/development/neural-combat/task-8/runtime-output/cuda-setup-20261028-a')
@@ -52,6 +54,9 @@ GPU_UUID = 'GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d'
 CONTAINER_PYTHON = '/runtime/venv-cuda/bin/python3.12'
 GIB = 1024**3
 STREAM_LIMIT = 65536
+ADMISSION_SCHEMA = 'spire-learn-task9-guest-admission-v1'
+ADMISSION_MARKER = 'SPIRE_LEARN_TASK9_ADMISSION_V1 '
+ADMISSION_LIMIT = 16 * 1024
 CLAIMS_DOMAIN = Path('artifacts/development/neural-combat/task-9/study-campaign-claims')
 FINAL_RECORD_RESERVATION = 32 * 1024**2
 CONTROL_RECORD_LIMIT = 8 * 1024**2
@@ -62,11 +67,11 @@ CONTEXT_SCHEMA = 'spire-learn-task9-phase-context-v1'
 INVENTORY_SCHEMA = 'spire-learn-task9-closed-inventory-v1'
 HELPERS = tuple('scripts/neural/' + x for x in (
     'task9_study_package.py', 'task9_study_runtime.py', 'task9_study_controls.py',
-    'gpu_runtime_proof_helpers.py', 'task8_gpu_setup_helpers.py'))
+    'gpu_runtime_proof_helpers.py', 'task8_gpu_setup_helpers.py', 'task9_nvidia_cdi.py'))
 GUEST_SCOPES = ('src', 'configs', *HELPERS)
 SNAPSHOT_PATHS = (*GUEST_SCOPES, 'scripts/neural/run-task9-study.sh',
     'scripts/neural/task9-study-runbook.md', 'tests/unit/test_neural_study_controls.py',
-    'docs/neural-study.md', 'docs/neural-combat.md')
+    'docs/neural-study.md', 'docs/neural-combat.md', 'tests/unit/test_neural_study_cdi.py')
 IMAGE_ENV = {
     'PATH':'/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
     'LANG':'C.UTF-8', 'GPG_KEY':'7169605F62C751356D054A26A821E680E5FA6305',
@@ -202,6 +207,7 @@ def _runtime_metadata(site: Path) -> dict:
 
 
 def _verify_runtime(root: Path, approval: Mapping) -> dict:
+    profile=cdi.verify_host_profile(cdi.load_runtime_profile(root))
     for path,digest in ((LOCK,LOCK_SHA256),(NATIVE,NATIVE_SHA256)):
         if sha256_file(_safe(root,path,exists=True))!=digest:
             raise StudyControlError('qualified lock/native input changed')
@@ -214,7 +220,7 @@ def _verify_runtime(root: Path, approval: Mapping) -> dict:
     for name,value in {'status':'qualified','gpu_uuid':GPU_UUID,'visible_gpu_uuid':GPU_UUID,
                        'torch':'2.14.1+cu130','torch_cuda':'13.0','compute_capability':[12,0]}.items():
         if qualification.get(name)!=value:raise StudyControlError('qualified device evidence changed')
-    return {'lock_sha256':LOCK_SHA256,'native_sha256':NATIVE_SHA256,
+    return {'lock_sha256':LOCK_SHA256,'native_sha256':NATIVE_SHA256,'nvidia_cdi_profile':profile,
         'torch':packages['torch'],'torch_cuda':'13.0', 'venv':str(root/VENV),
         'qualification_sha256':sha256_file(root/RUNTIME/'device-check-work/device-check.json')}
 
@@ -418,6 +424,7 @@ def build_phase_spec(root: Path, *, campaign: Mapping, phase: str, phase_start: 
         'source_files':campaign['guest_source_files'],'study_raw_sha256':STUDY_SHA256,
         'soft_deadline':deadline,'whole_deadline':whole,'output':output,
         'bindings_sha256':sha256_file(bindings_path) if bindings_path else None,
+        'runtime_profile':{'path':cdi.PROFILE_PATH,'raw_sha256':cdi.PROFILE_SHA256,'profile_id':cdi.PROFILE_ID},
         'bindings':bindings,'command':_base_command(phase,deadline),
         'base_environment':_base_env(phase,output,deadline,campaign['approval_raw_sha256'],phase_hash),
         'mounts':[{'source':s,'destination':d,'readonly':r} for s,d,r in mounts],
@@ -557,8 +564,10 @@ def _guest_path(value) -> Path:
 
 
 def _guest_facts() -> dict:
+    mountinfo=Path('/proc/self/mountinfo').read_text()
+    runtime=cdi.collect_runtime_mount_facts(mountinfo)
     mounts=[]
-    for line in Path('/proc/self/mountinfo').read_text().splitlines():
+    for line in mountinfo.splitlines():
         fields=line.split();mounts.append((fields[4].replace('\\040',' '),'ro' in fields[5].split(',')))
     regular=set()
     for destination,_ in mounts:
@@ -566,7 +575,7 @@ def _guest_facts() -> dict:
             if stat.S_ISREG(Path(destination).lstat().st_mode):regular.add(destination)
         except OSError:
             pass  # Missing/unreadable type evidence can never admit a driver file.
-    return {'mounts':mounts,'regular_mount_files':regular,'environment':dict(os.environ),'uid':os.getuid(),'gid':os.getgid(),
+    return {**runtime,'mounts':mounts,'regular_mount_files':regular,'environment':dict(os.environ),'uid':os.getuid(),'gid':os.getgid(),
         'python':sys.executable,'monotonic':time.monotonic(),'device_nodes':[str(p) for p in Path('/dev').glob('nvidia*')]}
 
 
@@ -597,11 +606,22 @@ def _verify_guest_runtime():
         raise StudyControlError('guest qualified native/lock differs')
 
 
+def _emit_guest_admission(record: Mapping) -> None:
+    # stderr is already bounded/captured by the host transport. Never create an
+    # application file before B's startup-empty check, or retry a partial write.
+    encoded=ADMISSION_MARKER+json.dumps(record,sort_keys=True,separators=(',',':'),allow_nan=False)+'\n'
+    if len(encoded.encode('utf-8'))>ADMISSION_LIMIT:
+        raise StudyControlError('admission evidence exceeds 16KiB emission bound')
+    if sys.stderr.write(encoded)!=len(encoded):
+        raise StudyControlError('admission evidence short stderr write')
+    sys.stderr.flush()
+
+
 def verify_guest_context(*, root: Path, study_path: Path, phase_context: Path,
     phase: str, deadline: float, policy_id: str | None = None,
     operation_id: str | None = None, bindings_path: Path | None = None,
     receipt_path: Path | None = None, output_dir: Path | None = None) -> Mapping[str,object]:
-    """Pure ten-keyword B admission seam. B exclusively creates operation entries."""
+    """Ten-keyword B admission with captured stderr evidence; B owns operation entries."""
     if root!=_guest_path('/learner') or phase_context!=_guest_path('/control/phase.json'):
         raise StudyControlError('guest root/context path mismatch')
     if Path(study_path) not in (STUDY,root/STUDY) or phase not in PHASES:
@@ -680,12 +700,17 @@ def verify_guest_context(*, root: Path, study_path: Path, phase_context: Path,
     now=_finite_time(facts['monotonic']);whole=_finite_time(c['whole_deadline'])
     if now>=whole or whole>deadline+300.0:
         raise StudyControlError('guest whole phase deadline exhausted or invalid')
-    if (facts['uid']!=1000 or facts['gid']!=1000 or facts['python']!=CONTAINER_PYTHON
-        or any(env.get(k)!=v for k,v in expected_env.items())):
-        raise StudyControlError('actual guest process/environment differs')
+    for key,wanted in (('uid',1000),('gid',1000),('python',CONTAINER_PYTHON)):
+        if facts.get(key)!=wanted:
+            raise StudyControlError('guest '+key+' differs: '+repr(facts.get(key))[:256])
+    profile=cdi.load_runtime_profile(root)
+    expected_profile={'path':cdi.PROFILE_PATH,'raw_sha256':cdi.PROFILE_SHA256,'profile_id':cdi.PROFILE_ID}
+    if c.get('runtime_profile')!=expected_profile or study['runtime_pins'].get('nvidia_cdi_profile')!=expected_profile:
+        raise StudyControlError('guest runtime profile binding differs')
+    runtime_profile=cdi.validate_guest_profile(profile,phase=phase,requested_environment=expected_env,
+        actual_environment=env,facts=facts)
+    admitted=set(runtime_profile['admitted_mount_destinations'])
     allowed_auto={'HOSTNAME','PWD','SHLVL','_','LC_ALL','NVIDIA_REQUIRE_CUDA'}
-    if set(env)-set(expected_env)-allowed_auto:
-        raise StudyControlError('unexpected guest environment override')
     mounts=dict(facts['mounts'])
     if mounts.get('/') is not True:
         raise StudyControlError('guest root filesystem must be read-only')
@@ -694,10 +719,11 @@ def verify_guest_context(*, root: Path, study_path: Path, phase_context: Path,
     for dest,readonly in facts['mounts']:
         if (dest not in application and dest!='/' and dest not in automatic_files
             and not any(dest==p or dest.startswith(p+'/') for p in ('/proc','/dev','/sys'))
-            and not _driver_mount_allowed(phase,dest,readonly,facts.get('regular_mount_files',set()))):
-            raise StudyControlError('unexpected guest mount outside OCI/application allowlist')
+            and dest not in admitted
+            and not (runtime_profile['mode']=='legacy' and _driver_mount_allowed(phase,dest,readonly,facts.get('regular_mount_files',set())))):
+            raise StudyControlError('unexpected guest mount outside OCI/application allowlist: '+repr((dest,readonly))[:256])
     for _,dest,ro in spec.mounts:
-        if mounts.get(dest) is not ro:raise StudyControlError('actual guest input/output mount flags differ')
+        if mounts.get(dest) is not ro:raise StudyControlError('guest application mount flags differ: '+repr((dest,mounts.get(dest),ro))[:256])
     # Check every application mount, while retaining normal OCI /proc,/dev,/sys mounts.
     allowed={d for _,d,_ in spec.mounts}
     if any((d.startswith('/learner') or d.startswith('/control') or d.startswith('/runtime'))
@@ -707,8 +733,15 @@ def verify_guest_context(*, root: Path, study_path: Path, phase_context: Path,
     packages=_runtime_metadata(_guest_path('/runtime/venv-cuda/lib/python3.12/site-packages'))
     if packages.get('torch')!='2.14.1+cu130':raise StudyControlError('guest is not qualified CUDA-wheel stack')
     _verify_guest_runtime()
+    if operation_id is None:
+        _emit_guest_admission({'schema':ADMISSION_SCHEMA,'phase':phase,'campaign_id':c['campaign_id'],
+            'context_raw_sha256':sha256_file(phase_context),'study_raw_sha256':c['study_raw_sha256'],
+            'profile_binding':c['runtime_profile'],
+            'process':{key:facts[key] for key in ('uid','gid','python','supplementary_group_ids')},
+            'observed_environment':{key:env.get(key) for key in ('NVIDIA_VISIBLE_DEVICES','NVIDIA_CTK_LIBCUDA_DIR')},
+            'runtime_profile':runtime_profile})
     return {'verified':True,'phase':phase,'context_raw_sha256':sha256_file(phase_context),
-            'automatic_environment':{k:env[k] for k in allowed_auto if k in env}}
+            'automatic_environment':{k:env[k] for k in allowed_auto if k in env},'runtime_profile':runtime_profile}
 
 
 def _verify_guest_checkpoints(root, bindings):
@@ -1346,6 +1379,10 @@ def run_campaign(root: Path, *, snapshot_path: Path, approval_path: Path,
             except BaseException as error:
                 primary=_promote(primary,error);row['status']='operational_failure';row['error']=_error(primary)
     try:
+        if runtime is not None and _verify_runtime(root,binding['approval'])!=runtime:
+            raise StudyControlError('runtime inputs changed before closure')
+    except BaseException as error:primary=_promote(primary,error)
+    try:
         audit=_reservation_audit(root,study,reconciled_schedule=reconciled_schedule)
     except BaseException as error:
         primary=_promote(primary,error);audit=_unknown_reservation_audit(study,error)
@@ -1381,6 +1418,8 @@ def run_campaign(root: Path, *, snapshot_path: Path, approval_path: Path,
         _bounded_control_write(h/'campaign-result.json',result)
         _close_inventory(h)
         verify_closed_inventory(h)
+        if runtime is not None and _verify_runtime(root,binding['approval'])!=runtime:
+            raise StudyControlError('runtime inputs changed during final closure')
         accounting=_admission(root,h,deps,claim_path=claim_path,reserve_final=False)
         finished=_now(deps)
         if finished<started or finished>whole:

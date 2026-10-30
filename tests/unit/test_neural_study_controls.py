@@ -147,7 +147,7 @@ class ControlFixture:
                 try: status=self.guest(spec,ctx)
                 except SystemExit as error: status=int(error.code)
             self.last_guest_stderr=captured.getvalue()
-            return subprocess.CompletedProcess(argv,status,'guest completed\n','')
+            return subprocess.CompletedProcess(argv,status,'guest completed\n',self.last_guest_stderr)
         if args[0] == 'rm':
             if self.failure == 'cleanup': return subprocess.CompletedProcess(argv,1,'','fake cleanup failure')
             return subprocess.CompletedProcess(argv,0,args[-1]+'\n','')
@@ -268,7 +268,8 @@ raise SystemExit(code)
         cmd=[str(mapper(arg)) if arg.startswith('/') else arg for arg in spec.command[2:]]
         facts={'mounts':[('/',True)]+[(dest,ro) for _,dest,ro in spec.mounts],
                'environment':dict(spec.environment), 'uid':1000,'gid':1000,
-               'python':self.c.CONTAINER_PYTHON,'monotonic':self.now,'device_nodes':[] if spec.phase=='selection' else ['/dev/nvidia0']}
+               'python':self.c.CONTAINER_PYTHON,'monotonic':self.now,'device_nodes':[] if spec.phase=='selection' else ['/dev/nvidia0'],
+               'supplementary_group_ids':[1000]}
         if self.guest_mutation:self.guest_mutation(facts)
         with patch.object(config_module,'__file__',str(self.root/'src/spire_learn/neural/config.py')), \
              patch.object(self.c,'_guest_path',side_effect=mapper), \
@@ -313,7 +314,12 @@ class NeuralStudyControlTests(unittest.TestCase):
 
     def test_full_five_phase_actual_guest_cli_and_192_children(self):
         with tempfile.TemporaryDirectory() as d:
-            f=ControlFixture(d);f.fresh_reference=True;result=f.campaign(via_cli=True)
+            from tests.unit.test_neural_study_cdi import cdi_facts
+            f=ControlFixture(d);f.fresh_reference=True
+            def measured_gpu(facts):
+                if facts['environment']['NVIDIA_VISIBLE_DEVICES']!='none':facts.update(cdi_facts(facts))
+            f.guest_mutation=measured_gpu
+            result=f.campaign(via_cli=True)
             self.assertEqual(result['status'],'complete',result)
             self.assertEqual([p['phase'] for p in result['phases']],list(f.c.PHASES))
             self.assertEqual([p['status'] for p in result['phases']],['complete']*5)
@@ -331,6 +337,14 @@ class NeuralStudyControlTests(unittest.TestCase):
             bindings=json.loads((f.root/f.c.BINDINGS).read_text())
             self.assertEqual(len([p for p in bindings['policies'] if p['status']=='available']),4)
             f.c.verify_closed_inventory(f.h)
+            for phase in f.c.PHASES:
+                retained=json.loads((f.h/(phase+'-commands.json')).read_text())
+                start=next(row for row in retained['commands'] if 'start' in row['argv'])
+                lines=[line for line in start['stderr'].splitlines() if line.startswith('SPIRE_LEARN_TASK9_ADMISSION_V1 ')]
+                self.assertEqual(len(lines),1,(phase,start['stderr']))
+                admission=json.loads(lines[0].split(' ',1)[1])
+                self.assertEqual(admission['phase'],phase)
+                self.assertEqual(admission['runtime_profile']['mode'],'legacy' if phase=='selection' else 'nvidia-cdi')
             self.assertTrue(all(k['env'].get('HOME')==os.environ.get('HOME') for _,k in f.commands))
 
     def test_invalid_approval_or_source_consumes_no_claim(self):

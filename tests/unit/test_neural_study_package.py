@@ -48,6 +48,7 @@ def _copy_source_package(destination: Path) -> None:
                     ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copytree(ROOT / "configs/neural/experiments/task9-v1",
                     destination / "configs/neural/experiments/task9-v1")
+    shutil.copytree(ROOT / "configs/runtime", destination / "configs/runtime")
     cases = destination / "configs/cases/neural"
     cases.mkdir(parents=True)
     for name in ("train.json", "selection.json", "final.json"):

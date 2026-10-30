@@ -415,3 +415,88 @@ class ProfileTests(unittest.TestCase):
                 raise KeyboardInterrupt('primary')
         self.assertEqual(closed,[1])
         self.assertTrue(any('clock unavailable' in note for note in caught.exception.__notes__))
+
+    def test_trace_resolves_only_referenced_public_card_rows_and_selection_path(self):
+        """Card semantics must be resolvable without leaking unknown/unrelated rows."""
+        from copy import deepcopy
+        import struct
+        from tests.unit.test_neural_schema import _descriptor, _column, _buffer
+        p=api(self); a=_api(self); descriptor=_descriptor()
+        descriptor['vocabularies']['card'].append('unreferenced_card_sentinel')
+        descriptor['vocabularies']['row_group'].append('selection')
+        action_spec=next(spec for spec in descriptor['tensors'] if spec['key']=='actions')
+        for column_index in (1,3):
+            action_spec['columns'][column_index]['high']=5
+            action_spec['high'][column_index]=5
+        def table(group,capacity,columns):
+            descriptor['tensors']=[spec for spec in descriptor['tensors']
+                if spec['key'] not in {group,group+'_known',group+'_occupied'}]
+            descriptor['tensors'].extend([
+                {'key':group,'dtype':'int64','shape':[capacity,len(columns)],
+                 'low':[column['low'] for column in columns],
+                 'high':[column['high'] for column in columns],
+                 'space':'Box','fields':[column['field'] for column in columns],
+                 'units':[column['unit'] for column in columns],'columns':columns,
+                 'padding':0,'known':group+'_known',
+                 'reference_columns':[i for i,column in enumerate(columns) if 'reference' in column]},
+                {'key':group+'_known','dtype':'int8','shape':[capacity,len(columns)],
+                 'low':0,'high':1,'space':'MultiBinary','padding':0},
+                {'key':group+'_occupied','dtype':'int8','shape':[capacity],
+                 'low':0,'high':1,'space':'MultiBinary','padding':0}])
+            descriptor['capacities'][group]=capacity
+        table('combat_cards',5,[
+            _column('card_kind','category',0,3,vocabulary='card'),
+            _column('upgrades','count',0,999),_column('cost','energy',0,999)])
+        table('selection',2,[_column('card_row','row',-1,4,reference='combat_cards')])
+        with patch('tests.unit.test_neural_schema._descriptor',lambda:deepcopy(descriptor)), _synthetic_schema(a) as schema:
+            frame=_frame(a,schema)
+            tensors=dict(frame.tensors)
+            tensors.update({
+                'combat_cards':_buffer(a,[1,1,2, 2,2,1, 0,0,0, 3,999,999, 0,0,0],(5,3)),
+                'combat_cards_known':_buffer(a,[1,1,1, 1,1,1, 0,0,0, 1,1,1, 0,0,0],(5,3),'int8'),
+                'combat_cards_occupied':_buffer(a,[1,1,1,1,0],(5,),'int8'),
+                'selection':_buffer(a,[1,-1],(2,1)),
+                'selection_known':_buffer(a,[1,0],(2,1),'int8'),
+                'selection_occupied':_buffer(a,[1,1],(2,),'int8')})
+            actions=[0]*80; known=[0]*80; occupied=[0]*10
+            # Two direct card sources, two selection sources, and a typed unknown
+            # card source. All share enemy0, exercising reference deduplication.
+            for index,group,row in [(2,2,0),(3,5,0),(4,2,2),(5,5,1),(6,2,-1)]:
+                is_selection=group==5
+                actions[index*8:index*8+8]=[4 if is_selection else 2,group,row,3,0,1 if is_selection else 0,0,0]
+                known[index*8:index*8+8]=[1,1,int(row>=0),1,1,int(is_selection),0,0]
+                occupied[index]=1
+            actions[72:80]=[3,0,-1,0,-1,0,0,0]; known[72]=1; occupied[9]=1
+            tensors.update({'actions':_buffer(a,actions,(10,8)),
+                'actions_known':_buffer(a,known,(10,8),'int8'),
+                'actions_occupied':_buffer(a,occupied,(10,),'int8'),
+                'action_mask':_buffer(a,occupied,(10,),'int8')})
+            frame=a.CombatFrame(tensors,schema.schema_fingerprint)
+            trace=p.public_decision_trace(schema,frame,PolicyChoice(2,-.5,1.,0),
+                legal_scores={i:{'logit':0.,'probability':1/6} for i in (2,3,4,5,6,9)},
+                successor=frame,result={'native_reward':0.,'terminated':False,'truncated':False})
+            referenced=trace['referenced_rows']
+            cards={row['index']:row for row in referenced['combat_cards']}
+            self.assertEqual(set(cards),{0,1,2})
+            self.assertEqual(cards[0]['fields']['card_kind']['value'],'strike')
+            self.assertEqual(cards[0]['fields']['upgrades']['value'],1)
+            self.assertEqual(cards[0]['fields']['cost']['value'],2)
+            self.assertEqual(cards[1]['fields']['card_kind']['value'],'defend')
+            self.assertEqual(cards[1]['fields']['upgrades']['value'],2)
+            self.assertEqual(cards[1]['fields']['cost']['value'],1)
+            self.assertTrue(cards[2]['occupied'])
+            self.assertFalse(cards[2]['fields']['card_kind']['known'])
+            self.assertIsNone(cards[2]['fields']['card_kind']['value'])
+            self.assertIsNone(cards[2]['fields']['cost']['value'])
+            self.assertEqual([row['index'] for row in referenced['selection']],[0,1])
+            self.assertEqual(referenced['selection'][0]['fields']['card_row']['value'],
+                {'group':'combat_cards','row':1})
+            self.assertFalse(referenced['selection'][1]['fields']['card_row']['known'])
+            self.assertIsNone(referenced['selection'][1]['fields']['card_row']['value'])
+            self.assertEqual([row['index'] for row in referenced['enemies']],[0])
+            self.assertIsNone(trace['legal_candidates'][4]['source']['row'])
+            serialized=p.json_bytes(trace)
+            self.assertNotIn(b'unreferenced_card_sentinel',serialized)
+            self.assertNotIn(b'padding',serialized)
+            self.assertNotIn(b'999',serialized)
+            self.assertLessEqual(len(serialized),65536)

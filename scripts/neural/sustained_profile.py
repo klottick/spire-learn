@@ -340,6 +340,67 @@ def _public_frame(schema,frame):
     return result
 
 
+def _public_referenced_rows(schema,frame,legal):
+    """Decode only source-frame rows reachable from legal public references.
+
+    Descriptor-named selector columns and fixed-group references use the same
+    meaning as validated actor tensors. Known reference paths can resolve a
+    selection through to its public card. Deduplication terminates cycles; a
+    hard row limit and the final decision-byte limit bound all retained data.
+    """
+    pending=[]
+    seen=set()
+    result={}
+    def cell(spec,row,column_index):
+        return row*len(spec.columns)+column_index
+    def number(spec,row,column_index):
+        return struct.unpack_from('=q',frame.tensors[spec.key].data,
+                                  cell(spec,row,column_index)*8)[0]
+    def reference(spec,row,column_index):
+        column=spec.columns[column_index]
+        selector=next((i for i,item in enumerate(spec.columns)
+                       if item.field==column.reference),None)
+        if selector is None:
+            group=column.reference
+        else:
+            if not frame.tensors[spec.known_key].data[cell(spec,row,selector)]:
+                return None
+            vocabulary=spec.columns[selector].vocabulary
+            group=schema.vocabularies[vocabulary][number(spec,row,selector)]
+        if group is None or group=='none': return None
+        return {'group':group,'row':number(spec,row,column_index)}
+    def retain(target):
+        if target is None: return
+        identity=(target['group'],target['row'])
+        if identity in seen: return
+        if len(seen)>=128: raise ValueError('trace referenced-row ceiling exceeded')
+        seen.add(identity)
+        pending.append(identity)
+    actions=schema.tensors['actions']
+    for candidate in legal:
+        for column_index in actions.reference_columns:
+            if frame.tensors[actions.known_key].data[cell(actions,candidate.index,column_index)]:
+                retain(reference(actions,candidate.index,column_index))
+    for group,row in pending:
+        spec=schema.tensors[group]
+        occupied=spec.occupied_key is None or bool(frame.tensors[spec.occupied_key].data[row])
+        fields={}
+        for column_index,column in enumerate(spec.columns):
+            known=occupied and bool(frame.tensors[spec.known_key].data[cell(spec,row,column_index)])
+            value=None
+            if known:
+                if column.reference is not None:
+                    value=reference(spec,row,column_index)
+                    retain(value)
+                elif column.vocabulary is not None:
+                    value=schema.vocabularies[column.vocabulary][number(spec,row,column_index)]
+                else:
+                    value=number(spec,row,column_index)
+            fields[column.field]={'known':known,'value':value,'unit':column.unit}
+        result.setdefault(group,[]).append({'index':row,'occupied':occupied,'fields':fields})
+    return {group:sorted(rows,key=lambda item:item['index']) for group,rows in sorted(result.items())}
+
+
 def public_decision_trace(schema,frame,choice,*,legal_scores,successor,result):
     from dataclasses import asdict
     from spire_learn.neural.schema import candidates
@@ -366,6 +427,7 @@ def public_decision_trace(schema,frame,choice,*,legal_scores,successor,result):
         raise ValueError('trace ending flags are invalid')
     output={'schema':'spire-learn-public-decision-trace-v1','schema_fingerprint':schema.schema_fingerprint,
         'source':_public_frame(schema,frame),'successor':_public_frame(schema,successor),
+        'referenced_rows':_public_referenced_rows(schema,frame,legal),
         'choice':{'original_action_index':choice.original_action_index,'log_probability':choice.log_probability,'value':choice.value},
         'legal_candidates':rows,'result':{key:result[key] for key in ('native_reward','terminated','truncated') if key in result}}
     if len(json_bytes(output))>65536: raise ValueError('trace decision byte ceiling exceeded')
@@ -759,10 +821,16 @@ def validate_profile_report(report,plan):
         if not isinstance(decisions,list) or not 1<=len(decisions)<=32: raise ValueError('trace action bound violated')
         trace_actions+=len(decisions)
         for trace in decisions:
-            if set(trace)!={'schema','schema_fingerprint','source','successor','choice','legal_candidates','result'} or trace['schema']!='spire-learn-public-decision-trace-v1':
+            if set(trace)!={'schema','schema_fingerprint','source','successor','referenced_rows','choice','legal_candidates','result'} or trace['schema']!='spire-learn-public-decision-trace-v1':
                 raise ValueError('public trace shape differs')
             if set(trace['source'])-{'player','enemies'} or set(trace['successor'])-{'player','enemies'}:
                 raise ValueError('public trace feature groups differ')
+            if not isinstance(trace['referenced_rows'],Mapping) or sum(len(rows) for rows in trace['referenced_rows'].values())>128:
+                raise ValueError('public trace referenced-row ceiling exceeded')
+            for group,rows in trace['referenced_rows'].items():
+                if not isinstance(group,str) or not isinstance(rows,list) or any(
+                    set(row)!={'index','occupied','fields'} for row in rows):
+                    raise ValueError('public trace referenced-row shape differs')
             if set(trace['result'])!={'native_reward','terminated','truncated'}:
                 raise ValueError('public trace result shape differs')
             raw=json_bytes(trace)

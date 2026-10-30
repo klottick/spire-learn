@@ -1,0 +1,60 @@
+schema = "spire-learn-neural-config-v1"
+mode = "standalone"
+operation = "evaluate"
+split = "selection"
+partition = "selection"
+manifest_path = "../../../../../configs/cases/neural/task9-selection-case-09-standalone.json"
+output_root = "../../../../../artifacts/development/neural-combat/experiments/task9-v1/selection/task9-selection-standalone-09"
+device = "cpu"
+
+[environment]
+gym_revision = "533dad1c8aec86df624b3742b6b3ad1dbf1d0033"
+common_view_id = "spire-gym-combat-policy-view-v1"
+common_view_fingerprint = "02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78"
+
+[seeds]
+policy = 91003
+optimizer = 92009
+curriculum = 93011
+noncombat = 94007
+
+[model]
+embedding_width = 16
+hidden_width = 64
+max_parameters = 10000000
+
+[ppo]
+learning_rate = 0.0003
+gamma = 0.99
+gae_lambda = 0.95
+clip_epsilon = 0.2
+value_coefficient = 0.5
+entropy_coefficient = 0.01
+max_grad_norm = 0.5
+epochs = 4
+minibatch_rows = 64
+adam_eps = 0.00001
+
+[rollout]
+rows = 1
+steps = 1
+
+[budgets]
+max_optimizer_steps = 1
+max_training_decisions = 256
+max_environment_actions = 256
+max_wall_seconds = 600.0
+
+[[accepted_identities]]
+model_id = "spire-learn-combat-ff-v1"
+features_id = "spire-learn-combat-features-v1"
+action_id = "spire-learn-combat-dispatch-v1"
+objective_id = "spire-learn-combat-winloss-v1"
+
+[accepted_identities.accepted_raw_mode_mappings]
+standalone = "spire-learn-standalone-common-v1@02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78"
+run = "spire-learn-run-policy-v3-common-v1@30905db1b7a520482d3ea8aa2e63ddb7f78b7c081de89d87268151f29cf4c7f8:02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78"
+
+[accepted_identities.config_hashes]
+model = "4fb628e06bf4952847795ac5d8548d12dfeede4c97e874ab843857ae0f91cd2f"
+ppo = "f08075e0b01a15095b542fc20cba11c3258381bcb5721bb5066a4448e43c9e2a"

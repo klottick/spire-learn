@@ -588,6 +588,24 @@ class NeuralRunnerTests(unittest.TestCase):
         self.assertEqual(expired.saved[0][1], "final")
         self.assertEqual(expired.budget.remaining(), 0.0)
 
+    def test_evaluate_consumes_an_exhausted_absolute_deadline_before_collection(self):
+        from spire_learn.neural import runner
+        from spire_learn.neural.runner import RuntimeOperationLimits
+
+        config = self.selection_config
+        collector = FakeCollector(config)
+        runtime = FakeRuntime(config, collector)
+        runtime.operation_limits = RuntimeOperationLimits(monotonic_deadline=5.0)
+        writer = FakeWriter()
+        with patch.object(runner, "_writer_start",
+                          return_value=(writer, Path("/tmp/neural-eval-deadline-test"))):
+            report = runner.evaluate_policy(config, runtime=runtime, clock=lambda: 5.0)
+
+        self.assertEqual(report.exit_code, 1)
+        self.assertEqual(collector.collect_calls, [])
+        self.assertEqual(runtime.close_calls, 1)
+        self.assertEqual(writer.close_calls, 1)
+
     def test_runner_budgets_satisfy_the_accepted_ppo_budget_boundary(self):
         from spire_learn.experiments.budget import Budget
         from spire_learn.neural.ppo import _budget_exhausted

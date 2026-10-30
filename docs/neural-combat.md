@@ -193,3 +193,13 @@ records the remaining historical minor qualifications. Task 8 corrected model
 initialization to preserve the caller's CPU/CUDA RNG states and passed the
 qualified RNG checks before the recorded GPU calibration. Earlier failures and
 the missing original calibration RED transcript remain disclosed in its reports.
+
+## Prepared Task 9 learning study
+
+The [bounded study](neural-study.md) and [protected runbook](../scripts/neural/task9-study-runbook.md)
+are source preparation only. Four fresh GPU training phases each have a 600 s
+soft / 900 s whole limit; one CPU selection phase shares 600 s soft / 900 s
+whole across 192 scheduled operations. The whole campaign is bounded to 4,500 s.
+No training or selection in this package has run, and preparation grants no
+execution approval or playing-strength claim. A separate approval binds final
+reviewed source bytes and the mechanical post-training checkpoint inventory.

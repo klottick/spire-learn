@@ -1,0 +1,1191 @@
+{
+  "schema": "spire-learn-neural-cases-v1",
+  "split": "selection",
+  "partition": "selection",
+  "cases": [
+    {
+      "case_id": "task9-selection-standalone-00",
+      "lineage_id": "lineage:task9-selection:standalone:00",
+      "mode": "standalone",
+      "environment_seed": 1099511631872,
+      "cohort": "seen",
+      "entry_id": "task9-entry-standalone-00",
+      "entry": {
+        "id": "task9-entry-standalone-00",
+        "encounter": "cultist",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-00",
+      "lineage_id": "lineage:task9-selection:run:00",
+      "mode": "run",
+      "environment_seed": 1099511631888,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    },
+    {
+      "case_id": "task9-selection-standalone-01",
+      "lineage_id": "lineage:task9-selection:standalone:01",
+      "mode": "standalone",
+      "environment_seed": 1099511631873,
+      "cohort": "held_out_encounter",
+      "entry_id": "task9-entry-standalone-01",
+      "entry": {
+        "id": "task9-entry-standalone-01",
+        "encounter": "large_slime",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-01",
+      "lineage_id": "lineage:task9-selection:run:01",
+      "mode": "run",
+      "environment_seed": 1099511631889,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    },
+    {
+      "case_id": "task9-selection-standalone-02",
+      "lineage_id": "lineage:task9-selection:standalone:02",
+      "mode": "standalone",
+      "environment_seed": 1099511631874,
+      "cohort": "seen",
+      "entry_id": "task9-entry-standalone-02",
+      "entry": {
+        "id": "task9-entry-standalone-02",
+        "encounter": "jaw_worm",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-02",
+      "lineage_id": "lineage:task9-selection:run:02",
+      "mode": "run",
+      "environment_seed": 1099511631890,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    },
+    {
+      "case_id": "task9-selection-standalone-03",
+      "lineage_id": "lineage:task9-selection:standalone:03",
+      "mode": "standalone",
+      "environment_seed": 1099511631875,
+      "cohort": "held_out_encounter",
+      "entry_id": "task9-entry-standalone-03",
+      "entry": {
+        "id": "task9-entry-standalone-03",
+        "encounter": "three_louse",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-03",
+      "lineage_id": "lineage:task9-selection:run:03",
+      "mode": "run",
+      "environment_seed": 1099511631891,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    },
+    {
+      "case_id": "task9-selection-standalone-04",
+      "lineage_id": "lineage:task9-selection:standalone:04",
+      "mode": "standalone",
+      "environment_seed": 1099511631876,
+      "cohort": "seen",
+      "entry_id": "task9-entry-standalone-04",
+      "entry": {
+        "id": "task9-entry-standalone-04",
+        "encounter": "two_louse",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-04",
+      "lineage_id": "lineage:task9-selection:run:04",
+      "mode": "run",
+      "environment_seed": 1099511631892,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    },
+    {
+      "case_id": "task9-selection-standalone-05",
+      "lineage_id": "lineage:task9-selection:standalone:05",
+      "mode": "standalone",
+      "environment_seed": 1099511631877,
+      "cohort": "held_out_encounter",
+      "entry_id": "task9-entry-standalone-05",
+      "entry": {
+        "id": "task9-entry-standalone-05",
+        "encounter": "large_slime",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-05",
+      "lineage_id": "lineage:task9-selection:run:05",
+      "mode": "run",
+      "environment_seed": 1099511631893,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    },
+    {
+      "case_id": "task9-selection-standalone-06",
+      "lineage_id": "lineage:task9-selection:standalone:06",
+      "mode": "standalone",
+      "environment_seed": 1099511631878,
+      "cohort": "seen",
+      "entry_id": "task9-entry-standalone-06",
+      "entry": {
+        "id": "task9-entry-standalone-06",
+        "encounter": "small_slimes",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-06",
+      "lineage_id": "lineage:task9-selection:run:06",
+      "mode": "run",
+      "environment_seed": 1099511631894,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    },
+    {
+      "case_id": "task9-selection-standalone-07",
+      "lineage_id": "lineage:task9-selection:standalone:07",
+      "mode": "standalone",
+      "environment_seed": 1099511631879,
+      "cohort": "held_out_encounter",
+      "entry_id": "task9-entry-standalone-07",
+      "entry": {
+        "id": "task9-entry-standalone-07",
+        "encounter": "three_louse",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-07",
+      "lineage_id": "lineage:task9-selection:run:07",
+      "mode": "run",
+      "environment_seed": 1099511631895,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    },
+    {
+      "case_id": "task9-selection-standalone-08",
+      "lineage_id": "lineage:task9-selection:standalone:08",
+      "mode": "standalone",
+      "environment_seed": 1099511631880,
+      "cohort": "seen",
+      "entry_id": "task9-entry-standalone-08",
+      "entry": {
+        "id": "task9-entry-standalone-08",
+        "encounter": "cultist",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-08",
+      "lineage_id": "lineage:task9-selection:run:08",
+      "mode": "run",
+      "environment_seed": 1099511631896,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    },
+    {
+      "case_id": "task9-selection-standalone-09",
+      "lineage_id": "lineage:task9-selection:standalone:09",
+      "mode": "standalone",
+      "environment_seed": 1099511631881,
+      "cohort": "held_out_encounter",
+      "entry_id": "task9-entry-standalone-09",
+      "entry": {
+        "id": "task9-entry-standalone-09",
+        "encounter": "large_slime",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-09",
+      "lineage_id": "lineage:task9-selection:run:09",
+      "mode": "run",
+      "environment_seed": 1099511631897,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    },
+    {
+      "case_id": "task9-selection-standalone-10",
+      "lineage_id": "lineage:task9-selection:standalone:10",
+      "mode": "standalone",
+      "environment_seed": 1099511631882,
+      "cohort": "seen",
+      "entry_id": "task9-entry-standalone-10",
+      "entry": {
+        "id": "task9-entry-standalone-10",
+        "encounter": "jaw_worm",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-10",
+      "lineage_id": "lineage:task9-selection:run:10",
+      "mode": "run",
+      "environment_seed": 1099511631898,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    },
+    {
+      "case_id": "task9-selection-standalone-11",
+      "lineage_id": "lineage:task9-selection:standalone:11",
+      "mode": "standalone",
+      "environment_seed": 1099511631883,
+      "cohort": "held_out_encounter",
+      "entry_id": "task9-entry-standalone-11",
+      "entry": {
+        "id": "task9-entry-standalone-11",
+        "encounter": "three_louse",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-11",
+      "lineage_id": "lineage:task9-selection:run:11",
+      "mode": "run",
+      "environment_seed": 1099511631899,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    },
+    {
+      "case_id": "task9-selection-standalone-12",
+      "lineage_id": "lineage:task9-selection:standalone:12",
+      "mode": "standalone",
+      "environment_seed": 1099511631884,
+      "cohort": "seen",
+      "entry_id": "task9-entry-standalone-12",
+      "entry": {
+        "id": "task9-entry-standalone-12",
+        "encounter": "two_louse",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-12",
+      "lineage_id": "lineage:task9-selection:run:12",
+      "mode": "run",
+      "environment_seed": 1099511631900,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    },
+    {
+      "case_id": "task9-selection-standalone-13",
+      "lineage_id": "lineage:task9-selection:standalone:13",
+      "mode": "standalone",
+      "environment_seed": 1099511631885,
+      "cohort": "held_out_encounter",
+      "entry_id": "task9-entry-standalone-13",
+      "entry": {
+        "id": "task9-entry-standalone-13",
+        "encounter": "large_slime",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-13",
+      "lineage_id": "lineage:task9-selection:run:13",
+      "mode": "run",
+      "environment_seed": 1099511631901,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    },
+    {
+      "case_id": "task9-selection-standalone-14",
+      "lineage_id": "lineage:task9-selection:standalone:14",
+      "mode": "standalone",
+      "environment_seed": 1099511631886,
+      "cohort": "seen",
+      "entry_id": "task9-entry-standalone-14",
+      "entry": {
+        "id": "task9-entry-standalone-14",
+        "encounter": "small_slimes",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-14",
+      "lineage_id": "lineage:task9-selection:run:14",
+      "mode": "run",
+      "environment_seed": 1099511631902,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    },
+    {
+      "case_id": "task9-selection-standalone-15",
+      "lineage_id": "lineage:task9-selection:standalone:15",
+      "mode": "standalone",
+      "environment_seed": 1099511631887,
+      "cohort": "held_out_encounter",
+      "entry_id": "task9-entry-standalone-15",
+      "entry": {
+        "id": "task9-entry-standalone-15",
+        "encounter": "three_louse",
+        "hp": 64,
+        "max_hp": 80,
+        "deck": [
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "upgrades": 0
+          },
+          {
+            "card": "bash",
+            "upgrades": 0
+          }
+        ],
+        "relics": [
+          "burning_blood"
+        ],
+        "potions": [
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "case_id": "task9-selection-run-15",
+      "lineage_id": "lineage:task9-selection:run:15",
+      "mode": "run",
+      "environment_seed": 1099511631903,
+      "cohort": "normal_run",
+      "profile_id": "m10-ironclad-policy",
+      "character": "ironclad",
+      "ascension": 0
+    }
+  ]
+}

@@ -1438,7 +1438,10 @@ def evaluate_policy(
             action_selection=action_selection, allow_final=allow_final,
         ))
     try:
-        budget = _RunnerBudget(config.budgets.max_wall_seconds, clock, None)
+        limits = _operation_limits(runtime)
+        budget = _RunnerBudget(
+            config.budgets.max_wall_seconds, clock, limits.monotonic_deadline,
+        )
     except BaseException as error:
         report = _preflight_report(config, reason=f"runtime budget setup failed: {_error_value(error)['message']}",
                                    policy_kind=policy_kind, action_selection=action_selection,

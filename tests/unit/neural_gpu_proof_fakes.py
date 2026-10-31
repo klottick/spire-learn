@@ -307,6 +307,7 @@ class ProjectedHarness:
             config_hashes={"model": "a" * 64, "ppo": "b" * 64},
         )
         return SimpleNamespace(
+            scenario_stream=None,
             mode=mode,
             operation=operation,
             split=split,

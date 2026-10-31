@@ -59,6 +59,14 @@ and bounded CPU/native probes remain separate from this training evidence.
 Historical PPO and two-policy proposals remain references, not implementation
 commitments.
 
+The randomized Ironclad combat curriculum is now authored with pure coverage:
+bounded generated catalogs, adaptive lesson allocation, exact stream resume and
+development-panel reporting. Its native/tensor integration and learning benefit
+remain **unverified**. The [curriculum guide](docs/neural-curriculum.md) distinguishes
+generated coverage from actual exposure and links a concrete **unexecuted**
+qualification proposal. No further workload or old campaign continuation is
+authorized.
+
 Python **3.12** matches the gym's current Python package requirement. Spire Learn
 declares no runtime dependencies, and this project has not installed packages
 into the host Python. Separate protected CPU runtime environments used for the

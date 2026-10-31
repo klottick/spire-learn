@@ -79,6 +79,14 @@ process-control exceptions propagate after owned resources close.
 
 ## Authored workloads
 
+The [randomized curriculum guide](neural-curriculum.md) describes the new
+standalone-only broad generator, lesson sampler, exact stream continuation and
+development diagnostics. Source and strict fake tests are authored; native
+catalog compatibility, tensor continuation and learning benefit remain
+**unverified**. The [held qualification proposal](../scripts/neural/curriculum-qualification-runbook.md)
+is unexecuted and supplies no runtime authority. Existing fixed/final configs
+and the consumed historical campaigns retain their boundaries.
+
 | Config | Mode/split | Cases | Rollout | Limits |
 | --- | --- | ---: | ---: | --- |
 | [`standalone.toml`](../configs/neural/standalone.toml) | standalone/train | train catalog | 4 × 32 | 256 learned decisions, 1,024 environment slots, 16 optimizer calls, 120 s |

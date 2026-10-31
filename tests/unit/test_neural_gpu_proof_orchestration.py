@@ -421,6 +421,7 @@ class TimingBoundaryReproductionTests(unittest.TestCase):
         )
         config = type("Config", (), {})()
         config.operation = "train"
+        config.scenario_stream = None
         config.mode = "standalone"
         config.accepted_identities = (identity,)
         config.config_sha256 = "c" * 64

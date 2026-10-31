@@ -1097,10 +1097,13 @@ def train(
         return NeuralReport({"status": "operational_failure" if close_error else "setup_blocked",
                              "reason": reason}, 1 if close_error else 2, None)
     if config.scenario_stream is not None:
-        from .stream_resume import stream_identity
         try:
+            from .stream_resume import stream_identity
             stream_identity(config)
-        except Exception as error:
+        except BaseException as error:
+            if _is_process_control(error):
+                primary, _close_error = _close_resource(error, runtime, "runtime")
+                raise primary
             return _preflight_close(runtime, _preflight_report(
                 config, reason=f"stream admission failed: {_error_value(error)['message']}",
                 policy_kind="checkpoint", action_selection="seeded-sampling", allow_final=False,

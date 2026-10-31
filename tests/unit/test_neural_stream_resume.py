@@ -537,6 +537,102 @@ class StreamRuntimeTests(StreamFixture):
                 self.assertEqual(driver.close_calls, 1)
                 self.assertEqual(writer.close_calls, 1)
 
+    def test_direct_train_admission_control_closes_owned_runtime_once(self):
+        from unittest.mock import Mock, patch
+        from spire_learn.neural import runner, stream_resume
+        config = self.config()
+        original_import = __import__
+        for boundary in ('import', 'identity'):
+            for control_kind in (KeyboardInterrupt, SystemExit):
+                for cleanup_kind in (None, RuntimeError, SystemExit):
+                    with self.subTest(boundary=boundary, control=control_kind.__name__,
+                                      cleanup=cleanup_kind):
+                        runtime, driver = self.assembly(config, purpose='train')
+                        primary = control_kind('admission interrupted')
+                        close_runtime = runtime.close
+                        def close_owned():
+                            close_runtime()
+                            if cleanup_kind is not None:
+                                raise cleanup_kind('admission cleanup failed')
+                        def import_admission(name, *args, **kwargs):
+                            if boundary == 'import' and name == 'stream_resume':
+                                raise primary
+                            return original_import(name, *args, **kwargs)
+                        clock = Mock()
+                        with patch('builtins.__import__', side_effect=import_admission), \
+                             patch.object(stream_resume, 'stream_identity', side_effect=primary) as admission, \
+                             patch.object(runtime, 'close', side_effect=close_owned) as close, \
+                             patch.object(runtime, 'update') as update, \
+                             patch.object(runtime, 'save') as save, \
+                             patch.object(runner, '_set_budget') as setup, \
+                             patch.object(runner, '_writer_start') as writer:
+                            with self.assertRaises(control_kind) as caught:
+                                runner.train(config, runtime=runtime, clock=clock)
+                        self.assertIs(caught.exception, primary)
+                        close.assert_called_once_with()
+                        self.assertEqual(driver.close_calls, 1)
+                        self.assertEqual(driver.reset_calls, [])
+                        self.assertEqual(driver.step_calls, [])
+                        update.assert_not_called()
+                        save.assert_not_called()
+                        setup.assert_not_called()
+                        writer.assert_not_called()
+                        clock.assert_not_called()
+                        self.assertEqual(admission.call_count, int(boundary == 'identity'))
+                        if cleanup_kind is not None:
+                            self.assertIn('admission cleanup failed', str(primary.__notes__))
+
+    def test_segment_real_train_admission_control_closes_factory_runtime(self):
+        from unittest.mock import Mock, patch
+        from spire_learn.neural import runner, stream_resume
+        from spire_learn.neural.stream_runner import run_stream_segment
+        config = self.config()
+        identity = stream_resume.stream_identity
+        for control_kind in (KeyboardInterrupt, SystemExit):
+            for cleanup_kind in (None, RuntimeError, SystemExit):
+                with self.subTest(control=control_kind.__name__, cleanup=cleanup_kind):
+                    primary = control_kind('repeat admission interrupted')
+                    acquired = []
+                    def admission(value):
+                        if acquired:
+                            raise primary
+                        return identity(value)
+                    def factory(value, *, purpose, checkpoint, policy_kind, action_selection):
+                        runtime, driver = self.assembly(value, purpose=purpose)
+                        close_runtime = runtime.close
+                        def close_owned():
+                            close_runtime()
+                            if cleanup_kind is not None:
+                                raise cleanup_kind('segment cleanup failed')
+                        close = Mock(side_effect=close_owned)
+                        runtime.close = close
+                        runtime.update = Mock()
+                        runtime.save = Mock()
+                        acquired.append((runtime, driver, close))
+                        return runtime
+                    create = Mock(side_effect=factory)
+                    clock = Mock()
+                    with patch.object(stream_resume, 'stream_identity', side_effect=admission), \
+                         patch.object(runner, '_writer_start') as writer:
+                        with self.assertRaises(control_kind) as caught:
+                            run_stream_segment(config, purpose='train', checkpoint=None,
+                                operation_limits=runner.RuntimeOperationLimits(),
+                                dependencies={'create_runtime': create, 'train': runner.train, 'clock': clock})
+                    self.assertIs(caught.exception, primary)
+                    create.assert_called_once()
+                    self.assertEqual(len(acquired), 1)
+                    runtime, driver, close = acquired[0]
+                    close.assert_called_once_with()
+                    self.assertEqual(driver.close_calls, 1)
+                    self.assertEqual(driver.reset_calls, [])
+                    self.assertEqual(driver.step_calls, [])
+                    runtime.update.assert_not_called()
+                    runtime.save.assert_not_called()
+                    writer.assert_not_called()
+                    clock.assert_not_called()
+                    if cleanup_kind is not None:
+                        self.assertIn('segment cleanup failed', str(primary.__notes__))
+
     def test_wrong_parent_rejected_before_optional_import_or_driver(self):
         from types import SimpleNamespace
         from unittest.mock import patch

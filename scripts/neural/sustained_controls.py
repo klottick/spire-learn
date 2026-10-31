@@ -742,7 +742,7 @@ def verify_closed_stage(root,receipt):
     if len(schedule)!=len(expected):raise ValueError('closed stage schedule differs')
     for row,static in zip(schedule,expected):
         if (set(row)-set(static)-{'reason','job_id','receipt'} or set(static)-set(row)
-            or row['state'] not in ('not_started','complete','incomplete','failed')
+            or row['state'] not in ('not_started','complete','incomplete')
             or any(canonical_sha256({'v':row[k]})!=canonical_sha256({'v':v}) for k,v in static.items() if k!='state')):
             raise ValueError('closed stage fixed schedule fields/checkpoint bindings differ')
         if (('reason' in row and (type(row['reason']) is not str or len(row['reason'])>512))

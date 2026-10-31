@@ -439,6 +439,13 @@ class SchedulerTests(unittest.TestCase):
                 'retained_inventory':c.close_retained_inventory(root,stage)}
             with patch('spire_learn.neural.config.__file__',str(root/'src/spire_learn/neural/config.py')):
                 c.verify_closed_stage(root,closed)
+                # A complete stage cannot absorb an unreconciled evaluation
+                # failure, even for an otherwise valid bound anchor row.
+                anchor=next(row for row in closed['schedule'] if row['availability']=='bound')
+                anchor['state']='failed'
+                with self.assertRaisesRegex(ValueError,'schedule'):c.verify_closed_stage(root,closed)
+                anchor['state']='not_started'
+                c.verify_closed_stage(root,closed)
                 jobdir=(root/jobs[-1]['context']['path']).parent.parent
                 checkpoint=Path(jobs[-1]['checkpoint']['path'])
                 targets=[checkpoint.parent/'lifecycle.json',jobdir/'output/effects-0000.json',checkpoint/'model.pt',

@@ -40,6 +40,21 @@ def spec():
 
 
 class ControlTests(unittest.TestCase):
+    def test_large_retained_inventory_uses_its_own_byte_and_node_allowance(self):
+        from scripts.neural import sustained_controls as c
+        files={f'artifacts/stage/{index:05d}-'+('x'*240):{'sha256':'a'*64,'size_bytes':1} for index in range(30000)}
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);stage=root/'stage';stage.mkdir();(stage/'docker-client').mkdir()
+            with patch.object(c,'_retained_files',return_value=(files,'empty')):
+                binding=c.close_retained_inventory(root,stage)
+            path=root/binding['path'];self.assertGreater(path.stat().st_size,8*1024**2)
+            self.assertEqual(c.read_retained_inventory(path)['files'],files)
+            self.assertEqual(binding['sha256'],c.sha256_file(path))
+            rejected=stage/'too-large.json'
+            with patch.object(c,'RETAINED_BYTE_LIMIT',128),self.assertRaises(ValueError):
+                c.publish_retained_inventory(rejected,{'files':files})
+            self.assertFalse(rejected.exists())
+
     def test_job_result_publication_cannot_escape_whole_deadline(self):
         from scripts.neural import sustained_controls as c
         clock=[0.];budget=c.BudgetAccount({k:0. for k in c.BUCKETS},clock=lambda:clock[0])

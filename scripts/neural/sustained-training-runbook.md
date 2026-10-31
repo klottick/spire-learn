@@ -85,6 +85,10 @@ Links, nonregular entries, unreadable directories, added/missing/changed files
 and altered static Task1 schedule fields or checkpoint bindings all reject.
 Closure and predecessor admission repeat the inventory and actual producer
 receipt validators; they do not rely on an earlier successful check.
+The complete inventory has a dedicated compact64MiB/100000-file envelope with
+a matching reader, allowing headroom for1024 training+704 evaluation jobs and
+their bounded journal batches. Small controls stay8MiB; learner artifact node
+guards and the profile's separate32MiB result envelope are unchanged.
 
 Each segment has one fresh physical output bound at the unchanged config's
 logical /learner output path, with only its current parent mounted read-only at

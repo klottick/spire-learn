@@ -666,6 +666,29 @@ def _job_body(root,h,stage_tree,verified,budget,*,kind,job_id,reservation,output
 
 
 _TERMINAL_FILES=('retained-inventory.json','closed-stage.json','closure.json','terminal-closure-failure.json')
+# Up to 1024 training and704 evaluation jobs: action/reset/sample leases yield
+# tens of thousands of journal/runner/control files even below12GiB retained.
+# Keep headroom for all fixed jobs and bounded caches without widening controls.
+RETAINED_FILE_LIMIT=100000
+RETAINED_BYTE_LIMIT=64*1024**2
+
+
+def publish_retained_inventory(path,value):
+    if not isinstance(value.get('files'),dict) or len(value['files'])>RETAINED_FILE_LIMIT:
+        raise ValueError('retained evidence file-count guard exhausted')
+    raw=json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
+    if len(raw)+1>RETAINED_BYTE_LIMIT:raise ValueError('retained inventory exceeds its separate publication allowance')
+    write_json_exclusive(path,value)
+
+
+def read_retained_inventory(path):
+    path=Path(path)
+    if path.is_symlink() or not path.is_file() or not 0<path.stat().st_size<=RETAINED_BYTE_LIMIT:
+        raise ValueError('retained inventory size/type differs')
+    value=json.loads(path.read_text(),object_pairs_hook=low._unique,parse_constant=low._bad_constant)
+    if not isinstance(value,dict) or not isinstance(value.get('files'),dict) or len(value['files'])>RETAINED_FILE_LIMIT:
+        raise ValueError('retained inventory file-count/shape differs')
+    return value
 
 
 def _retained_files(root,stage):
@@ -686,7 +709,7 @@ def _retained_files(root,stage):
                 if not stat.S_ISREG(mode):raise ValueError('terminal evidence path is not a regular file')
                 continue
             if stat.S_ISREG(mode):
-                if len(files)>=65536:raise ValueError('retained evidence file-count guard exhausted')
+                if len(files)>=RETAINED_FILE_LIMIT:raise ValueError('retained evidence file-count guard exhausted')
                 files[str(path.relative_to(root))]={'sha256':sha256_file(path),'size_bytes':path.stat().st_size}
     return files,'empty' if client.is_dir() else 'absent'
 
@@ -697,7 +720,7 @@ def close_retained_inventory(root,stage):
         'files':files,'empty_client':str((stage/'docker-client').relative_to(root)),'client_state':client_state,
         'excluded_terminal_files':list(_TERMINAL_FILES),
         'boundary':'all owned source/control/job/report/journal/trace/checkpoint/result files before terminal result and seal; excludes only named terminal files and empty Docker client'}
-    path=stage/'retained-inventory.json';low._bounded_control_write(path,value)
+    path=stage/'retained-inventory.json';publish_retained_inventory(path,value)
     return {'path':str(path.relative_to(root)),'sha256':sha256_file(path),'size_bytes':path.stat().st_size}
 
 
@@ -709,7 +732,7 @@ def verify_closed_stage(root,receipt):
     path=_path(root,binding['path'],exists=True)
     if (path!=stage/'retained-inventory.json' or sha256_file(path)!=binding['sha256']
         or path.stat().st_size!=binding['size_bytes']):raise ValueError('retained inventory raw binding changed')
-    inventory=_read(path);files,client_state=_retained_files(root,stage)
+    inventory=read_retained_inventory(path);files,client_state=_retained_files(root,stage)
     if (inventory.get('schema')!='spire-learn-sustained-retained-files-v1' or inventory.get('stage_root')!=str(expected_stage)
         or inventory.get('empty_client')!=str((stage/'docker-client').relative_to(root))
         or inventory.get('excluded_terminal_files')!=list(_TERMINAL_FILES) or inventory.get('client_state')!='empty'

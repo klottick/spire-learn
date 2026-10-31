@@ -43,6 +43,8 @@ class NeuralConfigTests(unittest.TestCase):
         self.assertEqual(standalone.partition, "train")
         self.assertEqual(run.profile_id, "m10-ironclad-policy")
         self.assertEqual((run.observation_version, run.replay_version), (3, 3))
+        self.assertIsNone(standalone.scenario_stream)
+        self.assertIsNone(run.scenario_stream)
         self.assertEqual(len(standalone.config_sha256), 64)
         self.assertEqual(len(standalone.manifest_sha256), 64)
         self.assertEqual(standalone.manifest_path, Path("configs/cases/neural/train.json").resolve())

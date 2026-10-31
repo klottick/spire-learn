@@ -1186,7 +1186,7 @@ def train(
                 if isinstance(partial, Rollout):
                     records.extend(partial.records)
                     latest_diagnostics = partial.collection
-                    if _is_process_control(error):
+                    if _is_process_control(error) or config.scenario_stream is not None:
                         try:
                             _write_collection_events(writer, partial, cursors=cursors)
                         except BaseException as artifact_error:
@@ -1756,6 +1756,7 @@ class _NeuralTrainingRuntime:
         policy_kind: str = "checkpoint",
         action_selection: str = "seeded-sampling",
         controller_id: str = "neural-policy-v1",
+        stream_transition: Mapping[str, object] | None = None,
     ):
         self.config = config
         self.collector = collector
@@ -1776,6 +1777,7 @@ class _NeuralTrainingRuntime:
         self.policy_kind = policy_kind
         self.action_selection = action_selection
         self.controller_id = controller_id
+        self.stream_transition = stream_transition
         self.optimizer_attempted_steps = int(self.recovered_progress.get("optimizer_attempted_steps", 0))
         self.optimizer_accepted_steps = int(self.recovered_progress.get("optimizer_accepted_steps", 0))
         self.optimizer_uncertain_steps = int(self.recovered_progress.get("optimizer_uncertain_steps", 0))
@@ -1912,6 +1914,14 @@ class _NeuralTrainingRuntime:
             "policy_kind": "checkpoint",
             "controller_id": self.controller_id,
         }
+        if self.config.scenario_stream is not None:
+            from .stream_resume import stream_checkpoint_state
+            if self.stream_transition is not None:
+                run_metadata["scenario_stream_transition"] = self.stream_transition
+            sampler_state = self.collector.sampler_state
+            run_metadata["scenario_stream"] = stream_checkpoint_state(
+                self.config, {} if sampler_state is None else sampler_state
+            )
         metadata = {
             "identity": identity_payload(identity),
             "run_metadata": run_metadata,
@@ -1944,10 +1954,14 @@ def _checkpoint_recovery(loaded: Any, config: NeuralConfig) -> tuple[CollectorRe
     for name, expected in (("mode", config.mode), ("operation", "train"), ("split", "train"), ("partition", "train")):
         if run_metadata.get(name) != expected:
             raise ValueError(f"resume checkpoint {name} does not match the selected config")
-    if run_metadata.get("config_sha256") != config.config_sha256:
-        raise ValueError("resume checkpoint config hash does not match the selected config")
-    if run_metadata.get("manifest_sha256") != config.manifest_sha256:
-        raise ValueError("resume checkpoint manifest hash does not match the selected config")
+    if config.scenario_stream is not None:
+        from .stream_resume import validate_stream_resume
+        validate_stream_resume(run_metadata, config)
+    else:
+        if run_metadata.get("config_sha256") != config.config_sha256:
+            raise ValueError("resume checkpoint config hash does not match the selected config")
+        if run_metadata.get("manifest_sha256") != config.manifest_sha256:
+            raise ValueError("resume checkpoint manifest hash does not match the selected config")
     if run_metadata.get("environment_revision") != config.environment_revision:
         raise ValueError("resume checkpoint environment revision does not match the selected config")
     raw_recovery = run_metadata.get("collector_recovery")
@@ -2037,6 +2051,10 @@ def create_runtime(
         if policy_kind == "end-turn-last-v1" and action_selection != "deterministic":
             raise ValueError("end-turn-last-v1 evaluation is deterministic")
 
+    if config.scenario_stream is not None:
+        from .stream_resume import stream_identity
+        stream_identity(config)  # Pure admission before optional runtime/device effects.
+
     device_plan = plan_runtime_device(config)
     if (purpose == "evaluate" and policy_kind in REFERENCE_POLICIES
             and device_plan.device != "cpu"):
@@ -2083,6 +2101,32 @@ def create_runtime(
                 raise ValueError("resume checkpoint is missing run metadata")
             validate_resume_device(run_metadata, device_plan)
             recovery, recovered_progress = _checkpoint_recovery(loaded, config)
+
+    stream_transition = None
+    if purpose == "resume" and config.scenario_stream is not None:
+        from .stream_resume import validate_stream_resume
+        assert loaded is not None
+        stream_state = validate_stream_resume(loaded.metadata["run_metadata"], config)
+        stream_transition = {"identity": stream_state["identity"],
+                             "from": stream_state["current"],
+                             "to": stream_state["destination"]}
+
+    case_sampler = None
+    if config.scenario_stream is not None and config.scenario_stream["arm"] == "mixed":
+        from .curriculum import CurriculumSampler
+        from .scenario_stream import generate_scenario_shard, load_scenario_recipe
+        table = config.scenario_stream
+        recipe = load_scenario_recipe(Path(table["resolved_recipe_path"]))
+        shard = generate_scenario_shard(recipe, split="train",
+            shard_index=table["shard_index"], arm=table["arm"])
+        sampler_state = None
+        if purpose == "resume":
+            assert loaded is not None
+            sampler_state = loaded.metadata["run_metadata"]["scenario_stream"]["sampler_state"]
+        case_sampler = CurriculumSampler(shard.annotations,
+            distribution_sha256=shard.distribution_sha256,
+            categories=recipe.category_keys, state=sampler_state)
+        case_sampler.validate_cases(config.cases.for_mode(config.mode))
 
     from spire_learn.neural.envs import make_driver
     driver = make_driver(config, config.cases)
@@ -2148,6 +2192,7 @@ def create_runtime(
             policy_generator=policy_generator,
             recovery=recovery,
             learned_combat_policy=learned_combat_policy,
+            case_sampler=case_sampler,
         )
     except BaseException as error:
         primary = _close_preserving(error, driver, "environment driver")
@@ -2182,6 +2227,7 @@ def create_runtime(
             policy_kind=policy_kind if purpose == "evaluate" else "checkpoint",
             action_selection=action_selection,
             controller_id=controller_id,
+            stream_transition=stream_transition,
         )
     except BaseException as error:
         primary = _close_preserving(error, collector, "collector")

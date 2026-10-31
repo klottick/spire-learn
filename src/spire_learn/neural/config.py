@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
 import json
@@ -136,6 +137,7 @@ class NeuralConfig:
     final_requires_opt_in: bool
     calibration_gpu_uuid: str | None = None
     runtime_gpu_uuid: str | None = None
+    scenario_stream: Mapping[str, object] | None = None
 
 
 def _identity(raw: object, *, model_hash: str, ppo_hash: str) -> NeuralIdentity:
@@ -190,6 +192,8 @@ def load_neural_config(path: Path) -> NeuralConfig:
         "rollout", "budgets", "accepted_identities",
     }
     expected_root = set(required)
+    if isinstance(raw, dict) and "scenario_stream" in raw:
+        expected_root.add("scenario_stream")
     if isinstance(raw, dict) and raw.get("operation") == "calibrate":
         expected_root.add("calibration")
     elif isinstance(raw, dict) and raw.get("device") == "cuda:0":
@@ -367,6 +371,11 @@ def load_neural_config(path: Path) -> NeuralConfig:
     elif split == "final":
         validate_neural_case_lineage((cases,), training=False)
 
+    scenario_stream = None
+    if "scenario_stream" in raw:
+        from .stream_resume import normalize_stream_config
+        scenario_stream = normalize_stream_config(raw, source, manifest_path, cases.sha256)
+
     return NeuralConfig(
         mode=mode,
         operation=operation,
@@ -395,6 +404,7 @@ def load_neural_config(path: Path) -> NeuralConfig:
         final_requires_opt_in=split == "final",
         calibration_gpu_uuid=calibration_gpu_uuid,
         runtime_gpu_uuid=runtime_gpu_uuid,
+        scenario_stream=scenario_stream,
     )
 
 

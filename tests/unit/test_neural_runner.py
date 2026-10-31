@@ -901,6 +901,40 @@ class NeuralRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "recovery scalars disagree"):
             _checkpoint_recovery(bad, config)
 
+    def test_fixed_manifest_resume_still_rejects_changed_config_hash(self):
+        from spire_learn.neural import runner
+        _metadata, loaded, *_rest = _resume_bundle(self.train_config, {})
+        loaded.metadata["run_metadata"]["config_sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "config hash does not match"):
+            runner._checkpoint_recovery(loaded, self.train_config)
+
+    def test_stream_collection_fault_preserves_prefix_and_forwards_no_salvage_update(self):
+        for stream in (None, {}):
+            with self.subTest(stream=stream):
+                config = replace(self.train_config, scenario_stream=stream)
+                original = ValueError("first collection fault")
+                collector = FakeCollector(config, collect_error=original)
+                collector.partial_rollout = _rollout(config, (_record(config, slot=0, decision=0, version=0, terminal=False),))
+                runtime = FakeRuntime(config, collector)
+                report, writer = self._run_train(config, runtime)
+                self.assertEqual(report.exit_code, 1)
+                self.assertEqual(len(runtime.update_calls), int(stream is None))
+                self.assertEqual(runtime.saved, [])
+                self.assertTrue(any(event.get("event") == "accepted_action" for event in writer.events))
+
+    def test_stream_partial_event_failure_preserves_first_collection_error(self):
+        config = replace(self.train_config, scenario_stream={})
+        original = ValueError("first collection fault")
+        collector = FakeCollector(config, collect_error=original)
+        collector.partial_rollout = _rollout(config, (_record(
+            config, slot=0, decision=0, version=0, terminal=False),))
+        runtime = FakeRuntime(config, collector)
+        report, _ = self._run_train(config, runtime, FakeWriter(event_error=OSError("event failed")))
+        self.assertEqual(runtime.update_calls, [])
+        self.assertIn("first collection fault", str(report.summary))
+        self.assertTrue(any("partial collection event also failed" in note
+                            for note in original.__notes__))
+
     def test_partial_rollout_updates_only_actor_eligible_rows_and_uses_fresh_versions(self):
         config = replace(self.train_config, rollout_steps=2,
                          budgets=NeuralBudget(8, 4, 4, 60.0))

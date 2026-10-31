@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 import math
 import random
@@ -265,6 +266,12 @@ class Collector:
     def partial_rollout(self) -> Rollout | None:
         """Most recent immutable output, including a known prefix after failure."""
         return self._last_rollout
+
+    @property
+    def sampler_state(self) -> Mapping[str, object] | None:
+        """Return an owned sampler projection only at a healthy save boundary."""
+        self.recovery_state  # Enforce the same closed/fault/pending guards.
+        return None if self._case_sampler is None else self._case_sampler.snapshot()
 
     @property
     def recovery_state(self) -> CollectorRecovery:

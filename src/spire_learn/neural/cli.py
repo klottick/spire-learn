@@ -39,6 +39,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     calibrate.add_argument("--config", required=True, metavar="PATH")
     calibrate.add_argument("--validate-only", action="store_true")
+    from spire_learn.neural.stream_cli import add_arguments
+    add_arguments(commands.add_parser("curriculum", help="prepare bounded curriculum files"))
     return parser
 
 
@@ -87,6 +89,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         arguments = parser.parse_args(argv)
     except SystemExit as error:
         return error.code if type(error.code) is int else 2
+
+    if arguments.command == "curriculum":
+        from spire_learn.neural.stream_cli import execute
+        return execute(arguments)
 
     try:
         config, purpose, checkpoint, policy_kind, allow_final = _validated_arguments(arguments)

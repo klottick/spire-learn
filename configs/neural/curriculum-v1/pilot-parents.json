@@ -1,0 +1,37 @@
+{
+  "schema": "spire-learn-curriculum-pilot-parents-v1",
+  "standalone_b": {
+    "checkpoint_directory": "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/training/standalone-b/20261030T210525Z-c7d37fcacba143709d2e08ca9eb9c21c/checkpoint-final",
+    "inventory": {
+      "metadata.json": {
+        "sha256": "d8c5c7e9da0262134cd6e383d76654bbd57517a75171becb5d26fde1f0dd2ff7",
+        "size_bytes": 17150
+      },
+      "model.pt": {
+        "sha256": "fc44f89afd409abd68bf2397d28c11f49584ea2c017f090e6da0b2408c16ecd9",
+        "size_bytes": 1089216
+      },
+      "training.pt": {
+        "sha256": "ecff01b35c77c9da4aae7a4ff0506276aa91db36a9f972b725ba2ce061ada6fb",
+        "size_bytes": 2211765
+      }
+    }
+  },
+  "run_b": {
+    "checkpoint_directory": "artifacts/development/neural-combat/experiments/task9-v1-attempt-b/training/run-b/20261030T211527Z-ae4d78e1c60f4788834657f31a5bb144/checkpoint-final",
+    "inventory": {
+      "metadata.json": {
+        "sha256": "e5df0bf5f052c6f579cfd93afe1716da3b099835a71cd73313541fd21877f252",
+        "size_bytes": 17101
+      },
+      "model.pt": {
+        "sha256": "9dfe0eca385c89aeb62e9cfb9f130ea7a9abc2574d9216554c5c1a0f412ee452",
+        "size_bytes": 1089216
+      },
+      "training.pt": {
+        "sha256": "c483f22130ed1f92a8797d93528ea8d47250b5620c6b56d931d441d2c69ae1b4",
+        "size_bytes": 2211765
+      }
+    }
+  }
+}

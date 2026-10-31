@@ -5,12 +5,15 @@ if [[ ! -x /usr/bin/timeout ]]; then
     echo 'GNU timeout is required for the sustained campaign watchdog' >&2
     exit 2
 fi
-# Derive the remaining allowance from the exact reviewed release/predecessor.
-watchdog_seconds="$(python3.12 -B "$script_dir/sustained_controls.py" "$@" --watchdog-seconds)"
-if [[ ! "$watchdog_seconds" =~ ^[0-9]+$ ]] || (( watchdog_seconds <= 0 )); then
-    echo 'No remaining campaign watchdog allowance' >&2
+# Parent supplies the reviewed numeric ceiling. All Python validation and
+# execution is inside this one guard; no derivation helper runs beforehand.
+watchdog_seconds="${1:-}"
+if [[ ! "$watchdog_seconds" =~ ^[1-9][0-9]{1,4}$ ]] || (( watchdog_seconds <= 10 || watchdog_seconds > 28800 )); then
+    echo 'First argument must be the reviewed stage wall ceiling (11..28800 seconds)' >&2
     exit 2
 fi
-export SPIRE_LEARN_SUSTAINED_WATCHDOG='remaining+10'
-exec /usr/bin/timeout --signal=TERM --kill-after=10s "${watchdog_seconds}s" \
+shift
+export SPIRE_LEARN_SUSTAINED_WATCHDOG='parent-ceiling+10'
+export SPIRE_LEARN_SUSTAINED_WATCHDOG_SECONDS="$watchdog_seconds"
+exec /usr/bin/timeout --signal=TERM --kill-after=10s "$((watchdog_seconds - 10))s" \
     python3.12 -B "$script_dir/sustained_controls.py" "$@"

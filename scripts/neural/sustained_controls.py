@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import stat
 import sys
 import time
 
@@ -99,10 +100,11 @@ def evaluation_dispatch(campaign,slots):
 
 class BudgetAccount:
     """Disjoint outer intervals; job setup, publication and cleanup share its bucket."""
-    def __init__(self,charged,*,clock=time.monotonic):
+    def __init__(self,charged,*,clock=time.monotonic,whole_deadline=None):
         if set(charged)!=set(BUCKETS):raise ValueError('budget buckets incomplete')
         self.charged={k:finite(v,k) for k,v in charged.items()};self.clock=clock
         self.bucket='shared';self.mark=finite(clock(),'clock');self.closed=False;self.intervals=[]
+        self.whole_deadline=None if whole_deadline is None else finite(whole_deadline,'stage whole deadline')
         self.check()
     def _charge(self):
         now=finite(self.clock(),'clock')
@@ -113,6 +115,7 @@ class BudgetAccount:
         if self.closed or bucket not in BUCKETS:raise ValueError('closed or unknown budget bucket')
         self._charge();self.bucket=bucket;self.check()
     def check(self):
+        if self.whole_deadline is not None and self.clock()>=self.whole_deadline:raise TimeoutError('enclosing stage allowance exhausted')
         totals=dict(self.charged)
         if not self.closed:totals[self.bucket]+=max(0.,finite(self.clock(),'clock')-self.mark)
         if any(totals[k]>BUCKETS[k] for k in BUCKETS) or sum(totals.values())>28800.:
@@ -120,7 +123,8 @@ class BudgetAccount:
     def remaining(self,bucket):
         active=0. if self.closed or self.bucket!=bucket else max(0.,self.clock()-self.mark)
         total_active=0. if self.closed else max(0.,self.clock()-self.mark)
-        return max(0.,min(BUCKETS[bucket]-self.charged[bucket]-active,28800.-sum(self.charged.values())-total_active))
+        stage_remaining=float('inf') if self.whole_deadline is None else self.whole_deadline-self.clock()
+        return max(0.,min(BUCKETS[bucket]-self.charged[bucket]-active,28800.-sum(self.charged.values())-total_active,stage_remaining))
     def close(self):
         if not self.closed:self._charge();self.closed=True;self.check()
 
@@ -172,6 +176,14 @@ def reconcile_outer_accounting(seal,outer):
     return charged
 
 
+def validate_stage_ceiling(release,charged):
+    ceiling=release.get('stage_wall_seconds')
+    eligible=('profile','shared') if release['stage']=='profile' else ('standalone-1','run-1','standalone-2','run-2','evaluation','shared')
+    maximum=math.floor(min(28800.-sum(charged.values()),sum(BUCKETS[k]-charged[k] for k in eligible)))
+    if type(ceiling) is not int or not 10<ceiling<=maximum:raise ValueError('reviewed stage wall ceiling exceeds eligible remaining allocation')
+    return ceiling
+
+
 def validate_release(root,*,campaign_path,source_snapshot,release_path,stage):
     """Host-only full package validation before claims or output mutation."""
     root=Path(root).resolve(strict=True)
@@ -180,7 +192,7 @@ def validate_release(root,*,campaign_path,source_snapshot,release_path,stage):
     snapshot_path=_path(root,source_snapshot,exists=True);release_path=_path(root,release_path,exists=True)
     snapshot=_read(snapshot_path);release=_read(release_path)
     expected={'schema','state','single_use','stage','campaign_id','source_snapshot_sha256','campaign_raw_sha256',
-              'runtime_pins','budgets','review','predecessor','initial_accounting'}
+              'runtime_pins','budgets','review','predecessor','initial_accounting','stage_wall_seconds'}
     if (set(release)!=expected or release['schema']!=RELEASE_SCHEMA or release['state']!='approved'
         or release['single_use'] is not True or release['stage']!=stage or not isinstance(release['campaign_id'],str)
         or _ID.fullmatch(release['campaign_id']) is None or release['source_snapshot_sha256']!=sha256_file(snapshot_path)
@@ -223,9 +235,11 @@ def validate_release(root,*,campaign_path,source_snapshot,release_path,stage):
         outer=_read(outer_path)
         if outer.get('seal_sha256')!=predecessor['sha256']:raise ValueError('outer accounting does not bind seal raw hash')
         charged=reconcile_outer_accounting(seal,outer)
+    charged=dict(initial['charged_seconds'] if previous is None else charged)
+    validate_stage_ceiling(release,charged)
     return {'campaign':campaign,'snapshot':snapshot,'release':release,'previous':previous,
         'source_sha256':sha256_file(snapshot_path),'release_sha256':sha256_file(release_path),
-        'charged':dict(initial['charged_seconds'] if previous is None else charged),
+        'charged':charged,
         'initial':initial,'snapshot_path':snapshot_path,'release_path':release_path}
 
 
@@ -491,14 +505,79 @@ def execute_job(spec,*,deps,client,docker,logs,progress):
     return {'container_id':cid,'removal_entered':removed,'admission':admission}
 
 
+def validate_process_evidence(receipt,*,reference):
+    process=receipt.get('process')
+    if not isinstance(process,dict):raise ValueError('executing process evidence missing')
+    modules=process.get('modules',{});threads=process.get('threads')
+    if not isinstance(modules,dict):raise ValueError('executing modules evidence differs')
+    if reference:
+        imports=receipt.get('reference_import_guard')
+        if not imports or imports.get('attempts') or imports.get('loaded_modules') or imports.get('installed') is not True:
+            raise ValueError('reference import evidence differs')
+        if any(name.split('.')[0] in ('torch','tensordict','torchrl') for name in modules):
+            raise ValueError('reference executing process contains forbidden modules')
+    elif ('torch' not in modules or modules['torch']['version']!='2.14.1+cu130' or threads!={'intraop':4,'interop':1}):
+        raise ValueError('executing Torch/thread evidence differs')
+    if any(not item.get('file','').startswith('/runtime/venv-cuda/lib/python3.12/site-packages/') for item in modules.values()):
+        raise ValueError('executing module escaped qualified runtime')
+
+
+def validate_job_receipt(root,campaign,context,receipt):
+    kind=context['kind'];job_id=context['job_id'];operation=context['operation'];output=Path(context['host_output']);checkpoint=None
+    if kind=='profile':
+        from scripts.neural.sustained_profile import validate_profile_report,profile_plan
+        report={k:v for k,v in receipt.items() if k not in ('journal','process')}
+        if report['source_sha256']!=context['source_sha256'] or report['phase_id']!=job_id:raise ValueError('profile source/job identity differs')
+        validate_profile_report(report,profile_plan(root,campaign))
+        validate_effects(context,receipt,output)
+    elif kind=='segment':
+        checkpoint=validate_segment_receipt(root,campaign,context,receipt)
+    else:
+        if receipt.get('schema')!=RECEIPT_SCHEMA or receipt.get('operation_id')!=operation['operation_id'] or receipt.get('source_sha256')!=context['source_sha256']:
+            raise ValueError('evaluation receipt identity differs')
+        _validate_reports(context,receipt,allow_incomplete=True);totals=validate_effects(context,receipt,output)
+        if totals['optimizer_attempts']['attempted'] or totals['reset_slots']['attempted']>1 or totals['environment_attempts']['attempted']>256:raise ValueError('evaluation effects differ')
+        summary=receipt['report'];collection=summary['collection']
+        if summary.get('config_sha256')!=operation['config']['config_sha256']:raise ValueError('evaluation config identity differs')
+        for effect,attempted,delivered in (('environment_attempts','attempted_environment_slots','delivered_environment_slots'),('reset_slots','attempted_reset_slots','delivered_reset_slots')):
+            if totals[effect]['attempted']!=collection[attempted] or totals[effect]['delivered']!=collection[delivered]:raise ValueError('evaluation delivery counters differ')
+        if collection['faults'] or collection['uncertain_environment_slots'] or collection['uncertain_reset_slots'] or any(summary['optimizer'][key] for key in ('attempted_steps','accepted_steps','uncertain_steps','updates')):
+            raise RuntimeError('evaluation effect/optimizer fault')
+        if operation['availability']=='reference':
+            imports=receipt['reference_import_guard']
+            if not imports or imports.get('attempts') or imports.get('loaded_modules') or imports.get('installed') is not True:raise ValueError('reference import evidence differs')
+    validate_process_evidence(receipt,reference=kind=='evaluation' and operation['availability']=='reference')
+    return checkpoint
+
+
 def _job(root,h,stage_tree,verified,budget,*,kind,job_id,reservation,output_root,parent=None,prefix=None,replica=None,index=None,operation=None,predecessor=None,deps,docker,client):
+    """Charge the entire admission/dispatch/closure interval to this job once."""
+    bucket='profile' if kind=='profile' else replica if kind=='segment' else 'evaluation'
+    primary=None
+    try:
+        budget.switch(bucket)
+        started=budget.mark
+        allowance=min(900. if kind=='profile' else 600.,budget.remaining(bucket))
+        if allowance<=75.:return None
+        whole=started+allowance
+        result=_job_body(root,h,stage_tree,verified,budget,kind=kind,job_id=job_id,reservation=reservation,
+            output_root=output_root,parent=parent,prefix=prefix,replica=replica,index=index,operation=operation,
+            predecessor=predecessor,deps=deps,docker=docker,client=client,whole=whole,deadline=whole-60.)
+        if deps.clock()>whole:raise TimeoutError('whole job deadline exceeded including final publication')
+        return result
+    except BaseException as error:primary=error;raise
+    finally:
+        try:budget.switch('shared')
+        except BaseException as error:
+            if primary is None:raise
+            primary.add_note('job interval charge also failed: '+str(_error(error)))
+
+
+def _job_body(root,h,stage_tree,verified,budget,*,kind,job_id,reservation,output_root,parent=None,prefix=None,replica=None,index=None,operation=None,predecessor=None,deps,docker,client,whole,deadline):
     """One immutable host claim/context and fresh physical output bind."""
     # All full-package/source/storage checks precede exclusive claims.
     validate_campaign(root,root/CAMPAIGN_PATH)
     if _source_inventory(root,tuple(verified['snapshot']['files']))!=verified['snapshot']['files']:raise ValueError('source changed before admission')
-    budget.check();bucket='profile' if kind=='profile' else replica if kind=='segment' else 'evaluation'
-    allowance=min(900. if kind=='profile' else 600.,budget.remaining(bucket))
-    if allowance<=75.:return None
     _storage(root,h.parent,deps,None,reservation=(1024 if kind=='profile' else 512 if kind=='segment' else 128)*1024**2)
     if kind=='segment' and index:
         if not isinstance(predecessor,dict) or set(predecessor)!={'path','sha256'}:raise ValueError('resumed host job requires actual predecessor receipt')
@@ -511,7 +590,7 @@ def _job(root,h,stage_tree,verified,budget,*,kind,job_id,reservation,output_root
             or previous.get('source_sha256')!=verified['source_sha256']
             or previous_path.parent/raw_path.relative_to(logical)!=_path(root,parent['path'],exists=True)):
             raise ValueError('actual parent/predecessor/prefix chain differs')
-    budget.switch(bucket);allowance=min(allowance,budget.remaining(bucket));started=deps.clock();whole=started+allowance;deadline=whole-60.
+    if deps.clock()>=deadline:return None
     jobdir=h/'jobs'/job_id;jobdir.mkdir(parents=True,exist_ok=False)
     output=jobdir/'output';output.mkdir();control=jobdir/'control';control.mkdir()
     _sync_claim_ancestors(root,control)
@@ -554,38 +633,11 @@ def _job(root,h,stage_tree,verified,budget,*,kind,job_id,reservation,output_root
             from scripts.neural.task8_gpu_setup_helpers import verify_gpu_inventory
             verify_gpu_inventory(raw,minimum_free_mib=12288)
             gpu_before=low._gpu_processes(deps,whole,logs,client)
+        if deps.clock()>=deadline:raise TimeoutError('job preflight exhausted action allowance')
         lifecycle=execute_job(spec,deps=deps,client=client,docker=docker,logs=logs,progress=budget.check)
         if runtime_class=='gpu':gpu_after=low._gpu_processes(deps,whole,logs,client)
         receipt_path=output/'job-receipt.json';receipt=_profile_receipt(receipt_path) if kind=='profile' else _read(receipt_path)
-        if kind=='profile':
-            from scripts.neural.sustained_profile import validate_profile_report,profile_plan
-            report={k:v for k,v in receipt.items() if k not in ('journal','process')}
-            if report['source_sha256']!=verified['source_sha256'] or report['phase_id']!=job_id:raise ValueError('profile source/job identity differs')
-            validate_profile_report(report,profile_plan(root,campaign))
-            validate_effects(context,receipt,output)
-        elif kind=='segment':
-            checkpoint=validate_segment_receipt(root,campaign,context,receipt)
-        else:
-            if receipt.get('schema')!=RECEIPT_SCHEMA or receipt.get('operation_id')!=operation['operation_id'] or receipt.get('source_sha256')!=verified['source_sha256']:
-                raise ValueError('evaluation receipt identity differs')
-            _validate_reports(context,receipt,allow_incomplete=True);totals=validate_effects(context,receipt,output)
-            if totals['optimizer_attempts']['attempted'] or totals['reset_slots']['attempted']>1 or totals['environment_attempts']['attempted']>256:raise ValueError('evaluation effects differ')
-            summary=receipt['report'];collection=summary['collection']
-            if summary.get('config_sha256')!=operation['config']['config_sha256']:raise ValueError('evaluation config identity differs')
-            for effect,attempted,delivered in (('environment_attempts','attempted_environment_slots','delivered_environment_slots'),('reset_slots','attempted_reset_slots','delivered_reset_slots')):
-                if totals[effect]['attempted']!=collection[attempted] or totals[effect]['delivered']!=collection[delivered]:raise ValueError('evaluation delivery counters differ')
-            if collection['faults'] or collection['uncertain_environment_slots'] or collection['uncertain_reset_slots'] or any(summary['optimizer'][key] for key in ('attempted_steps','accepted_steps','uncertain_steps','updates')):
-                raise RuntimeError('evaluation effect/optimizer fault')
-            if operation['availability']=='reference':
-                imports=receipt['reference_import_guard']
-                if not imports or imports.get('attempts') or imports.get('loaded_modules') or imports.get('installed') is not True:raise ValueError('reference import evidence differs')
-        process=receipt.get('process')
-        if not isinstance(process,dict):raise ValueError('executing process evidence missing')
-        modules=process.get('modules',{});threads=process.get('threads')
-        neural=kind!='evaluation' or operation['availability']!='reference'
-        if neural and ('torch' not in modules or modules['torch']['version']!='2.14.1+cu130' or threads!={'intraop':4,'interop':1}):raise ValueError('executing Torch/thread evidence differs')
-        if any(not item.get('file','').startswith('/runtime/venv-cuda/lib/python3.12/site-packages/') for item in modules.values()):
-            raise ValueError('executing module escaped qualified runtime')
+        checkpoint=validate_job_receipt(root,campaign,context,receipt)
         result={'job_id':job_id,'kind':kind,'status':'complete','reservation':reservation,'lifecycle':lifecycle,
             'context':{'path':str(path.relative_to(root)),'sha256':sha256_file(path)},
             'receipt':{'path':str(receipt_path.relative_to(root)),'sha256':sha256_file(receipt_path)},'effects':receipt['effects'],
@@ -609,32 +661,113 @@ def _job(root,h,stage_tree,verified,budget,*,kind,job_id,reservation,output_root
     except BaseException as error:
         if primary is None:primary=error
         else:primary.add_note('host job result publication also failed: '+str(_error(error)))
-    try:budget.switch('shared')
-    except BaseException as error:
-        if primary is None:primary=error
-        else:primary.add_note('job interval charge also failed: '+str(_error(error)))
     if primary is not None:raise primary
     return result
 
 
+_TERMINAL_FILES=('retained-inventory.json','closed-stage.json','closure.json','terminal-closure-failure.json')
+
+
+def _retained_files(root,stage):
+    """Hash only owned regular files; Docker client contents are never opened."""
+    root=Path(root);stage=_path(root,stage,exists=True);client=stage/'docker-client'
+    if client.is_symlink() or (client.exists() and (not client.is_dir() or any(client.iterdir()))):
+        raise ValueError('Docker client must remain an empty regular directory')
+    files={}
+    def unreadable(error):raise ValueError('unreadable retained evidence directory') from error
+    for directory,names,leaves in os.walk(stage,followlinks=False,onerror=unreadable):
+        for name in list(names)+leaves:
+            path=Path(directory)/name;mode=path.lstat().st_mode
+            if stat.S_ISLNK(mode) or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+                raise ValueError('unexpected link/type in retained stage evidence')
+            if path==client:
+                names.remove(name);continue
+            if path.parent==stage and name in _TERMINAL_FILES:
+                if not stat.S_ISREG(mode):raise ValueError('terminal evidence path is not a regular file')
+                continue
+            if stat.S_ISREG(mode):
+                if len(files)>=65536:raise ValueError('retained evidence file-count guard exhausted')
+                files[str(path.relative_to(root))]={'sha256':sha256_file(path),'size_bytes':path.stat().st_size}
+    return files,'empty' if client.is_dir() else 'absent'
+
+
+def close_retained_inventory(root,stage):
+    stage=_path(root,stage,exists=True);files,client_state=_retained_files(root,stage)
+    value={'schema':'spire-learn-sustained-retained-files-v1','stage_root':str(stage.relative_to(root)),
+        'files':files,'empty_client':str((stage/'docker-client').relative_to(root)),'client_state':client_state,
+        'excluded_terminal_files':list(_TERMINAL_FILES),
+        'boundary':'all owned source/control/job/report/journal/trace/checkpoint/result files before terminal result and seal; excludes only named terminal files and empty Docker client'}
+    path=stage/'retained-inventory.json';low._bounded_control_write(path,value)
+    return {'path':str(path.relative_to(root)),'sha256':sha256_file(path),'size_bytes':path.stat().st_size}
+
+
 def verify_closed_stage(root,receipt):
     if receipt.get('schema')!=CLOSED_SCHEMA or receipt.get('status')!='complete':raise ValueError('stage is not closed/complete')
+    expected_stage=DOMAIN/receipt['campaign_id']/receipt['stage']
+    if receipt.get('stage_root')!=str(expected_stage):raise ValueError('closed stage namespace differs')
+    stage=_path(root,expected_stage,exists=True);binding=receipt['retained_inventory']
+    path=_path(root,binding['path'],exists=True)
+    if (path!=stage/'retained-inventory.json' or sha256_file(path)!=binding['sha256']
+        or path.stat().st_size!=binding['size_bytes']):raise ValueError('retained inventory raw binding changed')
+    inventory=_read(path);files,client_state=_retained_files(root,stage)
+    if (inventory.get('schema')!='spire-learn-sustained-retained-files-v1' or inventory.get('stage_root')!=str(expected_stage)
+        or inventory.get('empty_client')!=str((stage/'docker-client').relative_to(root))
+        or inventory.get('excluded_terminal_files')!=list(_TERMINAL_FILES) or inventory.get('client_state')!='empty'
+        or client_state!='empty' or inventory.get('files')!=files):raise ValueError('retained stage evidence changed or disappeared')
+    campaign=validate_campaign(root,root/CAMPAIGN_PATH)
+    expected=list(evaluation_schedule(campaign,receipt['checkpoints']));schedule=receipt['schedule']
+    if len(schedule)!=len(expected):raise ValueError('closed stage schedule differs')
+    for row,static in zip(schedule,expected):
+        if (set(row)-set(static)-{'reason','job_id','receipt'} or set(static)-set(row)
+            or row['state'] not in ('not_started','complete','incomplete','failed')
+            or any(canonical_sha256({'v':row[k]})!=canonical_sha256({'v':v}) for k,v in static.items() if k!='state')):
+            raise ValueError('closed stage fixed schedule fields/checkpoint bindings differ')
+        if (('reason' in row and (type(row['reason']) is not str or len(row['reason'])>512))
+            or (row['state'] in ('not_started','failed') and ('job_id' in row or 'receipt' in row))
+            or (row['availability']=='unavailable' and row['state']!='not_started')):
+            raise ValueError('closed stage schedule state/result additions differ')
+    operation_jobs={}
+    if len({job['job_id'] for job in receipt['jobs']})!=len(receipt['jobs']):raise ValueError('closed job IDs are not unique')
     for job in receipt['jobs']:
         for field in ('context','receipt'):
             item=job[field]
             if sha256_file(_path(root,item['path'],exists=True))!=item['sha256']:raise ValueError('closed stage artifact changed')
-    if len(receipt['schedule'])!=704 or len({r['operation_id'] for r in receipt['schedule']})!=704:raise ValueError('closed stage schedule differs')
+        context_path=_path(root,job['context']['path'],exists=True);context=_read(context_path)
+        jobdir=stage/'jobs'/job['job_id']
+        if (context_path!=jobdir/'control/job.json' or context['job_id']!=job['job_id']
+            or context['kind']!=job['kind'] or job['status']!='complete'
+            or context['host_output']!=str(jobdir/'output')
+            or _path(root,job['receipt']['path'],exists=True)!=jobdir/'output/job-receipt.json'
+            or context['source_sha256']!=receipt['source_sha256']):raise ValueError('closed job namespace/source differs')
+        result_path=context_path.parent.parent/'host-job-result.json'
+        if _read(result_path)!=job:raise ValueError('host job result differs from closed projection')
+        actual=_profile_receipt(_path(root,job['receipt']['path'],exists=True)) if job['kind']=='profile' else _read(_path(root,job['receipt']['path'],exists=True))
+        validate_job_receipt(root,campaign,context,actual)
+        if job['kind']=='evaluation':operation_jobs[context['operation']['operation_id']]=(job,context['operation'])
+    for row,static in zip(schedule,expected):
+        if row['state'] in ('complete','incomplete'):
+            if row['operation_id'] not in operation_jobs:raise ValueError('schedule completion lacks actual operation receipt')
+            job,operation=operation_jobs[row['operation_id']]
+            if (row['state']!=job['outcome_state'] or row.get('job_id')!=job['job_id'] or row.get('receipt')!=job['receipt']
+                or any(operation[k]!=v for k,v in static.items() if k!='state')):
+                raise ValueError('schedule result identity differs')
     BudgetAccount(receipt['charged_seconds'],clock=lambda:0.).close()
 
 
-def run_campaign(root: Path,*,campaign_path: Path,source_snapshot: Path,release_path: Path,stage: str,dependencies=None)->dict:
+def run_campaign(root: Path,*,campaign_path: Path,source_snapshot: Path,release_path: Path,stage: str,dependencies=None,stage_wall_seconds=None)->dict:
     """Consume externally reviewed stage authority once; never mint a release."""
+    if dependencies is None and (stage_wall_seconds is None
+        or os.environ.get('SPIRE_LEARN_SUSTAINED_WATCHDOG')!='parent-ceiling+10'
+        or os.environ.get('SPIRE_LEARN_SUSTAINED_WATCHDOG_SECONDS')!=str(stage_wall_seconds)):
+        raise ValueError('actual stage execution requires the enclosing reviewed watchdog')
     root=Path(root).resolve(strict=True);deps=dependencies or HostDependencies();started=finite(deps.clock(),'stage start')
     verified=validate_release(root,campaign_path=campaign_path,source_snapshot=source_snapshot,release_path=release_path,stage=stage)
+    ceiling=validate_stage_ceiling(verified['release'],verified['charged'])
+    if stage_wall_seconds is not None and stage_wall_seconds!=ceiling:raise ValueError('enclosing watchdog differs from reviewed stage wall ceiling')
     # Metadata and read-only pin checks are preflight, not workload qualification.
     low._verify_runtime(root,verified['release'])
     campaign=verified['campaign'];campaign_id=verified['release']['campaign_id'];h=_path(root,DOMAIN/campaign_id)
-    budget=BudgetAccount(verified['charged'],clock=deps.clock);budget.mark=started;budget.check()
+    budget=BudgetAccount(verified['charged'],clock=deps.clock,whole_deadline=started+ceiling);budget.mark=started;budget.check()
     jobs=[];slots={};primary=None;closed=None
     schedule=list(evaluation_schedule(campaign,slots));states={r['operation_id']:dict(r) for r in schedule}
     training_states={replica+'-segment-'+f'{index:03d}':{'job_id':replica+'-segment-'+f'{index:03d}',
@@ -748,10 +881,19 @@ def run_campaign(root: Path,*,campaign_path: Path,source_snapshot: Path,release_
         except BaseException as error:
             if primary is None:primary=error
             else:primary.add_note('outer accounting also failed: '+str(_error(error)))
+        retained=None
+        try:
+            if _source_inventory(root,tuple(verified['snapshot']['files']))!=verified['snapshot']['files']:raise ValueError('source changed before stage closure')
+            low._verify_runtime(root,verified['release'])
+            retained=close_retained_inventory(root,stage_dir)
+        except BaseException as error:
+            if primary is None:primary=error
+            else:primary.add_note('retained evidence closure also failed: '+str(_error(error)))
         closed={'schema':CLOSED_SCHEMA,'stage':stage,'campaign_id':campaign_id,'source_sha256':verified['source_sha256'],
             'release_sha256':verified['release_sha256'],'status':'complete' if primary is None else 'failed','error':None if primary is None else _error(primary),
             'jobs':jobs,'schedule':final_schedule,'training_schedule':list(training_states.values()),'checkpoints':slots,'charged_seconds':dict(budget.charged),'intervals':list(budget.intervals),
             'predecessor':verified['release']['predecessor'],'initial_accounting':verified['release']['initial_accounting']}
+        closed.update(stage_root=str(stage_dir.relative_to(root)),retained_inventory=retained)
         try:
             result_path=stage_dir/'closed-stage.json';write_json_exclusive(result_path,closed)
             digest=sha256_file(result_path)
@@ -790,16 +932,13 @@ def main(argv=None):
     validate=sub.add_parser('validate');validate.add_argument('--campaign',type=Path,default=Path(CAMPAIGN_PATH))
     run=sub.add_parser('run');run.add_argument('--campaign',type=Path,default=Path(CAMPAIGN_PATH))
     run.add_argument('--source-snapshot',type=Path,required=True);run.add_argument('--release',type=Path,required=True);run.add_argument('--stage',choices=STAGES,required=True)
-    run.add_argument('--watchdog-seconds',action='store_true',help=argparse.SUPPRESS)
     args=parser.parse_args(argv)
     if args.command=='capture-source':result=capture_source_snapshot(args.root,args.destination,learner_head=args.learner_head,dirty=_read(args.dirty_json));status='captured'
     elif args.command=='validate':result=validate_campaign(args.root,args.root/args.campaign);status='valid'
     else:
-        if args.watchdog_seconds:
-            verified=validate_release(args.root,campaign_path=args.campaign,source_snapshot=args.source_snapshot,release_path=args.release,stage=args.stage)
-            print(max(0,math.floor(28800.-sum(verified['charged'].values()))-10));return 0
-        if os.environ.get('SPIRE_LEARN_SUSTAINED_WATCHDOG')!='remaining+10':raise ValueError('run requires the sustained whole-stage watchdog wrapper')
-        with signal_scope():result=run_campaign(args.root,campaign_path=args.campaign,source_snapshot=args.source_snapshot,release_path=args.release,stage=args.stage)
+        seconds=os.environ.get('SPIRE_LEARN_SUSTAINED_WATCHDOG_SECONDS','')
+        if os.environ.get('SPIRE_LEARN_SUSTAINED_WATCHDOG')!='parent-ceiling+10' or not re.fullmatch('[1-9][0-9]{1,4}',seconds):raise ValueError('run requires the sustained whole-stage watchdog wrapper with reviewed numeric ceiling')
+        with signal_scope():result=run_campaign(args.root,campaign_path=args.campaign,source_snapshot=args.source_snapshot,release_path=args.release,stage=args.stage,stage_wall_seconds=int(seconds))
         status=result['status']
     print(json.dumps({'status':status,'stage':getattr(args,'stage',None)},separators=(',',':')))
     return 0 if status!='failed' else 1

@@ -40,6 +40,75 @@ def spec():
 
 
 class ControlTests(unittest.TestCase):
+    def test_job_result_publication_cannot_escape_whole_deadline(self):
+        from scripts.neural import sustained_controls as c
+        clock=[0.];budget=c.BudgetAccount({k:0. for k in c.BUCKETS},clock=lambda:clock[0])
+        def late_publication(*args,**kwargs):clock[0]=kwargs['whole']+1.;return {'published':'retained'}
+        with tempfile.TemporaryDirectory() as directory,patch.object(c,'_job_body',side_effect=late_publication):
+            root=Path(directory)
+            with self.assertRaisesRegex(TimeoutError,'final publication'):
+                c._job(root,root,root,{},budget,kind='evaluation',job_id='late',reservation={},output_root='/learner/output',
+                    deps=SimpleNamespace(clock=lambda:clock[0]),docker='docker',client=root)
+        self.assertEqual(budget.bucket,'shared');self.assertEqual(budget.charged['evaluation'],601.)
+
+    def test_reviewed_numeric_ceiling_rejects_unused_profile_transfer(self):
+        from scripts.neural import sustained_controls as c
+        charged={k:v for k,v in c.BUCKETS.items()};charged['profile']=0.
+        with self.assertRaises(ValueError):c.validate_stage_ceiling({'stage':'train-evaluate','stage_wall_seconds':100},charged)
+        with self.assertRaises(ValueError):c.validate_stage_ceiling({'stage':'profile','stage_wall_seconds':True},{k:0. for k in c.BUCKETS})
+        self.assertEqual(c.validate_stage_ceiling({'stage':'profile','stage_wall_seconds':900},{k:0. for k in c.BUCKETS}),900)
+
+    def test_reference_actual_process_modules_must_agree_with_clean_guard(self):
+        from scripts.neural import sustained_controls as c
+        for name in ('torch','tensordict','torchrl'):
+            with self.subTest(name=name),self.assertRaisesRegex(ValueError,'reference'):
+                c.validate_process_evidence({'process':{'modules':{name:{'file':'/runtime/venv-cuda/lib/python3.12/site-packages/'+name,'version':'2.14.1+cu130'}},'threads':{'intraop':4,'interop':1}},
+                    'reference_import_guard':{'installed':True,'attempts':[],'loaded_modules':[]}},reference=True)
+
+    def test_per_job_preflight_consumes_whole_allowance_and_restores_shared(self):
+        from unittest.mock import Mock
+        from scripts.neural import sustained_controls as c
+        for failed in (False,True):
+            with self.subTest(failed=failed),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);stage=root/'stage';stage.mkdir();clock=[0.]
+                budget=c.BudgetAccount({k:0. for k in c.BUCKETS},clock=lambda:clock[0])
+                verified={'snapshot':{'files':{}},'campaign':{},'release':{'campaign_id':'isolated'}}
+                def preflight(*args):
+                    clock[0]=12. if failed else 600.
+                    if failed:raise RuntimeError('preflight primary')
+                    return {}
+                effect=Mock(side_effect=AssertionError('effect after exhausted setup'))
+                with patch.object(c,'validate_campaign',side_effect=preflight),patch.object(c,'_source_inventory',return_value={}),patch.object(c,'_storage'),patch.object(c,'execute_job',effect):
+                    kwargs=dict(kind='evaluation',job_id='eval-test',reservation={},output_root='/learner/output',operation={},
+                        deps=SimpleNamespace(clock=lambda:clock[0]),docker='docker',client=stage/'client')
+                    if failed:
+                        with self.assertRaisesRegex(RuntimeError,'preflight primary'):c._job(root,stage,stage/'source',verified,budget,**kwargs)
+                    else:self.assertIsNone(c._job(root,stage,stage/'source',verified,budget,**kwargs))
+                effect.assert_not_called()
+                self.assertEqual(budget.bucket,'shared')
+                self.assertEqual(budget.charged['evaluation'],12. if failed else 600.)
+                self.assertEqual(budget.charged['shared'],0.)
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);charged={k:0. for k in c.BUCKETS};charged['evaluation']=2690.
+            budget=c.BudgetAccount(charged,clock=lambda:0.)
+            with patch.object(c,'validate_campaign') as preflight:
+                self.assertIsNone(c._job(root,root,root,{},budget,kind='evaluation',job_id='short',reservation={},output_root='/learner/output',deps=SimpleNamespace(clock=lambda:0.),docker='docker',client=root))
+            preflight.assert_not_called();self.assertEqual(budget.bucket,'shared');self.assertEqual(budget.charged,charged)
+
+    def test_wrapper_encloses_slow_validation_before_any_stage_effect(self):
+        import os,shutil,subprocess,time
+        from tests.unit.test_neural_sustained_runtime import ROOT
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);wrapper=root/'run-sustained-training.sh'
+            shutil.copyfile(ROOT/'scripts/neural/run-sustained-training.sh',wrapper)
+            (root/'sustained_controls.py').write_text("import os,time\nfrom pathlib import Path\nPath('entered').write_text(os.environ.get('SPIRE_LEARN_SUSTAINED_WATCHDOG_SECONDS','missing'))\ntime.sleep(3)\nPath('effect').write_text('too late')\n")
+            started=time.monotonic()
+            result=subprocess.run(['bash',str(wrapper),'12','run'],cwd=root,capture_output=True,text=True,timeout=5.)
+            self.assertEqual(result.returncode,124,result.stderr)
+            self.assertLess(time.monotonic()-started,5.)
+            self.assertEqual((root/'entered').read_text(),'12')
+            self.assertFalse((root/'effect').exists())
+
     def test_truthful_runtime_class_controls_gpu_request(self):
         from scripts.neural import task9_study_controls as old
         spec=old.PhaseSpec('run-1-segment-000','new-job','sustained','a'*64,'b'*64,'c'*64,
@@ -173,12 +242,92 @@ class ControlTests(unittest.TestCase):
 
 
 class SchedulerTests(unittest.TestCase):
+    def test_profile_predecessor_rechecks_actual_producer_trace_and_journal(self):
+        import shutil
+        from scripts.neural import sustained_controls as c,sustained_runtime as r,sustained_profile as p,sustained_package as package
+        from tests.unit.test_neural_sustained_runtime import ROOT,SegmentFixture
+        from tests.unit.test_neural_sustained_profile import ProfileTests
+        with tempfile.TemporaryDirectory() as directory:
+            f=SegmentFixture(directory);root=f.root
+            for scope in c.SNAPSHOT_SCOPES:
+                original=ROOT/scope
+                if original.is_file():
+                    target=root/scope;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(original,target);target.chmod(original.stat().st_mode&0o777)
+            initial=json.loads((ROOT/c.INITIAL).read_text())
+            for relative in (c.INITIAL,Path(package.PARENT_PATH),Path(initial['runtime_intervals'][0]['receipt'])):
+                target=root/relative;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/relative,target)
+            for binding in (*f.campaign['parents'].values(),*f.campaign['diagnostic_checkpoints'].values()):
+                shutil.copytree(ROOT/binding['path'],root/binding['path'])
+            snapshot=root/'snapshot.json'
+            with patch('spire_learn.neural.config.__file__',str(root/'src/spire_learn/neural/config.py')):
+                authored=c.capture_source_snapshot(root,root/'source-only.json',learner_head='a'*40,dirty={})
+            authored['state']='reviewed';c.write_json_exclusive(snapshot,authored);source_sha=c.sha256_file(snapshot)
+            stage=root/c.DOMAIN/'isolated/profile';jobdir=stage/'jobs/profile-fake';output=jobdir/'output';output.mkdir(parents=True)
+            control=jobdir/'control';control.mkdir();(stage/'docker-client').mkdir()
+            journal=r.Journal(output);produced={};real=p.run_profile
+            def produce(producer_root,campaign,context,**kwargs):
+                transient={**context,'source_sha256':source_sha}
+                if context['phase_id']=='profile-fake':
+                    original=context['effect_ledger']
+                    def reserve(row):original.reserve(row);journal.reserve(row)
+                    def settle(row):original.settle(row);journal.settle(row)
+                    transient['effect_ledger']=SimpleNamespace(reserve=reserve,settle=settle)
+                result=real(producer_root,campaign,transient,**kwargs)
+                produced.update(report=result,reservation=context['job_reservation'])
+                return result
+            # Reuse the complete real Task2 producer harness, including its
+            # real inventory/config parsing and actual reserve/settle callbacks.
+            with patch.object(p,'run_profile',side_effect=produce):
+                ProfileTests('test_complete_fake_driven_profile_strict_accepted_boundaries').test_complete_fake_driven_profile_strict_accepted_boundaries()
+            journal.flush();report=produced['report']
+            torch=SimpleNamespace(__version__='2.14.1+cu130',__file__='/runtime/venv-cuda/lib/python3.12/site-packages/torch/__init__.py',get_num_threads=lambda:4,get_num_interop_threads=lambda:1)
+            with patch.dict('sys.modules',{'torch':torch}):process=r.process_evidence()
+            context={'schema':r.CONTEXT_SCHEMA,'kind':'profile','job_id':'profile-fake','operation':None,
+                'source_sha256':source_sha,'host_output':str(output),'reservation':produced['reservation']}
+            context_path=control/'job.json';c.write_json_exclusive(context_path,context)
+            receipt_path=output/'job-receipt.json';r.publish_profile_result(receipt_path,{**report,'journal':journal.parts,'process':process})
+            c.write_json_exclusive(output/'trace.json',{'traces':report['traces']})
+            c.write_json_exclusive(jobdir/'commands.json',{'commands':[]})
+            job={'job_id':'profile-fake','kind':'profile','status':'complete',
+                'context':{'path':str(context_path.relative_to(root)),'sha256':c.sha256_file(context_path)},
+                'receipt':{'path':str(receipt_path.relative_to(root)),'sha256':c.sha256_file(receipt_path)}}
+            c.write_json_exclusive(jobdir/'host-job-result.json',job)
+            charged=dict(initial['charged_seconds']);charged['profile']=report['elapsed_seconds']
+            closed={'schema':c.CLOSED_SCHEMA,'status':'complete','stage':'profile','campaign_id':'isolated','source_sha256':source_sha,
+                'stage_root':str(stage.relative_to(root)),'jobs':[job],'schedule':list(c.evaluation_schedule(f.campaign,{})),
+                'checkpoints':{},'charged_seconds':charged,'retained_inventory':c.close_retained_inventory(root,stage)}
+            closed_path=stage/'closed-stage.json';c.write_json_exclusive(closed_path,closed)
+            seal={'schema':c.SEAL_SCHEMA,'status':'complete','stage':'profile','campaign_id':'isolated','source_sha256':source_sha,
+                'result':{'path':str(closed_path.relative_to(root)),'sha256':c.sha256_file(closed_path)},
+                'incoming_charged_seconds':initial['charged_seconds'],'charged_seconds':charged,'stage_elapsed_seconds':report['elapsed_seconds']}
+            seal_path=stage/'closure.json';c.write_json_exclusive(seal_path,seal)
+            elapsed=report['elapsed_seconds']+1.
+            outer={'schema':c.OUTER_SCHEMA,'stage':'profile','campaign_id':'isolated','seal_sha256':c.sha256_file(seal_path),'exit_code':0,
+                'enclosing_elapsed_seconds':elapsed,'accounted_interval_seconds':report['elapsed_seconds'],'residual_shared_seconds':elapsed-report['elapsed_seconds']}
+            c.write_json_exclusive(root/'outer.json',outer);(root/'review.txt').write_text('isolated reviewed fixture')
+            release={'schema':c.RELEASE_SCHEMA,'state':'approved','single_use':True,'stage':'train-evaluate','stage_wall_seconds':900,'campaign_id':'isolated',
+                'source_snapshot_sha256':source_sha,'campaign_raw_sha256':c.sha256_file(root/c.CAMPAIGN_PATH),
+                'runtime_pins':f.campaign['runtime_pins'],'budgets':f.campaign['budgets'],'review':{'path':'review.txt','sha256':c.sha256_file(root/'review.txt')},
+                'predecessor':{'path':str(seal_path.relative_to(root)),'sha256':c.sha256_file(seal_path),'outer_accounting':{'path':'outer.json','sha256':c.sha256_file(root/'outer.json')}},
+                'initial_accounting':{'path':str(c.INITIAL),'sha256':c.INITIAL_SHA256}}
+            c.write_json_exclusive(root/'release.json',release)
+            outer_hashes=[c.sha256_file(file) for file in (context_path,receipt_path,closed_path,seal_path)]
+            with patch('spire_learn.neural.config.__file__',str(root/'src/spire_learn/neural/config.py')):
+                c.validate_release(root,campaign_path=Path(c.CAMPAIGN_PATH),source_snapshot=snapshot,release_path=root/'release.json',stage='train-evaluate')
+                for target in (output/'trace.json',output/'effects-0000.json',jobdir/'commands.json',jobdir/'host-job-result.json'):
+                    raw=target.read_bytes();target.write_bytes(b'changed retained profile evidence')
+                    with self.assertRaises(ValueError):c.validate_release(root,campaign_path=Path(c.CAMPAIGN_PATH),source_snapshot=snapshot,release_path=root/'release.json',stage='train-evaluate')
+                    target.unlink()
+                    with self.assertRaises(ValueError):c.validate_release(root,campaign_path=Path(c.CAMPAIGN_PATH),source_snapshot=snapshot,release_path=root/'release.json',stage='train-evaluate')
+                    target.write_bytes(raw)
+                self.assertEqual([c.sha256_file(file) for file in (context_path,receipt_path,closed_path,seal_path)],outer_hashes)
+
     def test_stage_ancestor_sync_failure_consumes_slot_before_any_docker_effect(self):
         from unittest.mock import Mock
         from scripts.neural import sustained_controls as c
         from tests.unit.test_neural_sustained_runtime import ROOT
         campaign=json.loads((ROOT/c.CAMPAIGN_PATH).read_text())
-        verified={'campaign':campaign,'snapshot':{'files':{}},'release':{'campaign_id':'isolated','predecessor':None,
+        verified={'campaign':campaign,'snapshot':{'files':{}},'release':{'campaign_id':'isolated','predecessor':None,'stage':'profile','stage_wall_seconds':900,
             'initial_accounting':{'path':c.INITIAL.as_posix(),'sha256':c.INITIAL_SHA256}},
             'source_sha256':'a'*64,'release_sha256':'b'*64,'charged':{k:0. for k in c.BUCKETS}}
         run=Mock(side_effect=RuntimeError('unexpected Docker dispatch'))
@@ -215,8 +364,8 @@ class SchedulerTests(unittest.TestCase):
                 'runtime_pins':f.campaign['runtime_pins'],'budgets':f.campaign['budgets']})
             verified={'campaign':f.campaign,'snapshot':{'files':inventory},'release':{'campaign_id':'isolated'},
                 'source_sha256':c.sha256_file(snapshot),'release_sha256':c.sha256_file(release),'snapshot_path':snapshot,'release_path':release}
-            stage=root/'stage';stage.mkdir();source=stage/'source';c._stage(root,source,inventory)
-            client=stage/'client';client.mkdir();created=[];removed=[];current={}
+            stage=root/c.DOMAIN/'isolated/train-evaluate';stage.mkdir(parents=True);source=stage/'source';c._stage(root,source,inventory)
+            client=stage/'docker-client';client.mkdir();created=[];removed=[];current={};jobs=[]
             def run(argv,**kwargs):
                 if argv[0]=='nvidia-smi':
                     text='3772, 498, '+c.low.GPU_UUID+'\n' if 'compute-apps' in argv[1] else c.low.GPU_UUID+', NVIDIA GeForce RTX 5090, 595.91.07, 32607, 20000\n'
@@ -265,8 +414,37 @@ class SchedulerTests(unittest.TestCase):
                     self.assertEqual(job['checkpoint']['counters']['optimizer_accepted_steps'],4*(index+1))
                     parent={'path':job['checkpoint']['path'],'inventory':job['checkpoint']['inventory']};prefix=job['checkpoint']['counters'];predecessor=job['receipt']
                     outputs.append(str(Path(parent['path']).parents[1]))
+                    jobs.append(job)
             self.assertEqual(len(set(outputs)),3);self.assertEqual(created,['run-1-segment-000','run-1-segment-001','run-1-segment-002'])
             self.assertEqual(removed,['d'*64]*3);self.assertEqual(f.calls,['warm_start','resume','resume'])
+            closed={'schema':c.CLOSED_SCHEMA,'status':'complete','stage':'train-evaluate','campaign_id':'isolated',
+                'source_sha256':verified['source_sha256'],
+                'stage_root':str(stage.relative_to(root)),'jobs':jobs,'schedule':list(c.evaluation_schedule(f.campaign,{})),
+                'checkpoints':{},'charged_seconds':dict(budget.charged),
+                'retained_inventory':c.close_retained_inventory(root,stage)}
+            with patch('spire_learn.neural.config.__file__',str(root/'src/spire_learn/neural/config.py')):
+                c.verify_closed_stage(root,closed)
+                jobdir=(root/jobs[-1]['context']['path']).parent.parent
+                checkpoint=Path(jobs[-1]['checkpoint']['path'])
+                targets=[checkpoint.parent/'lifecycle.json',jobdir/'output/effects-0000.json',checkpoint/'model.pt',
+                    jobdir/'commands.json',jobdir/'host-job-result.json']
+                for target in targets:
+                    with self.subTest(retained=target.name):
+                        raw=target.read_bytes();target.write_bytes(b'tampered inner evidence')
+                        with self.assertRaises(ValueError):c.verify_closed_stage(root,closed)
+                        target.unlink()
+                        with self.assertRaises(ValueError):c.verify_closed_stage(root,closed)
+                        target.write_bytes(raw)
+                extra=stage/'unexpected';extra.write_text('added after closure')
+                with self.assertRaises(ValueError):c.verify_closed_stage(root,closed)
+                extra.unlink();extra.symlink_to(checkpoint/'model.pt')
+                with self.assertRaises(ValueError):c.verify_closed_stage(root,closed)
+                extra.unlink();client_file=client/'unexpected';client_file.write_text('do not open Docker config contents')
+                with self.assertRaisesRegex(ValueError,'Docker client'):c.verify_closed_stage(root,closed)
+                client_file.unlink()
+                closed['schedule'][0]['case_id']='wrong-static-case'
+                with self.assertRaisesRegex(ValueError,'schedule'):c.verify_closed_stage(root,closed)
+
 
     def test_real_release_validation_is_read_only_and_binds_all_package_inputs(self):
         import shutil
@@ -287,13 +465,17 @@ class SchedulerTests(unittest.TestCase):
             with patch('spire_learn.neural.config.__file__',str(root/'src/spire_learn/neural/config.py')):
                 value=c.capture_source_snapshot(root,root/'source-only.json',learner_head='a'*40,dirty={})
                 value['state']='reviewed';c.write_json_exclusive(snapshot,value)
-                release={'schema':c.RELEASE_SCHEMA,'state':'approved','single_use':True,'stage':'profile','campaign_id':'isolated',
+                release={'schema':c.RELEASE_SCHEMA,'state':'approved','single_use':True,'stage':'profile','stage_wall_seconds':900,'campaign_id':'isolated',
                     'source_snapshot_sha256':c.sha256_file(snapshot),'campaign_raw_sha256':c.sha256_file(root/c.CAMPAIGN_PATH),
                     'runtime_pins':f.campaign['runtime_pins'],'budgets':f.campaign['budgets'],'review':{'path':'review.txt','sha256':c.sha256_file(review)},
                     'predecessor':None,'initial_accounting':{'path':c.INITIAL.as_posix(),'sha256':c.INITIAL_SHA256}}
                 c.write_json_exclusive(root/'release.json',release)
                 result=c.validate_release(root,campaign_path=Path(c.CAMPAIGN_PATH),source_snapshot=snapshot,release_path=root/'release.json',stage='profile')
                 self.assertEqual(result['charged']['shared'],.09155025496147573)
+                self.assertFalse((root/c.DOMAIN).exists())
+                with self.assertRaisesRegex(ValueError,'watchdog differs'):
+                    c.run_campaign(root,campaign_path=Path(c.CAMPAIGN_PATH),source_snapshot=snapshot,release_path=root/'release.json',stage='profile',
+                        stage_wall_seconds=901,dependencies=SimpleNamespace(clock=lambda:0.))
                 self.assertFalse((root/c.DOMAIN).exists())
                 (root/'src/spire_learn/__init__.py').write_text('changed source')
                 with self.assertRaisesRegex(ValueError,'source snapshot differs'):
@@ -312,7 +494,7 @@ class SchedulerTests(unittest.TestCase):
         from scripts.neural import sustained_controls as c
         from tests.unit.test_neural_sustained_runtime import ROOT
         campaign=json.loads((ROOT/c.CAMPAIGN_PATH).read_text());calls=[]
-        verified={'campaign':campaign,'snapshot':{'files':{}},'release':{'campaign_id':'isolated','predecessor':None},
+        verified={'campaign':campaign,'snapshot':{'files':{}},'release':{'campaign_id':'isolated','predecessor':None,'stage':'train-evaluate','stage_wall_seconds':900},
             'source_sha256':'a'*64,'release_sha256':'b'*64,'charged':{k:(.09155025496147573 if k=='shared' else 0.) for k in c.BUCKETS}}
         verified['release']['initial_accounting']={'path':c.INITIAL.as_posix(),'sha256':c.INITIAL_SHA256}
         def fail(*args,**kwargs):calls.append(kwargs['job_id']);raise RuntimeError('accepted effect fault')

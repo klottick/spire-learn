@@ -45,7 +45,12 @@ The separately approved bounded study then trained four checkpoints across
 zero simulator faults. Results are mixed and seed-sensitive: see the
 [study results](docs/neural-study.md). All normal-Run trials ended in death;
 no full-Run victory, final-evaluation or original-game-transfer claim is made.
-The one-use campaign is complete; no further workload is approved.
+The earlier one-use study is complete. The subsequently approved overnight
+campaign halted on a native Run fault after 79 healthy training segments
+(238,574 learned decisions). Its 350 complete and two incomplete evaluation
+rows show mixed intermediate results; no final-policy evaluation ran. The
+[partial campaign results](docs/neural-study.md) preserve the fault, checkpoints,
+accounting and coverage limits. No retry or further workload is authorized.
 See the [retained CPU runtime
 report](artifacts/development/neural-combat/task-7/task-7-training-smoke-runtime-report.md),
 [development and evaluation checks](docs/development.md), and [neural combat

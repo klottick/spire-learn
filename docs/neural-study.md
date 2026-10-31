@@ -1,4 +1,37 @@
-# Bounded Ironclad learning study
+# Sustained Ironclad campaign: partial results
+
+The approved overnight campaign `sustain-20261031-a` halted at 04:55 UTC on
+31 October 2026 after a native `RunFaultError` during Run-mode training.
+The train/evaluate stage ran for 3h 54m 13s, then exited 1. No retry occurred.
+The last healthy checkpoints for all four replicas remain retained. This is
+an incomplete campaign, not a completed eight-hour experiment.
+
+Across 79 healthy segments, durable prefixes contain **238,574 learned decisions,
+274,621 environment slots and 17,888 accepted Adam steps**. The failed segment
+also performed 144 unsaved Adam steps and recorded one uncertain native action.
+The fault remains separate from gameplay deaths. Its container was removed,
+and all 7,291 retained inventory entries verified. See the
+[partial runtime report](../artifacts/development/neural-combat/sustained-v1/approval-20261031-a/final-runtime-report.md)
+and [audit](../artifacts/development/neural-combat/sustained-v1/approval-20261031-a/final-runtime-audit.json).
+
+Of 704 fixed evaluation rows, 350 completed, two were incomplete at their action
+limits, and 352 were not started. The matched eight-standalone/eight-Run sentry
+panel showed no consistent improvement. Standalone replica 2 regressed between
+its quarter and half checkpoints: standalone wins changed from 5/8 to 3/8,
+and combat wins across the same eight Run trials fell from 48 to 1. These
+intermediate policies are not the latest retained checkpoints. No final-policy
+evaluation ran; all 174 completed Run trials ended in death.
+
+The original B anchors won 18/32 and 20/32 standalone fights on the broader
+selection panel. Earlier 16/16 results on a different panel did not establish
+broad generalization. This remains development selection, with matched reset
+streams, small samples, RNG-001/TIME-001 and no original-game-transfer claim.
+The final split is untouched. No continuation is authorized by these results;
+Gym-owned investigation of the native fault should come first. The
+[handoff packet](../artifacts/development/neural-combat/sustained-v1/approval-20261031-a/gym-fault-handoff.md)
+locates the retained traceback, public event sequence and pinned native identity.
+
+## Earlier bounded study
 
 The single approved replacement `task9-study-20261030-b` completed at source
 `17e71f07d736469955ce09a7b0dbb3643052ec9a`: four eligible checkpoints,

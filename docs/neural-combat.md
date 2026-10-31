@@ -210,3 +210,20 @@ remain under `configs/neural/experiments/task9-v1`. The [runbook](../scripts/neu
 records the historical bounded protocol. Campaign `task9-study-20261030-b` and
 the original a claim are consumed. No retry, extension or new workload is
 authorized by this documentation.
+
+
+## Sustained campaign halted on a native Run fault
+
+The separately approved `sustain-20261031-a` campaign stopped on 31 October 2026
+after 79 healthy segments. Four durable checkpoint chains retain 238,574 learned
+decisions and 17,888 accepted Adam steps. A later Run segment raised native
+`RunFaultError`, with one uncertain action; its 144 later Adam steps were not
+saved. The fault is not scored as death. Cleanup records show owned-container
+removal and no retry.
+
+The fixed evaluation schedule retained 350 complete, two incomplete and 352
+not-started rows. Intermediate sentry results were mixed, including a regression;
+no final-policy or final-split evaluation ran. See [study results](neural-study.md)
+and the [partial runtime report](../artifacts/development/neural-combat/sustained-v1/approval-20261031-a/final-runtime-report.md).
+The retained Gym fault packet is ready for a separately scoped investigation.
+No additional training, reproduction or continuation is authorized here.

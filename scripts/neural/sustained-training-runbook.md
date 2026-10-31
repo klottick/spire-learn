@@ -1,5 +1,13 @@
 # Sustained Ironclad controls
 
+Historical protocol: campaign `sustain-20261031-a` consumed both stage releases.
+Profiling passed; the train/evaluate stage halted on a native Run fault at
+2026-10-31 04:55:48 UTC. It was not retried. The retained partial report is
+`artifacts/development/neural-combat/sustained-v1/approval-20261031-a/final-runtime-report.md`.
+Commands below describe the consumed protocol and authorize no replay.
+The executed source snapshot remains retained; this status note was added only
+after final source and inventory postchecks.
+
 These commands prepare and consume the approved sustained-v1 package. They do
 not authorize another campaign or reuse a historical study claim. Workloads
 require the parent's externally reviewed stage release. No dependency install,

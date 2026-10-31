@@ -182,11 +182,24 @@ def validate_guest_profile(profile: Mapping, *, phase: str, requested_environmen
     _checked(profile)
     if phase not in _GPU_PHASES | {'selection'}:
         _fail('phase', phase)
+    return validate_runtime_class(profile, runtime_class='gpu' if phase in _GPU_PHASES else 'cpu',
+        requested_environment=requested_environment, actual_environment=actual_environment, facts=facts)
+
+
+def validate_runtime_class(profile: Mapping, *, runtime_class: str, requested_environment: Mapping,
+                           actual_environment: Mapping, facts: Mapping) -> dict:
+    """The same pinned OCI contract for a new truthful job identity."""
+    _checked(profile)
+    if runtime_class not in ('cpu', 'gpu'):
+        _fail('runtime_class', runtime_class)
     requested = dict(requested_environment)
     actual = dict(actual_environment)
-    gpu = phase in _GPU_PHASES
+    gpu = runtime_class == 'gpu'
     if requested.get('NVIDIA_VISIBLE_DEVICES') != (profile['gpu_uuid'] if gpu else 'none'):
         _fail('requested NVIDIA_VISIBLE_DEVICES', requested.get('NVIDIA_VISIBLE_DEVICES'))
+    if not gpu and (requested.get('CUDA_VISIBLE_DEVICES', '') != ''
+                   or requested.get('NVIDIA_DRIVER_CAPABILITIES', '') != ''):
+        _fail('CPU requested GPU environment')
     cdi = gpu and actual.get('NVIDIA_VISIBLE_DEVICES') == 'void'
     expected = {**requested, **(profile['post_oci_environment'] if cdi else {})}
     for key, value in expected.items():

@@ -335,6 +335,17 @@ class PhaseSpec:
     environment: tuple[tuple[str,str],...]
     mounts: tuple[tuple[str,str,bool],...]
     labels: tuple[tuple[str,str],...]
+    runtime_class: str | None = None
+
+    def __post_init__(self):
+        if self.runtime_class not in (None, 'cpu', 'gpu'):
+            raise StudyControlError('runtime class must be cpu or gpu')
+        if self.runtime_class is None and self.phase not in PHASES:
+            raise StudyControlError('new job identity requires an explicit runtime class')
+
+    @property
+    def uses_gpu(self):
+        return self.runtime_class == 'gpu' if self.runtime_class is not None else self.phase != 'selection'
 
 
 def _phase_output(phase):
@@ -462,7 +473,7 @@ def build_create_argv(spec: PhaseSpec, docker: str, client: Path) -> list[str]:
         '--user','1000:1000','--workdir','/learner','--network','none','--read-only',
         '--cap-drop','ALL','--security-opt','no-new-privileges:true',
         '--cpus','4','--memory',str(8*GIB),'--memory-swap',str(8*GIB),'--pids-limit','512')
-    if spec.phase!='selection':args+=['--gpus','device='+GPU_UUID]
+    if spec.uses_gpu:args+=['--gpus','device='+GPU_UUID]
     for k,v in spec.environment:args+=['--env',k+'='+v]
     for k,v in spec.labels:args+=['--label',k+'='+v]
     for src,dst,ro in spec.mounts:
@@ -473,7 +484,7 @@ def build_create_argv(spec: PhaseSpec, docker: str, client: Path) -> list[str]:
 
 def _inspect_projection(spec, container_id):
     """Expected fields, also used by strict fake Docker; never normalizes inspect."""
-    devices=[] if spec.phase=='selection' else [{'Driver':'','Count':0,
+    devices=[] if not spec.uses_gpu else [{'Driver':'','Count':0,
         'DeviceIDs':[GPU_UUID],'Capabilities':[['gpu']],'Options':{}}]
     return {'Id':container_id,'Name':'/'+spec.name,'Image':IMAGE_ID,
         'Platform':'linux','Config':{'Image':IMAGE,'User':'1000:1000','WorkingDir':'/learner',

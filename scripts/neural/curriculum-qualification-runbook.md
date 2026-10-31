@@ -12,8 +12,10 @@ review and a new one-use approval/claim are prerequisites to execution.
 The retained pure preparation is
 `artifacts/development/neural-combat/curriculum-v1/task-5/`.
 `qualification-input-inventory.json` binds every emitted input's raw SHA256 and
-size; `source-sha256.json` binds the exact final Task 5 source snapshot. The
-Task 5 report records their detached hashes and final source commit. The
+size. The original `source-sha256.json` remains the historical Task 5 snapshot
+at `6a3cb142f6ee1d4bc08d0bfd129915d275bfdc40`; current fix source is
+bound by `fix-1/source-sha256.json` and `fix-1/qualification-binding.json`.
+The Task 5 report records their detached hashes and source commits. The
 producer base is `bed896c55c02e3ee5fa57982de4a6262398b4b0e`. Rehash these actual
 bytes at admission. A later controller must add its own exact reviewed source
 inventory and preserve this source/input identity, never stage a moving checkout.

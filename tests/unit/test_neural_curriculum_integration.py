@@ -69,6 +69,50 @@ print('gate_off: one skip; optional attempts/loaded: []')
         self.assertIn('one skip', result.stdout)
 
     def test_enabled_harness_runs_real_producers_with_actual_config_and_save_flow(self):
+        self._run_enabled_harness()
+
+    def test_warm_start_rejects_each_inherited_rng_before_effects(self):
+        for domain in ('policy', 'minibatch', 'curriculum', 'controller'):
+            with self.subTest(domain=domain):
+                self._run_enabled_harness(wrong_domain=domain)
+
+    def test_warm_start_rng_rejection_preserves_primary_and_control_when_close_fails(self):
+        self._run_enabled_harness(wrong_domain='policy', close_error=RuntimeError('secondary close fault'))
+        self._run_enabled_harness(reference_error=KeyboardInterrupt('primary control'),
+                                  close_error=RuntimeError('secondary close fault'))
+        self._run_enabled_harness(wrong_domain='policy', close_error=KeyboardInterrupt('close control'))
+
+    def test_fresh_rng_references_use_config_devices_and_leave_global_random_unchanged(self):
+        from tests.neural import test_curriculum as held
+        from tests.unit.test_neural_stream_resume import StatefulGenerator
+        from spire_learn.neural.config import load_neural_config
+        from spire_learn.neural.stream_runner import _toml
+        import tomllib
+        cpu = load_neural_config(ROOT / 'configs/neural/standalone.toml')
+        with tempfile.TemporaryDirectory(dir=ARTIFACTS) as temporary, blocked_optional():
+            document = tomllib.loads((ROOT / 'configs/neural/standalone.toml').read_text())
+            document.update(device='cuda:0', manifest_path=str(cpu.manifest_path), output_root=str(cpu.output_root))
+            document['runtime'] = dict(gpu_uuid='GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d')
+            path = Path(temporary) / 'cuda.toml'
+            path.write_text(_toml(document))
+            cuda = load_neural_config(path)
+            devices = []
+            def generator_factory(*, device):
+                devices.append(device)
+                return StatefulGenerator(device='cpu')
+            before = random.getstate()
+            for config in (cpu, cuda):
+                first = held._fresh_rng_states(config, generator_factory)
+                second = held._fresh_rng_states(config, generator_factory)
+                self.assertEqual(first, second)
+                for domain, seed in [('policy', config.seed_streams.policy),
+                    ('minibatch', config.seed_streams.optimizer), ('curriculum', config.seed_streams.curriculum),
+                    ('controller', config.seed_streams.noncombat)]:
+                    self.assertEqual(first[domain], random.Random(seed).getstate())
+            self.assertEqual(devices, ['cpu', 'cpu', 'cpu', 'cpu', 'cuda:0', 'cpu', 'cuda:0', 'cpu'])
+            self.assertEqual(random.getstate(), before)
+
+    def _run_enabled_harness(self, *, wrong_domain=None, reference_error=None, close_error=None):
         # The break caught here is a wrong integration factory/segment/save/resume
         # contract. Tensor math, native dispatch and tensor archives are the only
         # external boundaries; reports/progress/lifecycle are real producers.
@@ -225,6 +269,22 @@ print('gate_off: one skip; optional attempts/loaded: []')
                     device_plan=plan_runtime_device(config), device_report={}, budget=budget, recovery=recovery,
                     recovered_progress=progress, parent_checkpoint=checkpoint, stream_transition=stream_transition,
                     controller_id='neural-policy-resume-v1' if purpose == 'resume' else 'neural-policy-v1')
+                if purpose == 'warm_start' and wrong_domain is not None:
+                    generators = dict(policy=policy_rng, minibatch=shuffle,
+                                      curriculum=curriculum, controller=controller)
+                    seeds = dict(policy=config.seed_streams.policy, minibatch=config.seed_streams.optimizer,
+                                 curriculum=config.seed_streams.curriculum, controller=config.seed_streams.noncombat)
+                    generator = generators[wrong_domain]
+                    if wrong_domain in ('policy', 'minibatch'):
+                        generator.manual_seed(seeds[wrong_domain] + 1)
+                    else:
+                        generator.seed(seeds[wrong_domain] + 1)
+                if purpose == 'warm_start' and close_error is not None:
+                    original_close = runtime.close
+                    def failing_close():
+                        original_close()
+                        raise close_error
+                    runtime.close = failing_close
                 runtimes.append(runtime)
                 return runtime
             def update(policy, optimizer, rollout, ppo_config, *, shuffle_generator, budget):
@@ -248,9 +308,13 @@ print('gate_off: one skip; optional attempts/loaded: []')
                 frozen = runner.preflight_checkpoint(path, configs[0].accepted_identities[0], purpose='resume').metadata
                 loaded[path] = SimpleNamespace(metadata=frozen, model_tensors=policy.state_dict(),
                     optimizer_state=optimizer.state_dict(), rng_state=copy.deepcopy(rng_state))
+            def fresh_rng_states(config):
+                if reference_error is not None:
+                    raise reference_error
+                return held._fresh_rng_states(config, StatefulGenerator)
             api = SimpleNamespace(make_driver=catalog_driver, create_runtime=create_runtime,
                 train=runner.train, load_checkpoint=load_checkpoint, equal=lambda a, b: a == b,
-                finite_changed=lambda a, b: a != b, clock=lambda: 0.)
+                finite_changed=lambda a, b: a != b, clock=lambda: 0., fresh_rng_states=fresh_rng_states)
             captured = []
             exercise = held._exercise
             def observe_exercise(test, actual_configs, actual_parent, actual_api, actual_caps):
@@ -272,7 +336,29 @@ print('gate_off: one skip; optional attempts/loaded: []')
                  patch.dict(os.environ, {'SPIRE_LEARN_CURRICULUM_INPUT_ROOT': str(root)}):
                 # Direct method invocation exercises the enabled body, while its
                 # class gate remains disabled for every actual unittest loader.
-                held.CurriculumIntegrationTests('test_public_catalog_tensor_resume_and_tiny_healthy_segments').test_public_catalog_tensor_resume_and_tiny_healthy_segments()
+                case = held.CurriculumIntegrationTests('test_public_catalog_tensor_resume_and_tiny_healthy_segments')
+                if wrong_domain is not None or reference_error is not None:
+                    expected = reference_error or AssertionError()
+                    if close_error is not None and not isinstance(close_error, Exception) and isinstance(expected, Exception):
+                        expected = close_error
+                    with self.assertRaises(type(expected)) as caught:
+                        case.test_public_catalog_tensor_resume_and_tiny_healthy_segments()
+                    if isinstance(expected, AssertionError):
+                        self.assertIn('fresh warm-start ' + wrong_domain, str(caught.exception))
+                    else:
+                        self.assertIs(caught.exception, expected)
+                    if close_error is not None:
+                        self.assertTrue(getattr(caught.exception, '__notes__', []))
+                    self.assertEqual(caps.counts, dict(actions=0, samples=0, adam=0, resets=0))
+                    self.assertEqual([p for p, _ in factory_calls], ['warm_start'])
+                    self.assertEqual(len(drivers), 1)
+                    self.assertEqual(drivers[0].close_calls, 1)
+                    self.assertEqual(drivers[0].reset_calls + drivers[0].step_calls, [])
+                    self.assertTrue(all(c.close_calls == 1 for c in catalogs))
+                    self.assertEqual(captured, [])
+                    self.assertEqual(attempts, [])
+                    return
+                case.test_public_catalog_tensor_resume_and_tiny_healthy_segments()
             first, second = captured
             self.assertEqual(caps.counts, dict(actions=128, samples=128, adam=8, resets=128))
             self.assertEqual(second['saved_prefix']['delivered_environment_slots'], 128)

@@ -8,6 +8,7 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import random
 import time
 from types import SimpleNamespace
 import unittest
@@ -50,6 +51,19 @@ class _BoundedDriver:
         return self.driver.step(actions)
 
 
+def _fresh_rng_states(config, generator_factory):
+    """Build isolated reference streams using the producer's device assignment."""
+    from spire_learn.neural.device import plan_runtime_device
+    plan = plan_runtime_device(config)
+    policy = generator_factory(device=plan.policy_generator_device)
+    policy.manual_seed(config.seed_streams.policy)
+    minibatch = generator_factory(device=plan.shuffle_generator_device)
+    minibatch.manual_seed(config.seed_streams.optimizer)
+    return dict(policy=policy.get_state(), minibatch=minibatch.get_state(),
+        curriculum=random.Random(config.seed_streams.curriculum).getstate(),
+        controller=random.Random(config.seed_streams.noncombat).getstate())
+
+
 @contextmanager
 def _runtime_api(caps):
     # This boundary is entered only inside the gated method, never setUpModule.
@@ -87,7 +101,8 @@ def _runtime_api(caps):
          patch.object(torch.optim.Adam, 'step', new=step):
         yield SimpleNamespace(make_driver=make_driver, create_runtime=runner.create_runtime,
             train=runner.train, load_checkpoint=load_checkpoint, equal=equal,
-            finite_changed=finite_changed, clock=caps.clock)
+            finite_changed=finite_changed, clock=caps.clock,
+            fresh_rng_states=lambda config: _fresh_rng_states(config, torch.Generator))
 
 
 def _check_restored(test, runtime, loaded, api):
@@ -111,7 +126,7 @@ def _check_restored(test, runtime, loaded, api):
 
 
 def _exercise(test, configs, parent, api, caps):
-    from spire_learn.neural.runner import RuntimeOperationLimits
+    from spire_learn.neural.runner import RuntimeOperationLimits, _close_preserving
     from spire_learn.neural.stream_runner import run_stream_segment
     first, second = configs
     test.assertEqual([c.scenario_stream['shard_index'] for c in configs], [0, 1])
@@ -134,8 +149,17 @@ def _exercise(test, configs, parent, api, caps):
             test.assertEqual(runtime.optimizer.state_dict()['state'], {})
             test.assertEqual(runtime.policy._behavior_policy_version, 0)
             test.assertEqual(runtime.recovered_progress, {})
-        except BaseException:
-            runtime.close()
+            expected_rng = api.fresh_rng_states(config)
+            actual_rng = dict(policy=runtime.policy_generator.get_state(),
+                minibatch=runtime.shuffle_generator.get_state(),
+                curriculum=runtime.curriculum_rng.getstate(), controller=runtime.controller_rng.getstate())
+            for domain in ('policy', 'minibatch', 'curriculum', 'controller'):
+                test.assertTrue(api.equal(actual_rng[domain], expected_rng[domain]),
+                                f'fresh warm-start {domain} RNG does not match config seed')
+        except BaseException as error:
+            primary = _close_preserving(error, runtime, 'qualification warm-start runtime')
+            if primary is not error:
+                raise primary
             raise
         return runtime
 

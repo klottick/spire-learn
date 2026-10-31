@@ -6,7 +6,6 @@ module only admits a concrete catalog transition and bounded sampler projection.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import asdict
 import hashlib
 from pathlib import Path
 import tomllib
@@ -71,6 +70,9 @@ def _context(config: NeuralConfig) -> tuple[Mapping[str, object], ScenarioRecipe
     table = config.scenario_stream
     if table is None:
         raise ValueError('explicit scenario_stream config is required')
+    from .config import _stream_runtime_projection
+    if content_sha256(_stream_runtime_projection(config)) != content_sha256(table.get('runtime_projection')):
+        raise ValueError('scenario_stream runtime projection disagrees with loaded config')
     recipe = load_scenario_recipe(Path(table['resolved_recipe_path']))
     shard = generate_scenario_shard(recipe, split='train', shard_index=table['shard_index'],
                                     arm=table['arm'])
@@ -93,22 +95,9 @@ def stream_identity(config: NeuralConfig) -> Mapping[str, object]:
 
 def _identity(config: NeuralConfig, table: Mapping[str, object],
               recipe: ScenarioRecipe, shard: ScenarioShard) -> dict[str, object]:
-    # The source digest preserves logical path semantics (especially output_root).
-    # The projection also catches stale dataclasses.replace settings at API boundaries.
-    runtime = {name: getattr(config, name) for name in (
-        'mode', 'operation', 'split', 'partition', 'environment_revision',
-        'common_view_id', 'common_view_fingerprint', 'run_observation_fingerprint',
-        'profile_id', 'observation_version', 'replay_version', 'rollout_rows',
-        'rollout_steps', 'device', 'final_requires_opt_in', 'calibration_gpu_uuid',
-        'runtime_gpu_uuid')}
-    runtime.update({name: asdict(getattr(config, name)) for name in (
-        'seed_streams', 'model', 'ppo', 'budgets')})
-    runtime['accepted_identities'] = [{
-        'model_id': identity.model_id, 'features_id': identity.features_id,
-        'action_id': identity.action_id, 'objective_id': identity.objective_id,
-        'accepted_raw_mode_mappings': dict(identity.accepted_raw_mode_mappings),
-        'config_hashes': dict(identity.config_hashes),
-    } for identity in config.accepted_identities]
+    from .config import _stream_runtime_projection
+    # Admission already compared these normalized settings with the loader binding.
+    runtime = _stream_runtime_projection(config)
     if (config.mode, config.operation, config.split, config.partition) != (
             'standalone', 'train', 'train', 'train'):
         raise ValueError('scenario_stream requires standalone train')

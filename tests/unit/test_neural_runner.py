@@ -916,7 +916,13 @@ class NeuralRunnerTests(unittest.TestCase):
                 collector = FakeCollector(config, collect_error=original)
                 collector.partial_rollout = _rollout(config, (_record(config, slot=0, decision=0, version=0, terminal=False),))
                 runtime = FakeRuntime(config, collector)
-                report, writer = self._run_train(config, runtime)
+                # Isolate post-admission collection behavior with this marker.
+                # Real loader/admission checks live in test_neural_stream_resume.
+                with patch("spire_learn.neural.stream_resume.stream_identity") as admission:
+                    report, writer = self._run_train(config, runtime)
+                self.assertEqual(admission.call_count, int(stream is not None))
+                if stream is not None:
+                    admission.assert_called_once_with(config)
                 self.assertEqual(report.exit_code, 1)
                 self.assertEqual(len(runtime.update_calls), int(stream is None))
                 self.assertEqual(runtime.saved, [])
@@ -929,7 +935,11 @@ class NeuralRunnerTests(unittest.TestCase):
         collector.partial_rollout = _rollout(config, (_record(
             config, slot=0, decision=0, version=0, terminal=False),))
         runtime = FakeRuntime(config, collector)
-        report, _ = self._run_train(config, runtime, FakeWriter(event_error=OSError("event failed")))
+        # This marker isolates post-admission behavior; actual invalid stream
+        # rejection is covered through all entries in test_neural_stream_resume.
+        with patch("spire_learn.neural.stream_resume.stream_identity") as admission:
+            report, _ = self._run_train(config, runtime, FakeWriter(event_error=OSError("event failed")))
+        admission.assert_called_once_with(config)
         self.assertEqual(runtime.update_calls, [])
         self.assertIn("first collection fault", str(report.summary))
         self.assertTrue(any("partial collection event also failed" in note

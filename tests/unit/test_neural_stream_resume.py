@@ -87,6 +87,72 @@ class StreamResumeTests(StreamFixture):
         with self.assertRaises(ValueError):
             self.config(source=source.replace(str(self.recipe_path), str(recipe)))
 
+    def test_replaced_runtime_settings_reject_at_all_stream_entry_boundaries(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        from spire_learn.neural import runner
+        from spire_learn.neural.stream_resume import stream_identity
+        from spire_learn.neural.stream_runner import run_stream_segment
+        config = self.config()
+        replacements = {
+            'model': replace(config.model, hidden_width=32),
+            'ppo': replace(config.ppo, learning_rate=0.01),
+            'budgets': replace(config.budgets, max_optimizer_steps=17),
+            'seed_streams': replace(config.seed_streams, policy=9999),
+            'rollout_rows': 2, 'rollout_steps': config.rollout_steps + 1,
+            'device': 'cuda:0', 'environment_revision': 'changed',
+            'common_view_id': 'changed', 'common_view_fingerprint': '0' * 64,
+            'run_observation_fingerprint': '0' * 64, 'profile_id': 'changed',
+            'observation_version': 99, 'replay_version': 99,
+            'final_requires_opt_in': True, 'calibration_gpu_uuid': 'changed',
+            'runtime_gpu_uuid': 'changed',
+            'accepted_identities': (replace(config.accepted_identities[0],
+                config_hashes={'model': '0' * 64, 'ppo': '0' * 64}),),
+        }
+        original_import = __import__
+        def guard(name, *args, **kwargs):
+            if name.split('.')[0] in {'torch', 'numpy', 'gymnasium', 'spire_lab', 'torchrl', 'tensordict'}:
+                raise AssertionError('optional import reached with stale config')
+            return original_import(name, *args, **kwargs)
+        variants = [(field, replace(config, **{field: value}))
+                    for field, value in replacements.items()]
+        variants.extend((f'budgets.{field}', replace(config, budgets=replace(
+            config.budgets, **{field: getattr(config.budgets, field) + 1})))
+            for field in ('max_training_decisions', 'max_environment_actions', 'max_wall_seconds'))
+        variants.extend((f'seeds.{field}', replace(config, seed_streams=replace(
+            config.seed_streams, **{field: getattr(config.seed_streams, field) + 10000})))
+            for field in ('optimizer', 'curriculum', 'noncombat'))
+        for field, changed in variants:
+            self.assertEqual(changed.config_sha256, config.config_sha256)
+            self.assertEqual(changed.manifest_sha256, config.manifest_sha256)
+            with patch('builtins.__import__', side_effect=guard):
+                with self.subTest(field=field, boundary='identity'), self.assertRaisesRegex(ValueError, 'runtime projection'):
+                    stream_identity(changed)
+                with self.subTest(field=field, boundary='create_runtime'), patch.object(
+                        runner, 'plan_runtime_device', side_effect=ValueError('device planning reached')) as device:
+                    with self.assertRaisesRegex(ValueError, 'runtime projection'):
+                        runner.create_runtime(changed, purpose='train')
+                    device.assert_not_called()
+                factory, train, clock = Mock(side_effect=ValueError('factory reached')), Mock(), Mock()
+                with self.subTest(field=field, boundary='run_stream_segment'), self.assertRaisesRegex(ValueError, 'runtime projection'):
+                    run_stream_segment(changed, purpose='train', checkpoint=None,
+                        operation_limits=runner.RuntimeOperationLimits(),
+                        dependencies={'create_runtime': factory, 'train': train, 'clock': clock})
+                factory.assert_not_called()
+                train.assert_not_called()
+                clock.assert_not_called()
+                runtime = SimpleNamespace(close=Mock())
+                with self.subTest(field=field, boundary='train'), patch.object(
+                        runner, '_writer_start') as writer, \
+                     patch.object(runner, '_set_budget', side_effect=AssertionError('budget setup reached')) as setup:
+                    report = runner.train(changed, runtime=runtime, clock=clock)
+                    self.assertEqual(report.exit_code, 2)
+                    self.assertIn('runtime projection', report.summary['stop_reason'])
+                    runtime.close.assert_called_once_with()
+                    setup.assert_not_called()
+                    writer.assert_not_called()
+                    clock.assert_not_called()
+
     def test_resume_only_same_or_next_derived_shard_and_stable_settings(self):
         from spire_learn.neural.stream_resume import stream_checkpoint_state, validate_stream_resume
         from spire_learn.neural.curriculum import CurriculumSampler
@@ -425,6 +491,51 @@ class StreamRuntimeTests(StreamFixture):
         self.assertEqual(driver.close_calls, 1)
         with self.assertRaises(RuntimeError):
             _ = runtime.collector.sampler_state
+
+    def test_partial_event_control_propagates_after_fault_and_cleanup(self):
+        from unittest.mock import patch
+        from spire_learn.neural import runner
+        from spire_learn.neural.curriculum import CurriculumSampler
+        from tests.unit.test_neural_runner import FakeWriter
+        config = self.config()
+        scenarios = [(first, later, cleanup)
+            for first, later in ((ValueError, KeyboardInterrupt), (ValueError, SystemExit),
+                                 (KeyboardInterrupt, SystemExit), (SystemExit, KeyboardInterrupt))
+            for cleanup in (RuntimeError, SystemExit)]
+        for first_kind, later_kind, cleanup_kind in scenarios:
+            with self.subTest(first=first_kind.__name__, later=later_kind.__name__,
+                              cleanup=cleanup_kind.__name__):
+                runtime, driver = self.assembly(config, purpose='train')
+                first, later = first_kind('collection fault'), later_kind('event interruption')
+                writer = FakeWriter(close_error=cleanup_kind('writer cleanup failure'))
+                close_runtime = runtime.close
+                def fail_after_close():
+                    close_runtime()
+                    raise cleanup_kind('runtime cleanup failure')
+                write = runner._write_collection_events
+                def interrupt_after_prefix(*args, **kwargs):
+                    write(*args, **kwargs)
+                    raise later
+                with patch.object(runner, '_writer_start', return_value=(writer, Path('/pure/fault'))), \
+                     patch.object(CurriculumSampler, 'observe', side_effect=first), \
+                     patch.object(runner, '_write_collection_events', side_effect=interrupt_after_prefix), \
+                     patch.object(runtime, 'update') as update, \
+                     patch.object(runtime, 'save') as save, \
+                     patch.object(runtime, 'close', side_effect=fail_after_close) as close:
+                    expected = later if isinstance(first, Exception) else first
+                    with self.assertRaises(type(expected)) as caught:
+                        runner.train(config, runtime=runtime, clock=lambda: 0.0)
+                self.assertIs(caught.exception, expected)
+                self.assertIn('collection fault' if expected is later else 'event interruption',
+                              str(caught.exception.__notes__))
+                self.assertIn('runtime cleanup failure', str(caught.exception.__notes__))
+                self.assertIn('writer cleanup failure', str(caught.exception.__notes__))
+                self.assertEqual(sum(e['event'] == 'accepted_action' for e in writer.events), 4)
+                update.assert_not_called()
+                save.assert_not_called()
+                close.assert_called_once_with()
+                self.assertEqual(driver.close_calls, 1)
+                self.assertEqual(writer.close_calls, 1)
 
     def test_wrong_parent_rejected_before_optional_import_or_driver(self):
         from types import SimpleNamespace

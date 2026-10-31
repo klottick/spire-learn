@@ -1096,6 +1096,15 @@ def train(
             reason += f"; runtime close failed: {_error_value(close_error)['message']}"
         return NeuralReport({"status": "operational_failure" if close_error else "setup_blocked",
                              "reason": reason}, 1 if close_error else 2, None)
+    if config.scenario_stream is not None:
+        from .stream_resume import stream_identity
+        try:
+            stream_identity(config)
+        except Exception as error:
+            return _preflight_close(runtime, _preflight_report(
+                config, reason=f"stream admission failed: {_error_value(error)['message']}",
+                policy_kind="checkpoint", action_selection="seeded-sampling", allow_final=False,
+            ))
     if config.operation != "train" or config.split != "train" or config.partition != "train":
         return _preflight_close(runtime, _preflight_report(
             config, reason="training requires config.operation=train and split=partition=train",
@@ -1190,12 +1199,15 @@ def train(
                         try:
                             _write_collection_events(writer, partial, cursors=cursors)
                         except BaseException as artifact_error:
-                            _note(error, f"partial collection event also failed: {type(artifact_error).__name__}: {_error_value(artifact_error)['message']}")
+                            if _is_process_control(artifact_error):
+                                error = _promote_finalization_control(error, artifact_error, "partial collection event")
+                            else:
+                                _note(error, f"partial collection event also failed: {type(artifact_error).__name__}: {_error_value(artifact_error)['message']}")
                     else:
                         _write_collection_events(writer, partial, cursors=cursors)
                         _update_once(config, runtime, writer, partial)
                 if _is_process_control(error):
-                    raise
+                    raise error
                 fatal = error
                 status = "operational_failure"
                 stop_reason = "collection_fault"

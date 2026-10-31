@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import math
@@ -14,6 +14,7 @@ import tomllib
 from spire_learn.contracts import ContractError
 from spire_learn.neural.cases import (
     NeuralCases,
+    _freeze_json,
     load_neural_cases,
     validate_neural_case_lineage,
 )
@@ -138,6 +139,25 @@ class NeuralConfig:
     calibration_gpu_uuid: str | None = None
     runtime_gpu_uuid: str | None = None
     scenario_stream: Mapping[str, object] | None = None
+
+
+def _stream_runtime_projection(config: NeuralConfig) -> dict[str, object]:
+    """Project accepted normalized settings for loader binding and stream admission."""
+    runtime = {name: getattr(config, name) for name in (
+        'mode', 'operation', 'split', 'partition', 'environment_revision',
+        'common_view_id', 'common_view_fingerprint', 'run_observation_fingerprint',
+        'profile_id', 'observation_version', 'replay_version', 'rollout_rows',
+        'rollout_steps', 'device', 'final_requires_opt_in', 'calibration_gpu_uuid',
+        'runtime_gpu_uuid')}
+    runtime.update({name: asdict(getattr(config, name)) for name in (
+        'seed_streams', 'model', 'ppo', 'budgets')})
+    runtime['accepted_identities'] = [{
+        'model_id': identity.model_id, 'features_id': identity.features_id,
+        'action_id': identity.action_id, 'objective_id': identity.objective_id,
+        'accepted_raw_mode_mappings': dict(identity.accepted_raw_mode_mappings),
+        'config_hashes': dict(identity.config_hashes),
+    } for identity in config.accepted_identities]
+    return runtime
 
 
 def _identity(raw: object, *, model_hash: str, ppo_hash: str) -> NeuralIdentity:
@@ -376,7 +396,7 @@ def load_neural_config(path: Path) -> NeuralConfig:
         from .stream_resume import normalize_stream_config
         scenario_stream = normalize_stream_config(raw, source, manifest_path, cases.sha256)
 
-    return NeuralConfig(
+    config = NeuralConfig(
         mode=mode,
         operation=operation,
         split=split,
@@ -406,6 +426,13 @@ def load_neural_config(path: Path) -> NeuralConfig:
         runtime_gpu_uuid=runtime_gpu_uuid,
         scenario_stream=scenario_stream,
     )
+    if scenario_stream is not None:
+        # Bind only after this parser has accepted and normalized every setting.
+        # dataclasses.replace retains this immutable provenance at later API calls.
+        config = replace(config, scenario_stream=_freeze_json({
+            **scenario_stream, 'runtime_projection': _stream_runtime_projection(config),
+        }))
+    return config
 
 
 __all__ = [

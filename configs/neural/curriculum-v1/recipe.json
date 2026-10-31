@@ -1,0 +1,114 @@
+{
+  "schema": "spire-learn-scenario-recipe-v1",
+  "generator_version": "ironclad-curriculum-v1",
+  "support_file": "support.json",
+  "support_sha256": "5b2d0c144c9cd375ded221a38b1685986d0edd3639f88cedbe8706a807edb469",
+  "generator_seed": 20261031,
+  "shard_size": 256,
+  "maximum_catalog_bytes": 1048576,
+  "reserved_pairs": [
+    [
+      "demon_form",
+      "barricade"
+    ],
+    [
+      "corruption",
+      "juggernaut"
+    ]
+  ],
+  "lesson_pairs": [
+    [
+      "inflame",
+      "heavy_blade"
+    ],
+    [
+      "barricade",
+      "body_slam"
+    ],
+    [
+      "corruption",
+      "feel_no_pain"
+    ],
+    [
+      "evolve",
+      "power_through"
+    ],
+    [
+      "rupture",
+      "combust"
+    ],
+    [
+      "warcry",
+      "havoc"
+    ],
+    [
+      "armaments",
+      "searing_blow"
+    ],
+    [
+      "spot_weakness",
+      "limit_break"
+    ]
+  ],
+  "mechanic_groups": {
+    "strength": [
+      "inflame",
+      "heavy_blade",
+      "limit_break"
+    ],
+    "exhaust": [
+      "corruption",
+      "dark_embrace",
+      "feel_no_pain"
+    ],
+    "block": [
+      "barricade",
+      "entrench",
+      "body_slam"
+    ],
+    "self_damage": [
+      "rupture",
+      "hemokinesis",
+      "offering"
+    ],
+    "draw": [
+      "battle_trance",
+      "pommel_strike",
+      "burning_pact"
+    ],
+    "status": [
+      "evolve",
+      "fire_breathing",
+      "power_through"
+    ]
+  },
+  "stage_profiles": {
+    "early": {
+      "minimum_size": 8,
+      "maximum_size": 15,
+      "starter_removals": 2,
+      "upgrade_percent": 15,
+      "preferred_act": 1
+    },
+    "middle": {
+      "minimum_size": 14,
+      "maximum_size": 24,
+      "starter_removals": 4,
+      "upgrade_percent": 35,
+      "preferred_act": 2
+    },
+    "developed": {
+      "minimum_size": 22,
+      "maximum_size": 35,
+      "starter_removals": 7,
+      "upgrade_percent": 60,
+      "preferred_act": 3
+    }
+  },
+  "rarity_weights": {
+    "starter": 1,
+    "common": 6,
+    "uncommon": 3,
+    "rare": 1
+  }
+}

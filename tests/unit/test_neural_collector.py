@@ -184,6 +184,40 @@ class StatelessReferencePolicy:
         raise AssertionError("reference policies must not request value estimates")
 
 
+class StrictCaseSampler:
+    """Only accepts the original catalog and natural outcomes, with injected faults."""
+    def __init__(self, cases, *, choose_error=None, observe_error=None):
+        self.cases = tuple(cases)
+        self.chosen = []
+        self.observed = []
+        self.rngs = []
+        self.choose_error = choose_error
+        self.observe_error = observe_error
+
+    def validate_cases(self, cases):
+        if tuple(cases) != self.cases:
+            raise ValueError("sampler catalog mismatch")
+
+    def choose_case(self, cases, *, rng):
+        self.validate_cases(cases)
+        if self.choose_error is not None:
+            raise self.choose_error
+        case = self.cases[len(self.chosen) % len(self.cases)]
+        self.chosen.append(case)
+        self.rngs.append(rng)
+        return case
+
+    def observe(self, case_id, outcome):
+        if case_id not in {case.case_id for case in self.cases} or outcome not in {"victory", "death"}:
+            raise AssertionError("incorrect natural-settlement callback")
+        if self.observe_error is not None:
+            raise self.observe_error
+        self.observed.append((case_id, outcome))
+
+    def snapshot(self):
+        return {}
+
+
 class NeuralCollectorTests(unittest.TestCase):
     def setUp(self):
         self.standalone_config = replace(
@@ -202,7 +236,7 @@ class NeuralCollectorTests(unittest.TestCase):
             rollout_steps=1,
         )
 
-    def collector(self, driver, config, policy=None):
+    def collector(self, driver, config, policy=None, **kwargs):
         from spire_learn.neural.collector import Collector
 
         selected_policy = policy or FakePolicy(config)
@@ -214,6 +248,7 @@ class NeuralCollectorTests(unittest.TestCase):
             curriculum_rng=random.Random(1201),
             budget=Budget(60.0, lambda: 0.0),
             policy_generator=self.generator,
+            **kwargs,
         )
 
     def test_mixed_row_finals_reset_only_finished_rows_and_preserve_successors(self):
@@ -969,6 +1004,210 @@ class NeuralCollectorTests(unittest.TestCase):
         self.assertTrue(all(record.actor_training_mask for record in rollout.records))
         self.assertEqual(len(policy.value_inputs), 1)
         collector.close()
+
+
+    def test_sampler_tracks_retained_slot_case_and_only_new_natural_settlements(self):
+        cases = self.standalone_config.cases.for_mode("standalone")
+        sampler = StrictCaseSampler(cases)
+        start = (row(1, active=True, entered=1, visit=0), row(2, active=True, entered=1, visit=0))
+        win = row(3, active=False, entered=1, settled=1, exit_value=exit_data())
+        ongoing = row(4, active=True, entered=1, visit=0)
+        fresh = row(5, active=True, entered=1, visit=0)
+        death = row(6, active=False, entered=1, settled=1, exit_value=exit_data(outcome="death"))
+        driver = ScriptedDriver("standalone", 2,
+            reset_rows=lambda slot, call, seed, entry: start[slot] if call == 0 else fresh,
+            steps=(lambda rows, actions: (transition(rows[0], win, terminated=True), transition(rows[1], ongoing)),
+                   lambda rows, actions: (transition(rows[0], fresh), transition(rows[1], death, terminated=True))))
+        policy = FakePolicy(self.standalone_config)
+        collector = self.collector(driver, self.standalone_config, policy, case_sampler=sampler)
+        first = collector.collect(max_learned_decisions=8, max_env_actions=4, policy_version=0)
+        second = collector.collect(max_learned_decisions=8, max_env_actions=4, policy_version=0)
+        third = collector.collect(max_learned_decisions=8, max_env_actions=4, policy_version=0)
+        self.assertEqual(sampler.observed, [(cases[0].case_id, "victory"), (cases[1].case_id, "death")])
+        self.assertEqual(len(sampler.chosen), 3)
+        self.assertTrue(all(rng is collector.curriculum_rng for rng in sampler.rngs))
+        self.assertEqual(tuple(item.source for item in first.records), tuple(item.frame for item in start))
+        self.assertEqual(tuple(item.source for item in second.records), (fresh.frame, ongoing.frame))
+        self.assertEqual(third.records, ())
+        self.assertEqual(policy.act_inputs, [tuple(item.frame for item in start), (fresh.frame, ongoing.frame)])
+        self.assertTrue(all(set(item.tensors) == {"player"} for frames in policy.act_inputs for item in frames))
+        self.assertTrue(all(generator is self.generator for generator in policy.generator_args))
+        self.assertEqual(second.collection.known_accepted_reset_slots, 3)
+        self.assertEqual(second.collection.tasks_completed, 2)
+        collector.close()
+
+    def test_sampler_never_observes_censoring_truncation_invalid_batch_or_driver_fault(self):
+        cases = self.standalone_config.cases.for_mode("standalone")
+        active = row(1, active=True, entered=1, visit=0)
+        ended = row(2, active=False, entered=1, settled=1, exit_value=exit_data())
+        def fault(rows, actions):
+            raise RuntimeError("native delivery unknown")
+        scripts = (
+            (lambda rows, actions: tuple(transition(source, active) for source in rows), None, 2),
+            (lambda rows, actions: tuple(transition(source,
+                row(3, active=False, entered=1), terminated=True) for source in rows), None, 0),
+            (lambda rows, actions: tuple(transition(source, active, truncated=True) for source in rows), ValueError, None),
+            (lambda rows, actions: (transition(rows[0], ended, terminated=True), transition(ended, active)), Exception, None),
+            (fault, RuntimeError, None),
+        )
+        for script, error, incomplete in scripts:
+            with self.subTest(error=error):
+                sampler = StrictCaseSampler(cases)
+                driver = ScriptedDriver("standalone", 2, steps=(script,))
+                collector = self.collector(driver, self.standalone_config, case_sampler=sampler)
+                if error is None:
+                    result = collector.collect(max_learned_decisions=2, max_env_actions=2, policy_version=0)
+                    self.assertEqual(result.collection.tasks_completed, 0)
+                    self.assertEqual(result.collection.incomplete_decisions, incomplete)
+                else:
+                    with self.assertRaises(error):
+                        collector.collect(max_learned_decisions=2, max_env_actions=2, policy_version=0)
+                self.assertEqual(sampler.observed, [])
+                collector.close()
+        # A sticky exit returned directly by reset is not a newly delivered settlement.
+        sampler = StrictCaseSampler(cases)
+        driver = ScriptedDriver("standalone", 2, reset_rows=lambda *args: ended)
+        collector = self.collector(driver, self.standalone_config, case_sampler=sampler)
+        for _ in range(2):
+            collector.collect(max_learned_decisions=4, max_env_actions=4, policy_version=0)
+        self.assertEqual(sampler.observed, [])
+        self.assertEqual(len(driver.reset_calls), 1)
+        self.assertEqual(driver.step_calls, [])
+        collector.close()
+
+    def test_sampler_observer_error_preserves_delivered_batch_and_control_exception(self):
+        cases = self.standalone_config.cases.for_mode("standalone")
+        ended = row(3, active=False, entered=1, settled=1, exit_value=exit_data())
+        for error in (RuntimeError("observer failure"), KeyboardInterrupt("observer control failure")):
+            with self.subTest(error=error):
+                sampler = StrictCaseSampler(cases, observe_error=error)
+                driver = ScriptedDriver("standalone", 2, steps=(lambda rows, actions:
+                    (transition(rows[0], ended, terminated=True), transition(rows[1], rows[1])),))
+                def close_failure():
+                    driver.close_calls += 1
+                    raise ValueError("secondary close failure")
+                driver.close = close_failure
+                collector = self.collector(driver, self.standalone_config, case_sampler=sampler)
+                with self.assertRaises(type(error)) as raised:
+                    collector.collect(max_learned_decisions=8, max_env_actions=8, policy_version=0)
+                self.assertIs(raised.exception, error)
+                partial = collector.partial_rollout
+                self.assertEqual(len(partial.records), 2)
+                self.assertEqual(partial.counters.rows, 2)
+                self.assertEqual(partial.collection.tasks_completed, 1)
+                self.assertEqual(partial.collection.known_accepted_environment_slots, 2)
+                self.assertEqual(partial.collection.delivered_environment_slots, 2)
+                self.assertEqual(partial.collection.uncertain_environment_slots, 0)
+                self.assertEqual(partial.collection.incomplete_environment_slots, 0)
+                self.assertEqual(partial.collection.fault.uncertain_slots, 0)
+                self.assertEqual(partial.collection.fault.operation_slots, 0)
+                self.assertEqual(partial.collection.fault.phase, "case-sampler-observe")
+                self.assertEqual(partial.collection.incomplete_decisions, 1)
+                with self.assertRaisesRegex(RuntimeError, "cannot be retried"):
+                    collector.collect(max_learned_decisions=8, max_env_actions=8, policy_version=0)
+                self.assertEqual(len(driver.step_calls), 1)
+                self.assertEqual(len(driver.reset_calls), 1)
+                self.assertEqual(driver.close_calls, 1)
+                collector.close()
+
+    def test_sampler_choice_error_or_invalid_case_stops_before_reset(self):
+        cases = self.standalone_config.cases.for_mode("standalone")
+        for sampler in (StrictCaseSampler(cases, choose_error=RuntimeError("choice failure")),
+                        StrictCaseSampler(cases)):
+            if sampler.choose_error is None:
+                sampler.choose_case = lambda cases, *, rng: replace(cases[0], case_id="foreign")
+            driver = ScriptedDriver("standalone", 2)
+            collector = self.collector(driver, self.standalone_config, case_sampler=sampler)
+            with self.assertRaises(Exception):
+                collector.collect(max_learned_decisions=4, max_env_actions=4, policy_version=0)
+            self.assertEqual(driver.reset_calls, [])
+            self.assertEqual(driver.step_calls, [])
+            self.assertEqual(collector.partial_rollout.collection.known_accepted_reset_slots, 0)
+            self.assertEqual(collector.partial_rollout.collection.uncertain_reset_slots, 0)
+            with self.assertRaisesRegex(RuntimeError, "cannot be retried"):
+                collector.collect(max_learned_decisions=4, max_env_actions=4, policy_version=0)
+
+    def test_allocated_choices_do_not_claim_accepted_resets_on_driver_failure(self):
+        sampler = StrictCaseSampler(self.standalone_config.cases.for_mode("standalone"))
+        driver = ScriptedDriver("standalone", 2)
+        def reset_failure(*, seeds, entry_ids, reset_mask):
+            driver.reset_calls.append((seeds, entry_ids, reset_mask))
+            raise RuntimeError("reset delivery unknown")
+        driver.reset = reset_failure
+        collector = self.collector(driver, self.standalone_config, case_sampler=sampler)
+        with self.assertRaisesRegex(RuntimeError, "reset delivery unknown"):
+            collector.collect(max_learned_decisions=4, max_env_actions=4, policy_version=0)
+        partial = collector.partial_rollout
+        self.assertEqual(len(sampler.chosen), 2)
+        self.assertEqual(partial.collection.known_accepted_reset_slots, 0)
+        self.assertEqual(partial.collection.delivered_reset_slots, 0)
+        self.assertEqual(partial.collection.uncertain_reset_slots, 2)
+        self.assertEqual(partial.records, ())
+        self.assertEqual(sampler.observed, [])
+        self.assertEqual(driver.step_calls, [])
+        self.assertEqual(driver.close_calls, 1)
+
+    def test_sampler_constructor_rejects_wrong_mode_operation_or_catalog_before_effects(self):
+        cases = self.standalone_config.cases.for_mode("standalone")
+        for config in (self.selection_config, self.run_config):
+            driver = ScriptedDriver(config.mode, config.rollout_rows)
+            with self.assertRaises(Exception):
+                self.collector(driver, config, case_sampler=StrictCaseSampler(cases))
+            self.assertEqual(driver.reset_calls, [])
+            self.assertEqual(driver.step_calls, [])
+        driver = ScriptedDriver("standalone", 2)
+        with self.assertRaisesRegex(ValueError, "catalog mismatch"):
+            self.collector(driver, self.standalone_config, case_sampler=StrictCaseSampler(cases[:-1]))
+        self.assertEqual(driver.reset_calls, [])
+        driver = ScriptedDriver("standalone", 2, initial_rows=(row(1, active=True, entered=1, visit=0), None))
+        with self.assertRaises(Exception):
+            self.collector(driver, self.standalone_config, case_sampler=StrictCaseSampler(cases))
+        self.assertEqual(driver.reset_calls, [])
+
+    def test_real_sampler_validates_and_receives_collector_natural_outcomes(self):
+        from spire_learn.neural.curriculum import CurriculumSampler
+        from spire_learn.neural.scenario_support import content_sha256
+        cases = self.standalone_config.cases.for_mode("standalone")
+        annotations = {case.case_id: {
+            "family": "lesson", "deck_stage": "early", "lesson_kind": "group", "category": "group:all",
+            "target_card_ids": (case.entry["deck"][0]["card"],), "encounter_tier": "act1:monster",
+            "lineage_id": case.lineage_id, "composition_sha256": content_sha256(sorted(
+                case.entry["deck"], key=lambda card: (card["card"], card["upgrades"]))),
+            "composition_scope": "novel_composition"} for case in cases}
+        sampler = CurriculumSampler(annotations, distribution_sha256="a" * 64, categories=("group:all",))
+        ended = row(3, active=False, entered=1, settled=1, exit_value=exit_data())
+        driver = ScriptedDriver("standalone", 2, steps=(lambda rows, actions:
+            tuple(transition(source, ended, terminated=True) for source in rows),))
+        collector = self.collector(driver, self.standalone_config, case_sampler=sampler)
+        result = collector.collect(max_learned_decisions=2, max_env_actions=2, policy_version=0)
+        self.assertEqual(sampler.snapshot()["completed"], 2)
+        self.assertEqual(sampler.snapshot()["category_stats"]["group:all"]["recent"], ["victory", "victory"])
+        self.assertEqual(result.collection.tasks_completed, 2)
+        collector.close()
+
+    def test_explicit_none_sampler_preserves_default_rng_frames_actions_and_counters(self):
+        collectors, policies, drivers = [], [], []
+        for kwargs in ({}, {"case_sampler": None}):
+            driver = ScriptedDriver("standalone", 2, steps=(lambda rows, actions:
+                tuple(transition(source, source) for source in rows),))
+            policy = FakePolicy(self.standalone_config)
+            collector = self.collector(driver, self.standalone_config, policy, **kwargs)
+            collectors.append(collector)
+            drivers.append(driver)
+            policies.append(policy)
+        outputs = [collector.collect(max_learned_decisions=2, max_env_actions=2, policy_version=0)
+                   for collector in collectors]
+        self.assertEqual(outputs[0], outputs[1])
+        self.assertEqual(drivers[0].events, drivers[1].events)
+        self.assertEqual(policies[0].act_inputs, policies[1].act_inputs)
+        self.assertEqual(policies[0].value_inputs, policies[1].value_inputs)
+        expected_rng = random.Random(1201)
+        cases = self.standalone_config.cases.for_mode("standalone")
+        expected_ids = [cases[expected_rng.randrange(len(cases))].case_id for _ in range(2)]
+        self.assertEqual([item.case_id for item in outputs[0].collection.seed_allocations], expected_ids)
+        for collector in collectors:
+            self.assertEqual(collector.curriculum_rng.getstate(), expected_rng.getstate())
+            collector.close()
 
 
 if __name__ == "__main__":

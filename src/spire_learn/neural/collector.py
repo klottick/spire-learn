@@ -87,6 +87,7 @@ class Collector:
         policy_generator: Any | None = None,
         recovery: CollectorRecovery | None = None,
         learned_combat_policy: bool = True,
+        case_sampler: Any | None = None,
     ) -> None:
         if not isinstance(config, NeuralConfig):
             raise TypeError("Collector requires a NeuralConfig")
@@ -125,6 +126,16 @@ class Collector:
         cases = config.cases.for_mode(mode)
         if not cases:
             raise ContractError(f"neural case manifest has no {mode} cases")
+        if case_sampler is not None:
+            if (mode != "standalone" or config.operation != "train" or config.split != "train"
+                    or not learned_combat_policy):
+                raise ContractError("case_sampler requires standalone learned-policy training")
+            if rows != (None,) * batch_size:
+                raise ContractError("case_sampler requires fresh, unattributed driver rows")
+            for name in ("validate_cases", "choose_case", "observe", "snapshot"):
+                if not callable(getattr(case_sampler, name, None)):
+                    raise TypeError(f"case_sampler must expose {name}()")
+            case_sampler.validate_cases(tuple(cases))
         identity_fields = ("model_id", "features_id", "action_id", "objective_id")
         if learned_combat_policy:
             policy_identity = tuple(getattr(policy, name, None) for name in identity_fields)
@@ -151,6 +162,7 @@ class Collector:
         self.budget = budget
         self.identity: NeuralIdentity = identities[0]
         self._cases: tuple[NeuralCase, ...] = tuple(cases)
+        self._case_sampler = case_sampler
         self._policy_generator = policy_generator
         self._learned_combat_policy = learned_combat_policy
         self._mode = mode
@@ -382,6 +394,14 @@ class Collector:
         return True
 
     def _choose_case(self, allocation_index: int) -> NeuralCase:
+        if self._case_sampler is not None:
+            previous_phase = self._phase
+            self._phase = "case-sampler-choice"
+            case = self._case_sampler.choose_case(self._cases, rng=self.curriculum_rng)
+            if not isinstance(case, NeuralCase) or case not in self._cases:
+                raise ContractError("case_sampler chose a case outside the admitted catalog")
+            self._phase = previous_phase
+            return case
         if self.config.split == "train":
             return self._cases[self.curriculum_rng.randrange(len(self._cases))]
         return self._cases[allocation_index % len(self._cases)]
@@ -744,6 +764,22 @@ class Collector:
         self._current_operation_slots = 0
         return tuple(records)
 
+    def _observe_settlements(self, records: tuple[StepRecord, ...]) -> None:
+        if self._case_sampler is None:
+            return
+        self._phase = "case-sampler-observe"
+        for slot, record in enumerate(records):
+            # task_signal has validated each new natural settlement. Termination
+            # alone, sticky exits, faults and segment boundaries do not qualify.
+            if record.task_signal.reward not in (-1.0, 1.0) or record.truncated:
+                continue
+            case = self._slot_cases[slot]
+            if case is None:
+                raise ContractError("natural settlement has no retained sampled case")
+            outcome = "victory" if record.task_signal.reward == 1.0 else "death"
+            self._case_sampler.observe(case.case_id, outcome)
+        self._phase = "ready"
+
     def _fault_from_exception(self, error: BaseException) -> CollectionFault:
         evidence = getattr(error, "evidence", None)
         operation_slots = 0
@@ -923,6 +959,10 @@ class Collector:
                 if batch_records is None:
                     break
                 call_records.extend(batch_records)
+                # Retain the full validated delivered batch before notifying a
+                # fallible observer. Its failure is a controller fault, with no
+                # uncertain native effect and no opportunity to retry dispatch.
+                self._observe_settlements(batch_records)
                 if self._wall_remaining() <= 0:
                     self._stop_reason = "wall_budget"
                     break

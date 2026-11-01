@@ -873,7 +873,7 @@ def reconcile_job(root, verified, context, output, *, lifecycle, budget, clock=t
             or any(receipt.get(k) != context[k] for k in keys)
             or clock() >= context['whole_deadline'] or _number(receipt['elapsed_seconds'], 'elapsed') > 600):
         raise ValueError('job receipt authority/status/deadline differs')
-    transport.validate_process_evidence(receipt, reference=False)
+    profiles.validate_process_evidence(root, receipt, runtime_pins=verified['release']['runtime_pins'])
     _journal(context, receipt, output)
     checkpoint = None
     package, kind = verified['package'], context['kind']

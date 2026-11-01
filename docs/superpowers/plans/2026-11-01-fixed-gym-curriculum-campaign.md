@@ -79,3 +79,25 @@ Ruling: use the healthy fixed003 weights equally for all arms rather than rerun
 the old anchor's fixed-control learning. This follows the user's warm-start-best
 preference; it changes the baseline and must be explicit in reporting. It is
 not exact continuation of the failed randomized segment or a multi-seed result.
+
+## Operational correction: fresh campaign c
+
+Campaign b completed its two GPU qualification probes but failed host receipt
+reconciliation: the legacy module-origin gate rejected the correct Gym overlay.
+Its observed launcher exit1, failed seal, full charged lease, complete guest
+receipt and cleanup remain immutable. No sustained training began.
+
+The active user instruction to start training covers the narrow consumer
+validator repair and a fresh `curriculum-20261101-c` / campaign-v3 identity after
+same-reviewer approval. Only the already-authenticated Gym module entry gets a
+profile-specific location check; all dependency checks remain unchanged, and
+actual receipts are never rewritten. Campaign c has its own release, claim,
+runtime and outputs, while inheriting b's immutable template/parent/overlay DATA.
+
+The resource account retains b's full failed lease. Finite inherited c arm and
+panel ceilings plus that debit remain below all global effect limits. The
+33.946-second prior setup plus c's latest possible GPU job ending after its
+33,600-second training cutoff is bounded by34,233.946seconds, below the user's
+ten-hour GPU budget. Campaign c also retains its independent36,000-second
+whole-run cap; neither a native transaction nor the failed b instance retries.
+Proof is retained in campaign-v3/preparation/prior-setup-resource-accounting.json.

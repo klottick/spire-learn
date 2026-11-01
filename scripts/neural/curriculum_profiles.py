@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import importlib
 from pathlib import Path
 import sys
@@ -47,7 +47,12 @@ FIXED = Profile('fixed-gym-a86df922', 'curriculum-20261101-b',
     'a86df922a9dc598645820cc6544df36aefb3d2cc', 'warm-start-fixed-003',
     'configs/neural/native-fixes-20261101/runtime.json',
     'configs/neural/experiments/curriculum-v2/overlay.json')
-NAMES = (HISTORICAL.name, FIXED.name)
+FIXED_C = replace(FIXED, name='fixed-gym-a86df922-c', campaign_id='curriculum-20261101-c',
+    campaign_path='configs/neural/experiments/curriculum-v3/campaign.json',
+    domain=Path('artifacts/development/neural-combat/curriculum-campaign-v3'),
+    qualification_input=Path('artifacts/development/neural-combat/curriculum-campaign-v3/qualification'))
+_PROFILES = (HISTORICAL, FIXED, FIXED_C)
+NAMES = tuple(profile.name for profile in _PROFILES)
 OVERLAY_DESTINATION = '/runtime/gym-overlay'
 NATIVE_SHA256 = '96d54621aa533f27ca720621dfa17664609e51e5b9311fed1636cffa8cd9d787'
 _selected = ContextVar('curriculum_deployment_profile', default=HISTORICAL)
@@ -61,7 +66,7 @@ def current():
 def scope(name):
     if name not in NAMES:
         raise ValueError('unknown curriculum profile')
-    token = _selected.set(HISTORICAL if name == HISTORICAL.name else FIXED)
+    token = _selected.set(next(profile for profile in _PROFILES if profile.name == name))
     try:
         yield current()
     finally:
@@ -77,7 +82,8 @@ def source_paths(root):
     if current().fixed:
         directory = Path('configs/neural/experiments/curriculum-v2')
         paths += [str(path.relative_to(root)) for path in (Path(root)/directory).rglob('*') if path.is_file()]
-        paths += [current().runtime_profile, 'tests/unit/test_neural_curriculum_fixed_profile.py']
+        paths += [current().campaign_path, current().runtime_profile,
+                  'tests/unit/test_neural_curriculum_fixed_profile.py']
     return paths
 
 
@@ -147,3 +153,30 @@ def verify_imported_overlay(directory, pins):
     if info.get('extension') != 'spire-python' or info.get('revision') != current().revision:
         raise ValueError('imported Gym build revision differs')
     return dict(native_file=str(native_path), package_file=str(Path(package.__file__).resolve()), build_info=info)
+
+
+def validate_process_evidence(root, receipt, *, runtime_pins):
+    """Admit only the authenticated Gym exception, then apply old dependency gates.
+
+    The original receipt and process facts remain untouched. The generic gate
+    receives every dependency entry unchanged after the one Gym entry has been
+    checked here against the source-bound release and exact overlay origin.
+    """
+    from scripts.neural import sustained_controls as transport
+    if not current().fixed:
+        return transport.validate_process_evidence(receipt, reference=False)
+    expected = overlay_pins(root)
+    if any(runtime_pins.get(key) != value for key, value in expected.items()):
+        raise ValueError('receipt released package overlay differs')
+    overlay = expected['package_overlay']
+    verify_overlay(Path(root)/overlay['path'], overlay['inventory'])
+    process = receipt.get('process')
+    modules = process.get('modules') if isinstance(process, dict) else None
+    module = modules.get('spire_lab') if isinstance(modules, dict) else None
+    if (not isinstance(module, dict)
+            or module.get('file') != overlay['guest_destination']+'/spire_lab/__init__.py'
+            or module.get('version') != runtime_pins['versions']['spire-lab']
+            or 'spire_lab/__init__.py' not in overlay['inventory']):
+        raise ValueError('receipt executing Gym overlay origin/version differs')
+    dependencies = {name: value for name, value in modules.items() if name != 'spire_lab'}
+    transport.validate_process_evidence({**receipt, 'process': {**process, 'modules': dependencies}}, reference=False)

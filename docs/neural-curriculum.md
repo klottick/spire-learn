@@ -1,12 +1,56 @@
 # Randomized Ironclad combat curriculum
 
-The broad curriculum is authored and covered by pure tests. Its native catalog
-compatibility, tensor save/resume, GPU execution, learning benefit and playing
-strength are **UNVERIFIED**. The optional integration class has not run with its
-runtime enabled. The [held qualification proposal](../scripts/neural/curriculum-qualification-runbook.md)
-requires a fresh, separately reviewed protected release; this document provides
-no execution authority. The earlier sustained campaign halted on a native Run
-fault and remains incomplete.
+The broad curriculum passed its bounded native/CUDA qualification, including
+checkpoint continuation. Its approved ten-hour campaign then stopped on a native
+standalone combat fault before the randomized/mixed learning comparison could
+complete. The results below separate saved fixed-control work from incomplete
+broad training. The [qualification protocol](../scripts/neural/curriculum-qualification-runbook.md)
+is historical preparation material; this document authorizes no retry or new
+workload. The earlier sustained campaign's native Run fault remains a separate
+unresolved result.
+
+## 2026-11-01 campaign outcome
+
+Campaign `curriculum-20261101-a`, executed from source `61c48e4`, stopped after
+21 minutes 38 seconds with observed launcher exit 1. Its qualification completed
+128 native actions, 128 samples, eight Adam steps and 14 resets within the
+approved ceilings. Four fixed-control segments then published four checkpoints:
+16,384 learned actions, 1,024 accepted Adam steps and 32 PPO updates.
+
+The original-B and post-fixed checkpoints each completed the same 64-case CPU
+development panel:
+
+| Cohort | Cases | Original B wins | After fixed training wins |
+| --- | ---: | ---: | ---: |
+| Familiar, new seed | 16 | 9 | 11 |
+| Novel deck | 16 | 8 | 8 |
+| Reserved pair | 16 | 5 | 7 |
+| Resource / later tier | 16 | 0 | 5 |
+| **Total** | **64** | **22 (34.375%)** | **31 (48.4375%)** |
+
+Ten cases changed from loss to win and one from win to loss. This is encouraging
+development evidence from one paired replicate, with unknown historical parent
+exposure; it does not establish seed-stable improvement or final performance.
+
+The first randomized segment delivered 1,488 actions before the next B16 batch
+faulted, leaving 16 submitted action slots uncertain. Its two PPO updates were
+not checkpointed. Mixed training and six later panel opportunities (384 cases)
+never started; these are unavailable results, not losses or zero scores. The
+public standalone vector traceback reports a native `RunFaultError`, but the
+internal cause and any relationship to the earlier Run fault remain unproven.
+
+The retained audit reconciled source, pins, effects, time, storage, checkpoint
+ancestry and all eight owned-container cleanup records. The last healthy saved
+checkpoint belongs to `curriculum-fixed-003`. See the [detailed postmortem](../artifacts/development/neural-combat/curriculum-campaign-v1/audit/runtime-report.md)
+and [independent retained-evidence review](../artifacts/development/neural-combat/curriculum-campaign-v1/audit/runtime-review.md).
+No workload was replayed during the audit.
+
+Broader training's benefit remains unanswered: the simulator fault stopped the
+comparison. Gym-owned diagnosis and sufficient fault-operation evidence are
+needed before another campaign. This result does not show that randomized decks
+are the wrong learning approach. Saved checkpoints are retained; the consumed
+campaign will not retry. Final evaluation is untouched, and RNG-001, TIME-001,
+finite Ironclad A0 content and simulator-only transfer limits remain explicit.
 
 ## Inputs and coverage
 
@@ -148,9 +192,9 @@ and fake Adam state are plumbing evidence only. Pure transcripts and generated
 input/source inventories are retained under
 `artifacts/development/neural-combat/curriculum-v1/task-5/`.
 
-A successful bounded qualification would establish compatibility and exact
-continuation plumbing only. A later replicated fixed/randomized/mixed learning
-pilot requires a separately reviewed budget and evaluation protocol. Broad
+The completed bounded qualification establishes compatibility and exact
+continuation plumbing within its tested scope. The interrupted campaign above
+does not establish a replicated fixed/randomized/mixed learning comparison. Broad
 combat support does not fix the native Run fault or replace the fixed
 noncombat controller with a learned Run policy. Full-Run continuation depends
 on separately scoped Gym fault investigation and approval. RNG-001 and

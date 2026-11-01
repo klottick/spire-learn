@@ -59,13 +59,15 @@ and bounded CPU/native probes remain separate from this training evidence.
 Historical PPO and two-policy proposals remain references, not implementation
 commitments.
 
-The randomized Ironclad combat curriculum is now authored with pure coverage:
-bounded generated catalogs, adaptive lesson allocation, exact stream resume and
-development-panel reporting. Its native/tensor integration and learning benefit
-remain **unverified**. The [curriculum guide](docs/neural-curriculum.md) distinguishes
-generated coverage from actual exposure and links a concrete **unexecuted**
-qualification proposal. No further workload or old campaign continuation is
-authorized.
+The randomized Ironclad combat curriculum has passed its bounded native/CUDA
+qualification. The approved ten-hour campaign then stopped after about 22 minutes
+on a native standalone combat fault in its first randomized segment. Four fixed
+segments saved 16,384 training actions; development-panel wins rose from 22/64 to
+31/64 in one paired replicate. Randomized training published no checkpoint and
+mixed training never started, so their learning benefit remains unverified. The
+[curriculum results](docs/neural-curriculum.md#2026-11-01-campaign-outcome) preserve
+the failure, saved work and limits. The campaign is closed; no retry or further
+workload is authorized.
 
 Python **3.12** matches the gym's current Python package requirement. Spire Learn
 declares no runtime dependencies, and this project has not installed packages

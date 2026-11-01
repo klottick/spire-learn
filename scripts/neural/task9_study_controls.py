@@ -336,8 +336,11 @@ class PhaseSpec:
     mounts: tuple[tuple[str,str,bool],...]
     labels: tuple[tuple[str,str],...]
     runtime_class: str | None = None
+    pids_limit: int = 512
 
     def __post_init__(self):
+        if type(self.pids_limit) is not int or self.pids_limit not in (128, 512):
+            raise StudyControlError('pids limit must be primitive 128 or 512')
         if self.runtime_class not in (None, 'cpu', 'gpu'):
             raise StudyControlError('runtime class must be cpu or gpu')
         if self.runtime_class is None and self.phase not in PHASES:
@@ -472,7 +475,7 @@ def build_create_argv(spec: PhaseSpec, docker: str, client: Path) -> list[str]:
         '--platform','linux/amd64','--entrypoint',CONTAINER_PYTHON,
         '--user','1000:1000','--workdir','/learner','--network','none','--read-only',
         '--cap-drop','ALL','--security-opt','no-new-privileges:true',
-        '--cpus','4','--memory',str(8*GIB),'--memory-swap',str(8*GIB),'--pids-limit','512')
+        '--cpus','4','--memory',str(8*GIB),'--memory-swap',str(8*GIB),'--pids-limit',str(spec.pids_limit))
     if spec.uses_gpu:args+=['--gpus','device='+GPU_UUID]
     for k,v in spec.environment:args+=['--env',k+'='+v]
     for k,v in spec.labels:args+=['--label',k+'='+v]
@@ -492,7 +495,7 @@ def _inspect_projection(spec, container_id):
             'Env':[k+'='+v for k,v in spec.environment],'Labels':dict(spec.labels)},
         'HostConfig':{'ReadonlyRootfs':True,'NetworkMode':'none','CapDrop':['ALL'],
             'CapAdd':None,'SecurityOpt':['no-new-privileges:true'],'Privileged':False,
-            'Memory':8*GIB,'MemorySwap':8*GIB,'NanoCpus':4*10**9,'PidsLimit':512,
+            'Memory':8*GIB,'MemorySwap':8*GIB,'NanoCpus':4*10**9,'PidsLimit':spec.pids_limit,
             'DeviceRequests':devices,'Devices':[],'DeviceCgroupRules':None,'GroupAdd':None,
             'Tmpfs':{},'Binds':None,
             'PidMode':'','IpcMode':'private','UTSMode':'','UsernsMode':'',

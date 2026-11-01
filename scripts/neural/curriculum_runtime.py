@@ -299,14 +299,9 @@ def _threads():
     return {'intraop': 4, 'interop': 1}
 
 
-def _default_gate(context, dependencies):
-    if dependencies is None and _ADMITTED_CONTEXT is not context:
-        raise RuntimeError('real runtime requires verified guest entry admission')
-    if dependencies is not None and _ADMITTED_CONTEXT is not context:
-        required = {'segment': {'factory', 'load_checkpoint', 'equal', 'fresh_rng_states'},
-                    'qualification': {'qualification_api', 'threads'}, 'panel': {'factory'}}[context['kind']]
-        if not isinstance(dependencies, Mapping) or not required <= set(dependencies):
-            raise TypeError('unadmitted execution requires explicit fake runtime boundaries')
+def _require_verified_entry(context):
+    if _ADMITTED_CONTEXT is None or _ADMITTED_CONTEXT is not context:
+        raise RuntimeError('runtime requires verified guest entry admission')
 
 
 def _factory(config, **kwargs):
@@ -519,9 +514,9 @@ def _finished(receipt, context, started, clock):
 
 def run_segment(root: Path, context: Mapping, *, dependencies=None, clock=time.monotonic) -> Mapping:
     """One real accepted stream segment, with cumulative high-water controls."""
+    _require_verified_entry(context)
     started = clock()
     package, input_root, parent, output, config = validate_context(root, context, kind='segment', clock=clock)
-    _default_gate(context, dependencies)
     from spire_learn.neural.checkpoint import preflight_checkpoint
     from spire_learn.neural.runner import _checkpoint_recovery, RuntimeOperationLimits
     from spire_learn.neural.stream_runner import run_stream_segment
@@ -585,9 +580,9 @@ def run_segment(root: Path, context: Mapping, *, dependencies=None, clock=time.m
 
 def run_qualification(root: Path, context: Mapping, *, dependencies=None, clock=time.monotonic) -> Mapping:
     """Invoke the exact held TestCase method once, narrowing its shared clock."""
+    _require_verified_entry(context)
     started = clock()
     _, input_root, _, output, _ = validate_context(root, context, kind='qualification', clock=clock)
-    _default_gate(context, dependencies)
     deps = _dependencies(dependencies)
     from tests.neural import test_curriculum as held
     from unittest.mock import patch
@@ -684,9 +679,9 @@ def run_qualification(root: Path, context: Mapping, *, dependencies=None, clock=
 
 def run_panel(root: Path, context: Mapping, *, dependencies=None, clock=time.monotonic) -> Mapping:
     """One bounded CPU panel batch; missing rows remain missing in real summary."""
+    _require_verified_entry(context)
     started = clock()
     package, input_root, parent, output, _ = validate_context(root, context, kind='panel', clock=clock)
-    _default_gate(context, dependencies)
     from spire_learn.neural.config import load_neural_config
     from spire_learn.neural.checkpoint import preflight_checkpoint
     from spire_learn.neural.runner import RuntimeOperationLimits, NeuralReport
@@ -732,12 +727,10 @@ def run_panel(root: Path, context: Mapping, *, dependencies=None, clock=time.mon
     return _finished(receipt, context, started, clock)
 
 
-def _guest_entry(root, context_path, *, dependencies=None, clock=time.monotonic, admission=None):
+def _guest_entry(root, context_path, *, dependencies=None, clock=time.monotonic):
     """Actual entry: host verifier checks source/runtime/CDI before lazy imports."""
-    if admission is None:
-        from scripts.neural.curriculum_controls import verify_guest_context
-        admission = verify_guest_context
-    context = admission(Path(root), Path(context_path), clock=clock)
+    from scripts.neural.curriculum_controls import verify_guest_context
+    context = verify_guest_context(Path(root), Path(context_path), clock=clock)
     if not isinstance(context, Mapping):
         raise TypeError('guest admission must return the exact context mapping')
     output = _external_path(root, context['output_root'])

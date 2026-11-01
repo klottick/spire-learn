@@ -12,9 +12,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from tests.unit.test_neural_curriculum_package import ROOT, ARTIFACTS, package_fixture
 from tests.unit.test_neural_curriculum_integration import blocked_optional
@@ -325,8 +325,15 @@ class CampaignProducerTests(unittest.TestCase):
     def entry(self, context, *, dependencies=None):
         path = self.root / 'job-context.json'
         path.write_text(json.dumps(context))
-        return self.api._guest_entry(self.root, path, dependencies=dependencies or self.harness.dependencies(),
-            clock=lambda: self.now, admission=lambda root, path, **kwargs: json.loads(path.read_text()))
+        verifier = Mock(side_effect=lambda root, path, **kwargs: json.loads(path.read_text()))
+        controls = ModuleType('scripts.neural.curriculum_controls')
+        controls.verify_guest_context = verifier
+        with patch.dict(sys.modules, {'scripts.neural.curriculum_controls': controls}):
+            try:
+                return self.api._guest_entry(self.root, path,
+                    dependencies=dependencies or self.harness.dependencies(), clock=lambda: self.now)
+            finally:
+                verifier.assert_called_once()
 
     def test_projected_qualification_warm_start_save_next_shard_panel_actual_producers(self):
         with self.harness.producers():
@@ -498,7 +505,7 @@ class CampaignProducerTests(unittest.TestCase):
         dependencies = self.harness.dependencies()
         dependencies['qualification_api'] = late
         with self.harness.producers(), self.assertRaises((RuntimeError, TimeoutError, AssertionError)):
-            self.api.run_qualification(self.root, context, dependencies=dependencies, clock=lambda: self.now)
+            self.entry(context, dependencies=dependencies)
         self.assertEqual(self.harness.drivers[0].reset_calls + self.harness.drivers[0].step_calls, [])
         self.assertEqual(self.harness.drivers[0].close_calls, 1)
         counters = json.loads((Path(context['output_root']) / 'campaign-control/attempts.json').read_text())
@@ -634,7 +641,7 @@ class CampaignProducerTests(unittest.TestCase):
         dependencies = self.harness.dependencies()
         dependencies['evaluate'] = lambda *args, **kwargs: NeuralReport(
             {'status': 'setup_blocked', 'mode': 'standalone', 'reason': 'strict fake setup failure'}, 2, None)
-        with self.harness.producers():
+        with self.harness.producers(), patch.object(self.api, '_ADMITTED_CONTEXT', context):
             receipt = self.api.run_panel(self.root, context, dependencies=dependencies, clock=lambda: self.now)
         self.assertEqual(receipt['summary']['status'], 'operational_failure')
         self.assertEqual(receipt['status'], 'operational_failure')
@@ -662,7 +669,8 @@ class CampaignProducerTests(unittest.TestCase):
         context = self.context('panel')
         omitted = self.package['panel']['cases'][-1]['config_path']
         del context['input_inventory'][omitted]
-        with self.harness.producers(), self.assertRaisesRegex(ValueError, 'complete panel inventory'):
+        with self.harness.producers(), patch.object(self.api, '_ADMITTED_CONTEXT', context), \
+             self.assertRaisesRegex(ValueError, 'complete panel inventory'):
             self.api.run_panel(self.root, context, dependencies=self.harness.dependencies(), clock=lambda: self.now)
         self.assertEqual(self.harness.factory_calls, [])
 
@@ -670,6 +678,49 @@ class CampaignProducerTests(unittest.TestCase):
         context = self.context()
         with blocked_optional(), self.assertRaisesRegex(RuntimeError, 'verified guest entry'):
             self.api.run_segment(self.root, context, clock=lambda: self.now)
+
+    def test_named_dependency_mapping_cannot_admit_any_unverified_operation(self):
+        for kind, operation in (('segment', self.api.run_segment),
+                                ('qualification', self.api.run_qualification),
+                                ('panel', self.api.run_panel)):
+            context = self.context(kind)
+            for dependencies in (None, {}, self.harness.dependencies()):
+                with self.subTest(kind=kind, dependencies=None if dependencies is None else sorted(dependencies)), blocked_optional(), \
+                     patch.object(self.api, '_dependencies', side_effect=AssertionError('unadmitted dependency resolution')), \
+                     patch.object(self.api, '_ledger', side_effect=AssertionError('unadmitted cap creation')):
+                    with self.assertRaisesRegex(RuntimeError, 'verified guest entry'):
+                        operation(self.root, context, dependencies=dependencies, clock=lambda: self.now)
+            self.assertEqual(self.harness.factory_calls, [])
+            self.assertEqual(list(Path(context['output_root']).iterdir()), [])
+
+    def test_removed_admission_hook_cannot_unlock_default_producer(self):
+        context = self.context()
+        path = self.root / 'unverified-context.json'
+        path.write_text(json.dumps(context))
+        hook = lambda *args, **kwargs: context
+        with blocked_optional(), patch.object(self.api, 'run_segment',
+                side_effect=AssertionError('unverified producer reached')) as producer:
+            with self.assertRaises(TypeError):
+                self.api._guest_entry(self.root, path, clock=lambda: self.now, admission=hook)
+            producer.assert_not_called()
+        self.assertIsNone(self.api._ADMITTED_CONTEXT)
+
+    def test_failed_real_verifier_never_opens_default_runtime_boundary(self):
+        context = self.context()
+        path = self.root / 'rejected-context.json'
+        path.write_text(json.dumps(context))
+        controls = ModuleType('scripts.neural.curriculum_controls')
+        controls.verify_guest_context = Mock(side_effect=PermissionError('host admission rejected'))
+        with blocked_optional(), patch.dict(sys.modules, {'scripts.neural.curriculum_controls': controls}), \
+             patch.object(self.api, 'run_segment') as producer, \
+             patch.object(self.api, '_dependencies') as dependencies:
+            with self.assertRaisesRegex(PermissionError, 'host admission rejected'):
+                self.api._guest_entry(self.root, path, clock=lambda: self.now)
+            controls.verify_guest_context.assert_called_once()
+            producer.assert_not_called()
+            dependencies.assert_not_called()
+        self.assertIsNone(self.api._ADMITTED_CONTEXT)
+        self.assertEqual(list(Path(context['output_root']).iterdir()), [])
 
     def test_parent_mount_projection_uses_exact_current_parent_and_wire_alias(self):
         from scripts.neural import task9_study_controls as low
@@ -731,10 +782,10 @@ print('projected entry/help/discovery; optional attempts/loaded: []')
 
 
 class RuntimeContractTests(unittest.TestCase):
-    def test_closed_context_rejects_before_runtime_boundary(self):
+    def test_unverified_context_rejects_before_runtime_boundary(self):
         api = importlib.import_module('scripts.neural.curriculum_runtime')
         for run in (api.run_qualification, api.run_segment, api.run_panel):
-            with self.assertRaisesRegex(ValueError, 'context'):
+            with self.assertRaisesRegex(RuntimeError, 'verified guest entry'):
                 run('.', {}, dependencies={'factory': lambda: self.fail('runtime effect')})
 
 

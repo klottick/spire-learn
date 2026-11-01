@@ -20,6 +20,34 @@ from spire_learn.neural.config import load_neural_config
 
 
 class NeuralConfigTests(unittest.TestCase):
+    def test_fixed_gym_revision_loads_without_rewriting_historical_configs(self):
+        old_revision = "533dad1c8aec86df624b3742b6b3ad1dbf1d0033"
+        new_revision = "a86df922a9dc598645820cc6544df36aefb3d2cc"
+        for mode in ("standalone", "run"):
+            base = Path(f"configs/neural/{mode}.toml")
+            source = base.read_text().replace(
+                '../cases/neural/train.json',
+                str(Path("configs/cases/neural/train.json").resolve()),
+            ).replace(
+                f'../../artifacts/development/neural-combat/runs/{mode}',
+                str(Path(f"artifacts/development/neural-combat/runs/{mode}").resolve()),
+            )
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "config.toml"
+                path.write_text(source.replace(old_revision, new_revision))
+                try:
+                    updated = load_neural_config(path)
+                except ValueError as error:
+                    self.fail(f"the delivered fixed Gym revision must load: {error}")
+                self.assertEqual(updated.environment_revision, new_revision)
+                historical = load_neural_config(base)
+                self.assertEqual(historical.environment_revision, old_revision)
+                self.assertEqual(updated.accepted_identities, historical.accepted_identities)
+                self.assertNotEqual(updated.config_sha256, historical.config_sha256)
+                path.write_text(source.replace(old_revision, "0" * 40))
+                with self.assertRaisesRegex(ValueError, "unsupported Gym revision"):
+                    load_neural_config(path)
+
     def test_environment_seed_domains_and_train_replica_offsets(self):
         self.assertEqual(environment_seed_for("train", replica=0, ordinal=17), 17)
         self.assertEqual(environment_seed_for("train", replica=2, ordinal=17), 2 * 2**32 + 17)

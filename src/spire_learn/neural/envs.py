@@ -19,7 +19,7 @@ from spire_learn.artifacts.codec import to_json_value
 from spire_learn.contracts import ContractError
 from spire_learn.neural.cases import NeuralCases
 from spire_learn.neural.config import (
-    ACCEPTED_GYM_REVISION,
+    ACCEPTED_RUNTIME_GYM_REVISIONS,
     COMMON_VIEW_FINGERPRINT,
     COMMON_VIEW_ID,
     RUN_OBSERVATION_FINGERPRINT,
@@ -986,7 +986,8 @@ def _run_action_count(descriptor: object) -> int:
 def _validate_factory_inputs(config: NeuralConfig, cases: NeuralCases) -> None:
     if not isinstance(config, NeuralConfig) or not isinstance(cases, NeuralCases):
         raise TypeError("make_driver requires NeuralConfig and NeuralCases")
-    if config.environment_revision != ACCEPTED_GYM_REVISION:
+    if (not isinstance(config.environment_revision, str)
+            or config.environment_revision not in ACCEPTED_RUNTIME_GYM_REVISIONS):
         raise ContractError("NeuralConfig does not pin the accepted Gym revision")
     if config.common_view_id != COMMON_VIEW_ID or config.common_view_fingerprint != COMMON_VIEW_FINGERPRINT:
         raise ContractError("NeuralConfig does not pin the accepted common combat view")

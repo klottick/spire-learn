@@ -1,0 +1,60 @@
+schema = "spire-learn-neural-config-v1"
+mode = "standalone"
+operation = "train"
+split = "train"
+partition = "train"
+manifest_path = "../../cases/neural/train.json"
+output_root = "../../../artifacts/development/neural-combat/runs/native-fixes-20261101/standalone"
+device = "cpu"
+
+[environment]
+gym_revision = "a86df922a9dc598645820cc6544df36aefb3d2cc"
+common_view_id = "spire-gym-combat-policy-view-v1"
+common_view_fingerprint = "02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78"
+
+[seeds]
+policy = 1103
+optimizer = 2207
+curriculum = 3301
+noncombat = 4409
+
+[model]
+embedding_width = 16
+hidden_width = 64
+max_parameters = 10000000
+
+[ppo]
+learning_rate = 0.0003
+gamma = 0.99
+gae_lambda = 0.95
+clip_epsilon = 0.2
+value_coefficient = 0.5
+entropy_coefficient = 0.01
+max_grad_norm = 0.5
+epochs = 4
+minibatch_rows = 64
+adam_eps = 0.00001
+
+[rollout]
+rows = 4
+steps = 32
+
+[budgets]
+max_optimizer_steps = 16
+max_training_decisions = 256
+max_environment_actions = 1024
+max_wall_seconds = 120.0
+
+[[accepted_identities]]
+model_id = "spire-learn-combat-ff-v1"
+features_id = "spire-learn-combat-features-v1"
+action_id = "spire-learn-combat-dispatch-v1"
+objective_id = "spire-learn-combat-winloss-v1"
+
+[accepted_identities.accepted_raw_mode_mappings]
+standalone = "spire-learn-standalone-common-v1@02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78"
+run = "spire-learn-run-policy-v3-common-v1@30905db1b7a520482d3ea8aa2e63ddb7f78b7c081de89d87268151f29cf4c7f8:02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78"
+
+[accepted_identities.config_hashes]
+model = "4fb628e06bf4952847795ac5d8548d12dfeede4c97e874ab843857ae0f91cd2f"
+ppo = "f08075e0b01a15095b542fc20cba11c3258381bcb5721bb5066a4448e43c9e2a"

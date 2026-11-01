@@ -22,6 +22,10 @@ from spire_learn.neural.contracts import ModelConfig, NeuralIdentity, PPOConfig
 
 
 ACCEPTED_GYM_REVISION = "533dad1c8aec86df624b3742b6b3ad1dbf1d0033"
+# The original descriptor/support provenance stays frozen. Runtime revisions
+# are explicit: schema compatibility does not imply arbitrary build acceptance.
+FIXED_GYM_REVISION = "a86df922a9dc598645820cc6544df36aefb3d2cc"
+ACCEPTED_RUNTIME_GYM_REVISIONS = frozenset({ACCEPTED_GYM_REVISION, FIXED_GYM_REVISION})
 COMMON_VIEW_ID = "spire-gym-combat-policy-view-v1"
 COMMON_VIEW_FINGERPRINT = "02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78"
 RUN_PROFILE_ID = "m10-ironclad-policy"
@@ -268,7 +272,8 @@ def load_neural_config(path: Path) -> NeuralConfig:
             "profile_id", "observation_version", "replay_version", "run_observation_fingerprint",
         }
     environment = _exact_keys(environment, expected_environment_keys, "environment")
-    if environment["gym_revision"] != ACCEPTED_GYM_REVISION:
+    if (not isinstance(environment["gym_revision"], str)
+            or environment["gym_revision"] not in ACCEPTED_RUNTIME_GYM_REVISIONS):
         raise ValueError("unsupported Gym revision")
     if environment["common_view_id"] != COMMON_VIEW_ID:
         raise ValueError("unsupported common combat view")
@@ -437,6 +442,8 @@ def load_neural_config(path: Path) -> NeuralConfig:
 
 __all__ = [
     "ACCEPTED_GYM_REVISION",
+    "ACCEPTED_RUNTIME_GYM_REVISIONS",
+    "FIXED_GYM_REVISION",
     "COMMON_VIEW_FINGERPRINT",
     "COMMON_VIEW_ID",
     "NeuralBudget",

@@ -265,6 +265,26 @@ class _BatchArray:
 
 
 class NeuralEnvTests(unittest.TestCase):
+    def test_fixed_gym_factory_admission_still_requires_exact_loaded_revision(self):
+        revision = "a86df922a9dc598645820cc6544df36aefb3d2cc"
+        base = load_neural_config(Path("configs/neural/standalone.toml"))
+        config = replace(base, environment_revision=revision)
+        try:
+            envs._validate_factory_inputs(config, config.cases)
+        except ValueError as error:
+            self.fail(f"the delivered fixed Gym revision must reach build validation: {error}")
+        good = SimpleNamespace(build_info=lambda: {
+            "extension": "spire-python", "revision": revision,
+        })
+        envs._verify_native_build(good, config.environment_revision)
+        old = SimpleNamespace(build_info=lambda: {
+            "extension": "spire-python", "revision": base.environment_revision,
+        })
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            envs._verify_native_build(old, config.environment_revision)
+        with self.assertRaisesRegex(ValueError, "accepted Gym revision"):
+            envs._validate_factory_inputs(replace(config, environment_revision="0" * 40), config.cases)
+
     def setUp(self):
         self.api = _api(self)
         self.schema_context = _synthetic_schema(self.api)

@@ -69,6 +69,12 @@ mixed training never started, so their learning benefit remains unverified. The
 the failure, saved work and limits. The campaign is closed; no retry or further
 workload is authorized.
 
+Gym's delivered native-fault fixes at `a86df922` are now staged in a separate
+Learn runtime overlay. Both adapters and the unchanged schema identities passed
+a zero-gameplay container check. See the [runtime upgrade](docs/neural-runtime-upgrade.md)
+for the exact pins, diagnosed causes and new config templates. Historical
+campaign records remain unchanged; this update did not restart training.
+
 Python **3.12** matches the gym's current Python package requirement. Spire Learn
 declares no runtime dependencies, and this project has not installed packages
 into the host Python. Separate protected CPU runtime environments used for the

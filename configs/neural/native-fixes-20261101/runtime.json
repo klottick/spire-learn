@@ -1,0 +1,16 @@
+{
+  "schema": "spire-learn-gym-runtime-profile-v1",
+  "gym_revision": "a86df922a9dc598645820cc6544df36aefb3d2cc",
+  "native_sha256": "96d54621aa533f27ca720621dfa17664609e51e5b9311fed1636cffa8cd9d787",
+  "wheel_sha256": "06a008cced5e7dcd61c9c36085190f9160a3a01368c35e46f72b6b0de26ce2be",
+  "wheel_path": "artifacts/development/neural-combat/gym-refresh-20261101/inputs/spire_lab-0.1.0-cp312-cp312-manylinux_2_34_x86_64.whl",
+  "package_overlay": "artifacts/development/neural-combat/gym-refresh-20261101/site",
+  "dependency_venv": "artifacts/development/neural-combat/task-8/runtime-output/cuda-setup-20261028-a/install-work/venv-cuda",
+  "dependency_lock_sha256": "92022c4b8f68dd7c5bad091b558744ffb30c627292135b7ab18a179f2fd65b45",
+  "delivery_manifest_sha256": "839314aeede9977c6672a322621b04617fac6121bbee773e7b4be25481888962",
+  "common_view_fingerprint": "02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78",
+  "run_observation_fingerprint": "30905db1b7a520482d3ea8aa2e63ddb7f78b7c081de89d87268151f29cf4c7f8",
+  "qualification_report": "artifacts/development/neural-combat/gym-refresh-20261101/output/qualification.json",
+  "qualification_scope": "imported binary, descriptors and both Learn adapter factories; zero gameplay or training",
+  "historical_controls": "Existing one-use campaign controls remain pinned to their original runtime. New campaigns must explicitly bind this profile and overlay; this file grants no execution authority."
+}

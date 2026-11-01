@@ -1,0 +1,149 @@
+"""Closed, source-bound deployment choices for the existing curriculum controller.
+
+Selection changes configuration only. It never supplies observed runtime facts,
+authority, release approval, or a replacement for an admission gate.
+"""
+from __future__ import annotations
+
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+import importlib
+from pathlib import Path
+import sys
+
+
+@dataclass(frozen=True)
+class Profile:
+    name: str
+    campaign_id: str
+    campaign_path: str
+    domain: Path
+    qualification_input: Path
+    template: str
+    parents: str
+    revision: str
+    baseline_slot: str
+    runtime_profile: str | None = None
+    overlay_manifest: str | None = None
+
+    @property
+    def fixed(self):
+        return self.runtime_profile is not None
+
+
+HISTORICAL = Profile('historical', 'curriculum-20261101-a',
+    'configs/neural/experiments/curriculum-v1/campaign.json',
+    Path('artifacts/development/neural-combat/curriculum-campaign-v1'),
+    Path('artifacts/development/neural-combat/curriculum-v1/task-5/prepared-mixed'),
+    'configs/neural/curriculum-v1/pilot.toml', 'configs/neural/curriculum-v1/pilot-parents.json',
+    '533dad1c8aec86df624b3742b6b3ad1dbf1d0033', 'original-b')
+FIXED = Profile('fixed-gym-a86df922', 'curriculum-20261101-b',
+    'configs/neural/experiments/curriculum-v2/campaign.json',
+    Path('artifacts/development/neural-combat/curriculum-campaign-v2'),
+    Path('artifacts/development/neural-combat/curriculum-campaign-v2/qualification'),
+    'configs/neural/experiments/curriculum-v2/template.toml',
+    'configs/neural/experiments/curriculum-v2/parents.json',
+    'a86df922a9dc598645820cc6544df36aefb3d2cc', 'warm-start-fixed-003',
+    'configs/neural/native-fixes-20261101/runtime.json',
+    'configs/neural/experiments/curriculum-v2/overlay.json')
+NAMES = (HISTORICAL.name, FIXED.name)
+OVERLAY_DESTINATION = '/runtime/gym-overlay'
+NATIVE_SHA256 = '96d54621aa533f27ca720621dfa17664609e51e5b9311fed1636cffa8cd9d787'
+_selected = ContextVar('curriculum_deployment_profile', default=HISTORICAL)
+
+
+def current():
+    return _selected.get()
+
+
+@contextmanager
+def scope(name):
+    if name not in NAMES:
+        raise ValueError('unknown curriculum profile')
+    token = _selected.set(HISTORICAL if name == HISTORICAL.name else FIXED)
+    try:
+        yield current()
+    finally:
+        _selected.reset(token)
+
+
+def arguments():
+    return ['--profile', current().name] if current().fixed else []
+
+
+def source_paths(root):
+    paths = ['scripts/neural/curriculum_profiles.py']
+    if current().fixed:
+        directory = Path('configs/neural/experiments/curriculum-v2')
+        paths += [str(path.relative_to(root)) for path in (Path(root)/directory).rglob('*') if path.is_file()]
+        paths += [current().runtime_profile, 'tests/unit/test_neural_curriculum_fixed_profile.py']
+    return paths
+
+
+def verify_overlay(directory, bindings):
+    from scripts.neural.curriculum_package import verify_inventory
+    directory = Path(directory)
+    paths = list(directory.rglob('*'))
+    if (directory.is_symlink() or any(p.is_symlink() or not (p.is_dir() or p.is_file()) for p in paths)
+            or {str(p.relative_to(directory)) for p in paths if p.is_file()} != set(bindings)):
+        raise ValueError('package overlay inventory is not closed')
+    verify_inventory(directory, bindings)
+
+
+def overlay_pins(root):
+    """Validate source-bound metadata; never interpret it as observed import facts."""
+    from scripts.neural.curriculum_package import read_json, sha256
+    from scripts.neural import task9_study_controls as low
+    selected = current()
+    if not selected.fixed:
+        raise ValueError('historical profile has no package overlay')
+    root = Path(root)
+    manifest = read_json(root/selected.overlay_manifest)
+    runtime = read_json(root/selected.runtime_profile)
+    if (set(manifest) != {'schema', 'runtime_profile_sha256', 'inventory', 'reusable_package_sha256'}
+            or manifest['schema'] != 'spire-learn-curriculum-overlay-v1'
+            or sha256(root/selected.runtime_profile) != manifest['runtime_profile_sha256']
+            or runtime['schema'] != 'spire-learn-gym-runtime-profile-v1'
+            or runtime['gym_revision'] != selected.revision or runtime['native_sha256'] != NATIVE_SHA256
+            or runtime['dependency_venv'] != str(low.VENV)
+            or runtime['dependency_lock_sha256'] != low.LOCK_SHA256
+            or runtime['package_overlay'] != 'artifacts/development/neural-combat/gym-refresh-20261101/site'):
+        raise ValueError('fixed Gym runtime profile differs')
+    native = 'spire_lab/_native.cpython-312-x86_64-linux-gnu.so'
+    if manifest['inventory'][native]['sha256'] != NATIVE_SHA256:
+        raise ValueError('fixed Gym native inventory differs')
+    return dict(profile=selected.name, runtime_profile_sha256=manifest['runtime_profile_sha256'],
+        gym_revision=selected.revision, native_sha256=NATIVE_SHA256,
+        package_overlay={'path': runtime['package_overlay'], 'inventory': manifest['inventory'],
+            'guest_destination': OVERLAY_DESTINATION, 'readonly': True,
+            'pythonpath': OVERLAY_DESTINATION+':/learner/src:/learner'})
+
+
+def qualification_hashes(root):
+    from scripts.neural.curriculum_package import read_json
+    return read_json(Path(root)/'configs/neural/experiments/curriculum-v2/qualification-identities.json')
+
+
+def verify_imported_overlay(directory, pins):
+    """Authenticate actual imported files/build info, without constructing an env."""
+    from scripts.neural.curriculum_package import sha256
+    directory = Path(directory).resolve(strict=True)
+    package = importlib.import_module('spire_lab')
+    native = importlib.import_module('spire_lab._native')
+    for name, module in list(sys.modules.items()):
+        if name == 'spire_lab' or name.startswith('spire_lab.'):
+            path = Path(getattr(module, '__file__', '')).resolve()
+            if not path.is_relative_to(directory):
+                raise ValueError('imported Gym package origin differs: '+name)
+            relative = str(path.relative_to(directory))
+            binding = pins['package_overlay']['inventory'].get(relative)
+            if binding is None or sha256(path) != binding['sha256']:
+                raise ValueError('imported Gym package inventory differs')
+    native_path = Path(native.__file__).resolve()
+    if native_path != directory/'spire_lab/_native.cpython-312-x86_64-linux-gnu.so' or sha256(native_path) != pins['native_sha256']:
+        raise ValueError('imported Gym native identity differs')
+    info = dict(native.build_info())
+    if info.get('extension') != 'spire-python' or info.get('revision') != current().revision:
+        raise ValueError('imported Gym build revision differs')
+    return dict(native_file=str(native_path), package_file=str(Path(package.__file__).resolve()), build_info=info)

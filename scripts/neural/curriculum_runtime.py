@@ -21,7 +21,8 @@ if __package__ in (None, ''):
     _root = Path(__file__).resolve().parents[2]
     sys.path[:0] = [str(_root / 'src'), str(_root)]
 
-from scripts.neural.curriculum_package import (CAMPAIGN_ID, SCHEMA as PACKAGE_SCHEMA,
+from scripts.neural import curriculum_profiles as profiles
+from scripts.neural.curriculum_package import (SCHEMA as PACKAGE_SCHEMA,
     read_json, relative_file, verify_inventory, sha256)
 
 CONTEXT_SCHEMA = 'spire-learn-curriculum-job-context-v1'
@@ -84,6 +85,7 @@ def source_paths(root: Path) -> list[str]:
                'task9_nvidia_cdi', 'task8_gpu_setup_helpers', 'sustained_controls',
                'sustained_package')]
     paths += ['tests/__init__.py', 'tests/neural/__init__.py', 'tests/neural/test_curriculum.py']
+    paths += ['scripts/neural/curriculum_profiles.py']
     return sorted(paths)
 
 
@@ -111,7 +113,7 @@ def validate_context(root: Path, context: Mapping, *, kind=None, clock=time.mono
     selected_kind = context['kind']
     if (set(context) != COMMON_KEYS | KIND_KEYS[selected_kind]
             or context.get('schema') != CONTEXT_SCHEMA
-            or context.get('campaign_id') != CAMPAIGN_ID
+            or context.get('campaign_id') != profiles.current().campaign_id
             or kind is not None and selected_kind != kind):
         raise ValueError('context fields/schema/identity differ')
     if not isinstance(context['job_id'], str) or re.fullmatch(r'curriculum-[a-z0-9-]{1,100}', context['job_id']) is None:
@@ -145,7 +147,7 @@ def validate_context(root: Path, context: Mapping, *, kind=None, clock=time.mono
     if sha256(package_path) != context['package_sha256']:
         raise ValueError('context package raw identity differs')
     package = read_json(package_path)
-    if package.get('schema') != PACKAGE_SCHEMA or package.get('campaign_id') != CAMPAIGN_ID:
+    if package.get('schema') != PACKAGE_SCHEMA or package.get('campaign_id') != profiles.current().campaign_id:
         raise ValueError('context package schema/identity differs')
     input_root = relative_file(root, context['input_root'])
     verify_inventory(input_root, context['input_inventory'])
@@ -171,6 +173,8 @@ def validate_context(root: Path, context: Mapping, *, kind=None, clock=time.mono
         if context['input_inventory'] != expected_inputs:
             raise ValueError('context selected training input inventory differs')
         config = load_neural_config(relative_file(input_root, binding['config_path']))
+        if config.environment_revision != profiles.current().revision:
+            raise ValueError('selected config runtime revision differs from campaign profile')
         from spire_learn.neural.stream_resume import stream_identity
         if (config.config_sha256 != binding['config_sha256'] or config.manifest_sha256 != binding['manifest_sha256']
                 or stream_identity(config)['stable_training_sha256'] != binding['stable_training_sha256']
@@ -219,10 +223,11 @@ def validate_context(root: Path, context: Mapping, *, kind=None, clock=time.mono
             raise ValueError('context cumulative operation limits differ')
     elif selected_kind == 'qualification':
         configs = [load_neural_config(input_root / f'qualification-{i}.toml') for i in (0, 1)]
-        if [c.config_sha256 for c in configs] != list(QUALIFICATION_HASHES):
+        expected_hashes = profiles.qualification_hashes(root) if profiles.current().fixed else list(QUALIFICATION_HASHES)
+        if [c.config_sha256 for c in configs] != expected_hashes:
             raise ValueError('context qualification config identity differs')
-        if any(c.output_root != output for c in configs):
-            raise ValueError('context qualification output differs')
+        if any(c.output_root != output or c.environment_revision != profiles.current().revision for c in configs):
+            raise ValueError('context qualification output/runtime revision differs')
         original = package['original_parent']
         if parent_path != root / original['checkpoint_directory'] or parent['inventory'] != original['inventory']:
             raise ValueError('context qualification requires exact original-B location')
@@ -254,7 +259,8 @@ def validate_context(root: Path, context: Mapping, *, kind=None, clock=time.mono
             raise ValueError('context complete panel structure differs')
         for row, case in zip(rows, panel['manifest']['cases']):
             actual = load_neural_config(input_root / row['config_path'])
-            if (actual.config_sha256 != row['config_sha256'] or actual.manifest_sha256 != row['manifest_sha256']
+            if (actual.environment_revision != profiles.current().revision
+                    or actual.config_sha256 != row['config_sha256'] or actual.manifest_sha256 != row['manifest_sha256']
                     or actual.output_root != output or actual.device != 'cpu' or actual.scenario_stream is not None
                     or (actual.rollout_rows, actual.rollout_steps, actual.operation, actual.split) != (1, 1, 'evaluate', 'selection')
                     or len(actual.cases.cases) != 1 or actual.cases.cases[0].case_id != case['case_id']
@@ -774,9 +780,10 @@ def main(argv=None):
     parser.add_argument('command', choices=('_guest',))
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--context', type=Path, required=True)
+    parser.add_argument('--profile', choices=profiles.NAMES, default=profiles.HISTORICAL.name)
     args = parser.parse_args(argv)
     from scripts.neural.sustained_controls import signal_scope
-    with signal_scope():
+    with profiles.scope(args.profile), signal_scope():
         result = _guest_entry(args.root, args.context)
     print(json.dumps(result, separators=(',', ':'), allow_nan=False))
     return 0

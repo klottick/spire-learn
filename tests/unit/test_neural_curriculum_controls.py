@@ -477,6 +477,8 @@ print('fresh import/help/stale-validation/discovery: six optional prefixes block
 
     def test_actual_owned_launch_proc_access_reaches_only_rejected_static_admission(self):
         api = self.controls()
+        runtime = ROOT/api.RUNTIME
+        before = (runtime.stat(), sorted(path.name for path in runtime.iterdir())) if runtime.exists() else None
         with tempfile.TemporaryDirectory(dir=ROOT/api.DOMAIN/'task-2') as directory:
             base = Path(directory)
             rejected, result_path = base/'invalid.json', base/'outer.json'
@@ -493,7 +495,8 @@ print('fresh import/help/stale-validation/discovery: six optional prefixes block
             self.assertEqual(result['watchdog_exit_status'], 1)
             self.assertFalse(result['whole_run_complete'])
             self.assertEqual(result['controller_os_exit_status']['availability'], 'unavailable')
-            self.assertFalse((ROOT/api.RUNTIME).exists())
+            after = (runtime.stat(), sorted(path.name for path in runtime.iterdir())) if runtime.exists() else None
+            self.assertEqual(after, before)
 
     def test_supervisor_policy_checks_chain_limits_open_result_and_source_binding(self):
         api = self.controls()
@@ -552,10 +555,13 @@ print('fresh import/help/stale-validation/discovery: six optional prefixes block
 
 class ProjectedHostTests(unittest.TestCase):
     """Actual host layout, verifier, entry and producer; fake OS/runtime edges."""
+    fixture_provider = staticmethod(package_fixture)
+    test_domain = None
+
     def setUp(self):
         self.api = importlib.import_module('scripts.neural.curriculum_controls')
-        self.fixture, self.package = package_fixture()
-        self.temporary = tempfile.TemporaryDirectory(dir=ROOT/self.api.DOMAIN/'task-2')
+        self.fixture, self.package = self.fixture_provider()
+        self.temporary = tempfile.TemporaryDirectory(dir=ROOT/(self.test_domain or self.api.DOMAIN)/'task-2')
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name)
         self.h = self.base/'host'
@@ -567,7 +573,7 @@ class ProjectedHostTests(unittest.TestCase):
         self.source_path = self.h/'source.json'
         snapshot = self.api.capture_source(ROOT, self.source_path, learner_head='a'*40, dirty={'dirty': True})
         release = self.api.release_template(ROOT, package_path=self.fixture/'package.json',
-            source_snapshot=self.source_path, user_approval=ROOT/self.api.DOMAIN/'preparation/user-approval.json')
+            source_snapshot=self.source_path, user_approval=ROOT/(self.test_domain or self.api.DOMAIN)/'preparation/user-approval.json')
         release.update(state='approved', review={'approved': True, 'reports': ['first', 'second']})
         self.release_path = self.h/'release.json'
         self.api._write(self.release_path, release)

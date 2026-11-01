@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import sys
 import tomllib
+import shutil
 
 if __package__ in (None, ''):
     _root = Path(__file__).resolve().parents[2]
@@ -17,6 +18,8 @@ CAMPAIGN_PATH = 'configs/neural/experiments/curriculum-v1/campaign.json'
 SCHEMA = 'spire-learn-curriculum-package-v1'
 CAMPAIGN_ID = 'curriculum-20261101-a'
 MAX_BYTES = 256 * 1024**2
+
+from scripts.neural import curriculum_profiles as profiles
 
 
 def sha256(path: Path) -> str:
@@ -117,8 +120,10 @@ def author_package(root: Path, destination: Path, *, campaign_id: str) -> Mappin
     from spire_learn.neural.scenario_support import json_value
     from spire_learn.neural.stream_runner import _toml, build_development_panel
     root, destination = Path(root).resolve(), Path(destination).absolute()
-    if campaign_id != CAMPAIGN_ID:
+    if campaign_id != profiles.current().campaign_id:
         raise ValueError('campaign identity differs')
+    if profiles.current().fixed:
+        return refresh_package(root, Path(root)/REUSABLE_PACKAGE, destination)
     if destination.exists() or destination.is_symlink():
         raise ValueError('destination must be absent')
     if not destination.parent.is_dir() or any(p.is_symlink() for p in destination.parents):
@@ -189,6 +194,8 @@ def validate_package(root: Path, package_path: Path) -> Mapping:
     from spire_learn.neural.scenario_support import json_value
     from spire_learn.neural.scenario_stream import load_scenario_recipe, generate_scenario_shard, validate_coverage_cycle
     from spire_learn.neural.stream_runner import build_development_panel
+    if profiles.current().fixed:
+        return validate_refreshed_package(root, package_path)
     package_path = Path(package_path)
     package = read_json(package_path)
     if package.get('schema') != SCHEMA or package.get('campaign_id') != CAMPAIGN_ID:
@@ -248,14 +255,128 @@ def validate_package(root: Path, package_path: Path) -> Mapping:
     return package
 
 
+REUSABLE_PACKAGE = ('artifacts/development/neural-combat/curriculum-campaign-v1/'
+                    'task-1/package-fixture/package.json')
+
+
+def _reusable(root, path):
+    manifest = read_json(Path(root)/profiles.current().overlay_manifest)
+    if not profiles.current().fixed or sha256(path) != manifest['reusable_package_sha256']:
+        raise ValueError('accepted reusable package identity differs')
+    value = read_json(path)
+    if value['campaign_id'] != CAMPAIGN_ID:
+        raise ValueError('reusable package is not historical campaign data')
+    return value
+
+
+def _refreshed_files(root, source):
+    """Only deployment revision, campaign and weight parent change."""
+    from spire_learn.neural.stream_runner import _toml
+    from spire_learn.neural.scenario_support import canonical_bytes
+    campaign = read_json(Path(root)/profiles.current().campaign_path)
+    parent = read_json(Path(root)/profiles.current().parents)['standalone_b']
+    result = {'campaign.json': canonical_bytes(campaign)+b'\n',
+              'original-parent.json': canonical_bytes(parent)+b'\n'}
+    for name in source['inventory']:
+        if name.endswith('.toml'):
+            directory = (Path(root)/REUSABLE_PACKAGE).parent
+            verify_inventory(directory, {name: source['inventory'][name]})
+            document = tomllib.loads(directory.joinpath(name).read_text())
+            if document['environment']['gym_revision'] != profiles.HISTORICAL.revision:
+                raise ValueError('reusable config runtime revision differs')
+            document['environment']['gym_revision'] = profiles.current().revision
+            result[name] = _toml(document).encode()
+    return result
+
+
+def _refreshed_document(root, base, source):
+    from spire_learn.neural.scenario_support import content_sha256
+    value = json.loads(json.dumps(source))
+    value.update(campaign_id=profiles.current().campaign_id,
+        campaign=read_json(Path(root)/profiles.current().campaign_path),
+        original_parent=read_json(Path(root)/profiles.current().parents)['standalone_b'])
+    value['evaluation_slots'] = value['campaign']['evaluation_slots']
+    template = tomllib.loads((Path(root)/profiles.current().template).read_text())
+    for arm, rows in value['training'].items():
+        # One actual loader supplies each arm's stable runtime identity. Every
+        # other document must be the exact accepted template transformation;
+        # manifests are byte-identical accepted data. The real selected loader
+        # also checks every shard again before its first runtime effect.
+        stable = _config_row(base, rows[0]['config_path'])['stable_training_sha256']
+        for index, row in enumerate(rows):
+            document = tomllib.loads((Path(base)/row['config_path']).read_text())
+            if document != _training_document(template, value['campaign'], arm, index,
+                    document['scenario_stream']['distribution_sha256']):
+                raise ValueError('refreshed training settings differ')
+            row.update(config_sha256=content_sha256(document), stable_training_sha256=stable)
+    for row in value['panel']['cases']:
+        document = tomllib.loads((Path(base)/row['config_path']).read_text())
+        row['config_sha256'] = content_sha256(document)
+    if _config_row(base, value['panel']['cases'][0]['config_path'])['config_sha256'] != value['panel']['cases'][0]['config_sha256']:
+        raise ValueError('refreshed panel loader differs')
+    value['inventory'] = inventory(base, sorted(source['inventory']))
+    value['total_input_bytes'] = sum(row['size_bytes'] for row in value['inventory'].values())
+    return value
+
+
+def refresh_package(root, source_package, destination):
+    """Reuse accepted immutable scenario DATA with freshly loaded config identities."""
+    root, destination, source_package = Path(root), Path(destination), Path(source_package)
+    if not profiles.current().fixed:
+        raise ValueError('refresh requires explicit fixed Gym profile')
+    source = _reusable(root, source_package)
+    verify_inventory(source_package.parent, source['inventory'])
+    if destination.exists() or destination.is_symlink() or not destination.parent.is_dir():
+        raise ValueError('fresh destination with existing regular parent required')
+    relative_file(destination.parent, destination.name)  # Reject symlink ancestors.
+    destination.mkdir()
+    changed = _refreshed_files(root, source)
+    for name in source['inventory']:
+        target = relative_file(destination, name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if name in changed:
+            target.write_bytes(changed[name])
+        else:
+            shutil.copyfile(relative_file(source_package.parent, name), target)
+    result = _refreshed_document(root, destination, source)
+    _put(destination, 'package.json', result)
+    if result['total_input_bytes']+(destination/'package.json').stat().st_size > MAX_BYTES:
+        raise ValueError('refreshed package exceeds byte cap')
+    return result
+
+
+def validate_refreshed_package(root, package_path):
+    """Check deterministic projection and every real loader; no scenario regeneration."""
+    root, package_path = Path(root), Path(package_path)
+    source = _reusable(root, root/REUSABLE_PACKAGE)
+    base = package_path.parent
+    package = read_json(package_path)
+    verify_inventory(base, package['inventory'])
+    if {str(p.relative_to(base)) for p in base.rglob('*') if p.is_file()} != set(source['inventory']) | {'package.json'}:
+        raise ValueError('refreshed package inventory is not closed')
+    changed = _refreshed_files(root, source)
+    for name, binding in source['inventory'].items():
+        if name in changed:
+            if relative_file(base, name).read_bytes() != changed[name]:
+                raise ValueError('refreshed config/campaign/parent settings differ')
+        elif package['inventory'].get(name) != binding:
+            raise ValueError('accepted scenario data identity differs')
+    expected = _refreshed_document(root, base, source)
+    if package != expected or package['total_input_bytes']+package_path.stat().st_size > MAX_BYTES:
+        raise ValueError('refreshed package loader identity differs')
+    return package
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('author', 'validate'))
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--path', type=Path, required=True)
+    parser.add_argument('--profile', choices=profiles.NAMES, default=profiles.HISTORICAL.name)
     args = parser.parse_args(argv)
-    result = (author_package(args.root, args.path, campaign_id=CAMPAIGN_ID) if args.command == 'author'
-              else validate_package(args.root, args.path))
+    with profiles.scope(args.profile):
+        result = (author_package(args.root, args.path, campaign_id=profiles.current().campaign_id)
+                  if args.command == 'author' else validate_package(args.root, args.path))
     print(json.dumps({'schema': result['schema'], 'campaign_id': result['campaign_id'],
                       'total_input_bytes': result['total_input_bytes']}, sort_keys=True))
     return 0

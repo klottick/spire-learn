@@ -1,0 +1,20 @@
+{
+  "schema": "spire-learn-curriculum-pilot-parents-v1",
+  "standalone_b": {
+    "checkpoint_directory": "artifacts/development/neural-combat/curriculum-campaign-v1/runtime/jobs/curriculum-fixed-003/output/20261101T072259Z-2ae805c24eb449bfa4a171e89883457b/checkpoint-final",
+    "inventory": {
+      "metadata.json": {
+        "sha256": "d70c21461b3675b442d0443c4f69134ef25d79c893529dbd3f5000761853c393",
+        "size_bytes": 25584
+      },
+      "model.pt": {
+        "sha256": "383b6da104780ff7c76db33c1bb2403356b4c8dc271a2aaf23bbab7fa8823455",
+        "size_bytes": 1089216
+      },
+      "training.pt": {
+        "sha256": "77d9441002b41d1ca363f766bccdd0e4071e5c04b63c72c5b3e5e91bc48b8375",
+        "size_bytes": 2211765
+      }
+    }
+  }
+}

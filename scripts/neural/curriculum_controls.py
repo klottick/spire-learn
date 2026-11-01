@@ -25,6 +25,7 @@ if __package__ in (None, ''):
     sys.path[:0] = [str(_root / 'src'), str(_root)]
 
 from scripts.neural import curriculum_package as package_api, curriculum_runtime as producer
+from scripts.neural import curriculum_profiles as profiles
 from scripts.neural import sustained_controls as transport, task9_study_controls as low
 from scripts.neural import task9_nvidia_cdi as cdi
 from scripts.neural.gpu_runtime_proof_helpers import HostDependencies, write_json_exclusive
@@ -53,6 +54,10 @@ RELEASE_KEYS = {'schema', 'state', 'campaign_id', 'single_use', 'source_snapshot
     'caps', 'user_approval', 'review'}
 _control_state = ContextVar('curriculum_first_control', default=None)
 _launcher_state = ContextVar('curriculum_launcher_control', default=None)
+
+
+def _extra_source(root):
+    return tuple(sorted(set(EXTRA_SOURCE) | set(profiles.source_paths(root))))
 
 
 @contextmanager
@@ -172,7 +177,7 @@ def capture_source(root: Path, destination: Path, *, learner_head: str, dirty: M
     root = Path(root).resolve(strict=True)
     if not isinstance(learner_head, str) or re.fullmatch('[0-9a-f]{40}', learner_head) is None or not isinstance(dirty, Mapping):
         raise ValueError('full source revision and honest dirty mapping required')
-    names = sorted(set(producer.source_paths(root)) | set(EXTRA_SOURCE))
+    names = sorted(set(producer.source_paths(root)) | set(_extra_source(root)))
     files = package_api.inventory(root, names)
     modes = {name: stat.S_IMODE((root/name).stat().st_mode) for name in names}
     value = dict(schema=SOURCE_SCHEMA, state='source_only', learner_head=learner_head,
@@ -230,37 +235,48 @@ def runtime_pins(root):
     if any(evidence.get(k) != v for k, v in expected.items()):
         raise ValueError('qualified device evidence differs')
     cdi.load_runtime_profile(root)
-    return dict(image=low.IMAGE, image_id=low.IMAGE_ID, gpu_uuid=low.GPU_UUID,
+    result = dict(image=low.IMAGE, image_id=low.IMAGE_ID, gpu_uuid=low.GPU_UUID,
         python_sha256=PYTHON_SHA256,
         lock_sha256=low.LOCK_SHA256, native_sha256=low.NATIVE_SHA256,
         profile_sha256=package_api.sha256(root/cdi.PROFILE_PATH),
         qualification_sha256=package_api.sha256(qualification), versions=PIN_VERSIONS,
         threads={'intraop': 4, 'interop': 1}, cpu=4, memory_bytes=8*GIB,
         qualification_pids=128, campaign_pids=512)
+    if profiles.current().fixed:
+        overlay = profiles.overlay_pins(root)
+        profiles.verify_overlay(root/overlay['package_overlay']['path'], overlay['package_overlay']['inventory'])
+        result.update(overlay)
+    return result
 
 
 def release_caps(root):
-    campaign = _read(Path(root)/package_api.CAMPAIGN_PATH)
+    campaign = _read(Path(root)/profiles.current().campaign_path)
     return dict(global_effect_caps=CAPS, whole_seconds=36000, training_stop_second=33600,
         evaluation_seconds=1800, storage=campaign['storage'], matched_arm=campaign['matched_arm'],
         qualification=campaign['qualification'], segment=campaign['segment'])
 
 
 def qualification_inventory(root):
-    directory = Path(root)/QUAL_INPUT
+    directory = Path(root)/profiles.current().qualification_input
     names = sorted(p.name for p in directory.iterdir() if p.is_file())
     if any(p.is_symlink() or not p.is_file() for p in directory.iterdir()):
         raise ValueError('held qualification inputs are not closed regular files')
-    return package_api.inventory(directory, names)
+    result = package_api.inventory(directory, names)
+    if profiles.current().fixed:
+        authored = Path(root)/'configs/neural/experiments/curriculum-v2/qualification'
+        expected = package_api.inventory(authored, sorted(p.name for p in authored.iterdir()))
+        if result != expected:
+            raise ValueError('fixed qualification differs from source-bound authored inputs')
+    return result
 
 
 def release_template(root, *, package_path, source_snapshot, user_approval):
     root = Path(root).resolve(strict=True)
     approval = low._safe(root, user_approval, exists=True)
-    return dict(schema=RELEASE_SCHEMA, state='pending_review', campaign_id=package_api.CAMPAIGN_ID,
+    return dict(schema=RELEASE_SCHEMA, state='pending_review', campaign_id=profiles.current().campaign_id,
         single_use=True, source_snapshot_sha256=package_api.sha256(source_snapshot),
         package_sha256=package_api.sha256(package_path),
-        campaign_raw_sha256=package_api.sha256(root/package_api.CAMPAIGN_PATH),
+        campaign_raw_sha256=package_api.sha256(root/profiles.current().campaign_path),
         qualification_input_inventory=qualification_inventory(root), runtime_pins=runtime_pins(root),
         caps=release_caps(root), user_approval=dict(path=str(approval.relative_to(root)), sha256=package_api.sha256(approval)),
         review={'approved': False, 'reports': []})
@@ -271,7 +287,7 @@ def validate_release(root, *, package_path, source_snapshot, release_path):
     release, snapshot = _read(release_path), _read(source_snapshot)
     _snapshot_schema(snapshot)
     if (set(release) != RELEASE_KEYS or release['schema'] != RELEASE_SCHEMA
-            or release['state'] != 'approved' or release['campaign_id'] != package_api.CAMPAIGN_ID
+            or release['state'] != 'approved' or release['campaign_id'] != profiles.current().campaign_id
             or release['single_use'] is not True or not isinstance(release['review'], dict)
             or set(release['review']) != {'approved', 'reports'} or release['review']['approved'] is not True
             or not isinstance(release['review']['reports'], list) or len(release['review']['reports']) < 2
@@ -285,11 +301,11 @@ def validate_release(root, *, package_path, source_snapshot, release_path):
     if any(not _same(release[k], expected[k]) for k in RELEASE_KEYS - {'state', 'review'}):
         raise ValueError('release source/package/approval/runtime/cap binding differs')
     authority = _read(low._safe(root, approval['path'], exists=True))
-    if (authority.get('campaign_id') != package_api.CAMPAIGN_ID or authority.get('new_runtime_authorized') is not True
+    if (authority.get('campaign_id') != profiles.current().campaign_id or authority.get('new_runtime_authorized') is not True
             or authority.get('whole_runtime_wall_seconds') != 36000 or authority.get('standalone_only') is not True):
         raise ValueError('user authority scope differs')
     package_api.verify_inventory(root, snapshot['files'])
-    if set(snapshot['files']) != set(producer.source_paths(root)) | set(EXTRA_SOURCE):
+    if set(snapshot['files']) != set(producer.source_paths(root)) | set(_extra_source(root)):
         raise ValueError('reviewed source inventory differs')
     if any(stat.S_IMODE((root/name).stat().st_mode) != mode for name, mode in snapshot['modes'].items()):
         raise ValueError('reviewed checkout source mode differs')
@@ -342,7 +358,7 @@ def _result_descriptor(pid, descriptor):
 def _controller_argv(root, package_path, source_snapshot, release_path):
     return [sys.executable, '-B', str(Path(__file__).resolve()), 'run', '--root', str(root),
         '--package', str(Path(package_path).absolute()), '--source', str(Path(source_snapshot).absolute()),
-        '--release', str(Path(release_path).absolute())]
+        '--release', str(Path(release_path).absolute()), *profiles.arguments()]
 
 
 def _verify_supervision(root, *, package_path, source_snapshot, release_path, clock=time.monotonic):
@@ -468,7 +484,7 @@ def initialize_stage(root, host, verified):
     """Freeze source once; all nested RO bind targets exist before OCI setup."""
     stage = Path(host)/'source'
     stage_source(root, stage, verified['snapshot'])
-    for name in (PACKAGE_INPUT, QUAL_INPUT, Path(verified['package']['original_parent']['checkpoint_directory'])):
+    for name in ((profiles.current().domain / 'inputs'), profiles.current().qualification_input, Path(verified['package']['original_parent']['checkpoint_directory'])):
         (stage/name).mkdir(parents=True, exist_ok=True)
     (stage/'inputs').mkdir()
     (stage/'inputs/predecessor.json').touch()
@@ -498,6 +514,8 @@ def _environment(context, digest):
     # creating a child that would invalidate the producer's empty-root check.
     value.update({name: context['output_root'] for name in low.SCRATCH})
     value[ENV_CONTEXT] = digest
+    if profiles.current().fixed:
+        value['PYTHONPATH'] = profiles.OVERLAY_DESTINATION+':'+value['PYTHONPATH']
     if context['kind'] == 'qualification':
         value['SPIRE_LEARN_RUN_NEURAL_CURRICULUM_INTEGRATION'] = '1'
     return value
@@ -510,7 +528,7 @@ def _spec(context, context_path, layout):
         ('release', 'release_sha256'), ('claim', 'claim_sha256'))}
     labels['curriculum.context'] = digest
     command = ('-B', '/learner/scripts/neural/curriculum_runtime.py', '_guest', '--root', '/learner',
-               '--context', '/control/job.json')
+               '--context', '/control/job.json', *profiles.arguments())
     return low.PhaseSpec(context['job_id'], layout['name'], context['campaign_id'],
         context['release_sha256'], digest, context['claim_sha256'], context['deadline'],
         context['whole_deadline'], context['output_root'], command,
@@ -553,7 +571,7 @@ def prepare_job(root, host, verified, budget, *, kind, job_id, parent, arm=None,
             raise ValueError('training arm/index differs')
         names = package['training'][arm][index]['inputs']
         bindings = {name: package['inventory'][name] for name in names}
-        input_relative = PACKAGE_INPUT
+        input_relative = (profiles.current().domain / 'inputs')
         output_relative = Path('training')/arm/'runs'
         reservation = dict(environment_attempts=4096, sample_rows=4096, optimizer_attempts=256,
                            reset_slots=4112, fixed_random_choices=0)
@@ -575,12 +593,12 @@ def prepare_job(root, host, verified, budget, *, kind, job_id, parent, arm=None,
     elif kind == 'panel':
         names = sorted({package['panel']['path']} | {name for row in package['panel']['cases'] for name in row['inputs']})
         bindings = {name: package['inventory'][name] for name in names}
-        input_relative, output_relative = PACKAGE_INPUT, Path('panel/runs')
+        input_relative, output_relative = (profiles.current().domain / 'inputs'), Path('panel/runs')
         reservation = dict(environment_attempts=16384, sample_rows=0, optimizer_attempts=0, reset_slots=64, fixed_random_choices=0)
         extra = dict(slot=slot, case_ids=[row['case_id'] for row in package['panel']['cases']])
     else:
         bindings = verified['release']['qualification_input_inventory']
-        input_relative, output_relative = QUAL_INPUT, Path('runs')
+        input_relative, output_relative = profiles.current().qualification_input, Path('runs')
         reservation = {key: verified['release']['caps']['qualification'][key] for key in CAPS}
         extra = {}
     _copy_inputs(Path(verified['package_path']).parent, package_stage,
@@ -588,21 +606,27 @@ def prepare_job(root, host, verified, budget, *, kind, job_id, parent, arm=None,
     shutil.copyfile(verified['package_path'], package_stage/'package.json')
     if kind == 'qualification':
         input_stage = job/'selected-qualification'
-        _copy_inputs(root/QUAL_INPUT, input_stage, bindings)
+        _copy_inputs(root/profiles.current().qualification_input, input_stage, bindings)
     else:
         input_stage = package_stage
     (input_stage/output_relative).mkdir(parents=True)
     guest_output = str(guest/input_relative/output_relative)
     parent_guest = str(guest/original['checkpoint_directory']) if kind == 'qualification' else '/inputs/parent'
     mounts = [(str(host/'source'), str(guest), True),
-        (str(package_stage), str(guest/PACKAGE_INPUT), True),
+        (str(package_stage), str(guest/(profiles.current().domain / 'inputs')), True),
         (str(parent_path), parent_guest if kind == 'qualification' else str(low._guest_path(parent_guest)), True),
         (str(control), str(low._guest_path('/control')), True),
         (str(root/low.VENV), str(low._guest_path('/runtime/venv-cuda')), True),
         (str(root/low.LOCK), str(low._guest_path('/runtime/requirements-cuda.lock')), True),
         (str(output), guest_output, False)]
     if kind == 'qualification':
-        mounts.insert(2, (str(input_stage), str(guest/QUAL_INPUT), True))
+        mounts.insert(2, (str(input_stage), str(guest/profiles.current().qualification_input), True))
+    if profiles.current().fixed:
+        overlay = profiles.overlay_pins(root)
+        if any(not _same(verified['release']['runtime_pins'].get(key), value) for key, value in overlay.items()):
+            raise ValueError('released package overlay differs')
+        profiles.verify_overlay(root/overlay['package_overlay']['path'], overlay['package_overlay']['inventory'])
+        mounts.append((str(root/overlay['package_overlay']['path']), str(low._guest_path(profiles.OVERLAY_DESTINATION)), True))
     if predecessor is not None:
         if kind != 'segment' or set(predecessor) != {'path', 'sha256'}:
             raise ValueError('predecessor binding differs')
@@ -629,7 +653,7 @@ def prepare_job(root, host, verified, budget, *, kind, job_id, parent, arm=None,
         kind=kind, runtime_class='cpu' if kind == 'panel' else 'gpu',
         source_inventory=verified['snapshot']['files'], source_sha256=claim['source_sha256'],
         release_sha256=claim['release_sha256'], claim_sha256=package_api.sha256(claim_path),
-        package_path=str(PACKAGE_INPUT/'package.json'), package_sha256=claim['package_sha256'],
+        package_path=str((profiles.current().domain / 'inputs')/'package.json'), package_sha256=claim['package_sha256'],
         input_root=str(input_relative), input_inventory=bindings,
         parent=dict(path=parent_guest, inventory=parent_host['inventory']), output_root=guest_output,
         deadline=soft, whole_deadline=whole, reservation=reservation, **extra)
@@ -661,7 +685,7 @@ def verify_guest_context(root, context_path, *, clock=time.monotonic):
             or release['source_snapshot_sha256'] != context['source_sha256']
             or release['package_sha256'] != context['package_sha256'] or release['review']['approved'] is not True
             or not _same(release['caps'], release_caps(root))
-            or release['campaign_raw_sha256'] != package_api.sha256(root/package_api.CAMPAIGN_PATH)
+            or release['campaign_raw_sha256'] != package_api.sha256(root/profiles.current().campaign_path)
             or claim.get('schema') != CLAIM_SCHEMA or claim.get('campaign_id') != context['campaign_id']
             or any(claim.get(k) != context[k] for k in ('job_id', 'kind', 'release_sha256', 'source_sha256', 'package_sha256', 'reservation'))
             or claim.get('predecessor') != context.get('predecessor')
@@ -675,12 +699,14 @@ def verify_guest_context(root, context_path, *, clock=time.monotonic):
     package, input_root, parent, output, config = producer.validate_context(root, context, clock=clock)
     if context['kind'] == 'qualification' and context['input_inventory'] != release['qualification_input_inventory']:
         raise ValueError('guest held qualification input differs')
-    expected = {(str(root), True), (str(root/PACKAGE_INPUT), True),
+    expected = {(str(root), True), (str(root/(profiles.current().domain / 'inputs')), True),
         (str(low._guest_path('/control')), True), (str(low._guest_path('/runtime/venv-cuda')), True),
         (str(low._guest_path('/runtime/requirements-cuda.lock')), True), (context['output_root'], False),
         (str(parent), True)}
     if context['kind'] == 'qualification':
-        expected.add((str(root/QUAL_INPUT), True))
+        expected.add((str(root/profiles.current().qualification_input), True))
+    if profiles.current().fixed:
+        expected.add((str(low._guest_path(profiles.OVERLAY_DESTINATION)), True))
     if context.get('predecessor'):
         expected.add((str(root/'inputs/predecessor.json'), True))
     if (set(layout) != {'schema', 'name', 'mounts'} or layout['schema'] != 'spire-learn-curriculum-layout-v1'
@@ -691,7 +717,7 @@ def verify_guest_context(root, context_path, *, clock=time.monotonic):
     # Close selected file inventories, excluding the one empty writable overlay.
     selected_names = set(context['input_inventory'])
     actual = {str(p.relative_to(input_root)) for p in input_root.rglob('*') if p.is_file()}
-    if input_root == root/PACKAGE_INPUT:
+    if input_root == root/(profiles.current().domain / 'inputs'):
         selected_names.add('package.json')
     if actual != selected_names or any(p.is_symlink() for p in input_root.rglob('*')):
         raise ValueError('guest selected input tree is not closed')
@@ -713,13 +739,26 @@ def verify_guest_context(root, context_path, *, clock=time.monotonic):
             continue
         if not automatic or destination.startswith(('/learner', '/inputs', '/control', '/runtime')):
             raise ValueError('unexpected guest mount '+destination)
-    low._verify_guest_runtime()
+    imported_gym = None
+    if profiles.current().fixed:
+        overlay = profiles.overlay_pins(root)
+        if any(not _same(release['runtime_pins'].get(key), value) for key, value in overlay.items()):
+            raise ValueError('guest released package overlay differs')
+        directory = low._guest_path(profiles.OVERLAY_DESTINATION)
+        profiles.verify_overlay(directory, overlay['package_overlay']['inventory'])
+        if package_api.sha256(low._guest_path('/runtime/requirements-cuda.lock')) != low.LOCK_SHA256:
+            raise ValueError('guest dependency lock differs')
+        # Structural/source/mount/runtime-class checks have completed. Resolve
+        # only the actual selected package, then authenticate its import origin.
+        imported_gym = profiles.verify_imported_overlay(directory, overlay)
+    else:
+        low._verify_guest_runtime()
     verify_python_link(low._guest_path('/runtime/venv-cuda'))
     versions = low._runtime_metadata(low._guest_path('/runtime/venv-cuda/lib/python3.12/site-packages'))
     if any(versions.get(k) != v for k, v in PIN_VERSIONS.items()):
         raise ValueError('executing installed versions differ')
     if (release['runtime_pins']['profile_sha256'] != cdi.PROFILE_SHA256
-            or release['runtime_pins']['native_sha256'] != low.NATIVE_SHA256
+            or release['runtime_pins']['native_sha256'] != (profiles.NATIVE_SHA256 if profiles.current().fixed else low.NATIVE_SHA256)
             or release['runtime_pins']['lock_sha256'] != low.LOCK_SHA256
             or release['runtime_pins']['versions'] != PIN_VERSIONS
             or release['runtime_pins']['python_sha256'] != PYTHON_SHA256):
@@ -728,6 +767,8 @@ def verify_guest_context(root, context_path, *, clock=time.monotonic):
         context_sha256=digest, runtime_class=context['runtime_class'],
         process={k: facts[k] for k in ('uid', 'gid', 'python', 'supplementary_group_ids')},
         runtime_profile=profile, installed_distributions=versions)
+    if imported_gym is not None:
+        record['imported_gym'] = imported_gym
     encoded = transport.MARKER+json.dumps(record, sort_keys=True, separators=(',', ':'), allow_nan=False)+'\n'
     if len(encoded.encode()) > 16384:
         raise ValueError('guest admission record too large')
@@ -877,7 +918,7 @@ def reconcile_job(root, verified, context, output, *, lifecycle, budget, clock=t
             if checkpoint_inventory(checkpoint_path) != segment['checkpoint']['inventory']:
                 raise ValueError('qualification saved checkpoint changed')
             report = segment['report']
-            config = load_neural_config(Path(root)/QUAL_INPUT/f'qualification-{index}.toml')
+            config = load_neural_config(Path(root)/profiles.current().qualification_input/f'qualification-{index}.toml')
             saved = preflight_checkpoint(checkpoint_path, config.accepted_identities[0], purpose='resume')
             saved_prefix = _checkpoint_recovery(saved, config)[1]
             # The unchanged held method passes its frozen root-relative pilot
@@ -998,8 +1039,8 @@ class CampaignSchedule:
     def next(self, now):
         if not self.qualified:
             return dict(kind='qualification')
-        if 'original-b' not in self.panels_done:
-            return dict(kind='panel', slot='original-b', arm=None)
+        if self.package['evaluation_slots'][0] not in self.panels_done:
+            return dict(kind='panel', slot=self.package['evaluation_slots'][0], arm=None)
         arms = ('fixed', 'randomized', 'mixed')
         while self.arm_index < 3:
             arm = arms[self.arm_index]
@@ -1182,14 +1223,14 @@ def _run_campaign(root: Path, *, package_path: Path, source_snapshot: Path, rele
         package_path=Path(package_path), source_snapshot=Path(source_snapshot), release_path=Path(release_path))
     if deps.uid() != 1000 or deps.gid() != 1000:
         raise ValueError('campaign host UID/GID differs')
-    host = low._safe(root, RUNTIME)
+    host = low._safe(root, (profiles.current().domain / 'runtime'))
     if host.exists():
         raise ValueError('fresh campaign runtime domain already consumed')
-    storage_admission(root, root/DOMAIN, deps, reservation=GIB)
+    storage_admission(root, root/profiles.current().domain, deps, reservation=GIB)
     host.mkdir()
     # A durable campaign claim is acquired only after complete static admission.
     verified['claim_path'] = host/'campaign-claim.json'
-    claim = dict(schema=CLAIM_SCHEMA, campaign_id=package_api.CAMPAIGN_ID,
+    claim = dict(schema=CLAIM_SCHEMA, campaign_id=profiles.current().campaign_id,
         source_sha256=package_api.sha256(source_snapshot), release_sha256=package_api.sha256(release_path),
         package_sha256=package_api.sha256(package_path), parent_start=start, whole_deadline=deadline,
         supervision=supervision)
@@ -1276,7 +1317,7 @@ def _run_campaign(root: Path, *, package_path: Path, source_snapshot: Path, rele
                 qualification_seconds=budget.qualification_seconds, elapsed_seconds=deps.clock()-start))
     except BaseException as error:
         primary, status = error, 'failed'
-    seal = dict(schema='spire-learn-curriculum-campaign-result-v1', campaign_id=package_api.CAMPAIGN_ID,
+    seal = dict(schema='spire-learn-curriculum-campaign-result-v1', campaign_id=profiles.current().campaign_id,
         status=status, error=None if primary is None else low._error(primary), jobs=results,
         availability=plan.availability, prefixes=plan.prefixes, stopped_arms=plan.stopped,
         effects=budget.attempted, charged_or_reserved=budget.reserved, attempts=budget.jobs,
@@ -1401,7 +1442,7 @@ def _controller_logical_result(arguments, *, start, deadline):
         return unavailable
     try:
         root = Path(arguments[arguments.index('--root')+1]).resolve(strict=True)
-        host = root/RUNTIME
+        host = root/(profiles.current().domain / 'runtime')
         claim, seal = _read(host/'campaign-claim.json'), _read(host/'campaign-result.json')
         if any(value.get('parent_start') != start or value.get('whole_deadline') != deadline for value in (claim, seal)):
             return unavailable
@@ -1534,7 +1575,13 @@ def main(argv=None):
     parser.add_argument('--head')
     parser.add_argument('--dirty-json', type=Path)
     parser.add_argument('--result', type=Path)
+    parser.add_argument('--profile', choices=profiles.NAMES, default=profiles.HISTORICAL.name)
     args = parser.parse_args(argv)
+    with profiles.scope(args.profile):
+        return _main(args, parser)
+
+
+def _main(args, parser):
     root = args.root.resolve(strict=True)
     def required(*names):
         if any(getattr(args, name) is None for name in names):
@@ -1557,7 +1604,7 @@ def main(argv=None):
         required('package', 'source', 'release')
         verified = validate_release(root, package_path=path(args.package), source_snapshot=path(args.source),
             release_path=path(args.release))
-        value = dict(status='validated', campaign_id=package_api.CAMPAIGN_ID,
+        value = dict(status='validated', campaign_id=profiles.current().campaign_id,
             source_sha256=package_api.sha256(path(args.source)), package_sha256=package_api.sha256(path(args.package)),
             release_sha256=package_api.sha256(path(args.release)), full_package_shards=264)
     elif args.command == 'run':
@@ -1566,8 +1613,8 @@ def main(argv=None):
     else:
         required('package', 'source', 'release')
         arguments = ['run', '--root', str(root), '--package', str(path(args.package)),
-            '--source', str(path(args.source)), '--release', str(path(args.release))]
-        return launch_guard(arguments, result_path=path(args.result or DOMAIN/'launcher-result.json'),
+            '--source', str(path(args.source)), '--release', str(path(args.release)), *profiles.arguments()]
+        return launch_guard(arguments, result_path=path(args.result or profiles.current().domain/'launcher-result.json'),
                             parent_start=_ENTRY_MONOTONIC)
     print(json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False))
     return 0

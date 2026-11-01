@@ -12,6 +12,9 @@ Run these from the repository root **after** the final reviewed source commit.
 They read metadata and copy no runtime environment. The captured Git revision and
 dirty-state hash describe the real checkout, including the two preserved user
 changes. Source capture includes the new PID helper delta explicitly.
+The production capture CLI always reads actual Git provenance; `--head` and
+`--dirty-json` overrides are rejected. Explicit provenance remains only in the
+pure capture API used for authored test fixtures.
 
 ```sh
 PYTHONPATH=src python3.12 -B scripts/neural/curriculum_controls.py capture \
@@ -83,11 +86,23 @@ GNU timeout sends TERM by parent second 35,900 (rounded earlier
 to include supervisor setup), then KILL after 90 seconds. The child narrows every
 job by the same parent deadline, reserves closure/cleanup time, and stops new
 training before second 33,600. The last ten seconds cover independent parent
-result publication and exit. `launcher-result.json` records the **actual child
-exit** after waiting, including timeout/nonzero exits; its elapsed measurement
-ends before parent publication and does not pretend to include its own write.
+result publication and exit. `launcher-result.json` records the **actual GNU
+timeout watchdog wait status** in `watchdog_exit_status`, including124/137 and
+control statuses. The campaign Python process is a grandchild: its OS exit is
+explicitly `unavailable`, never presented as directly observed. Its independently
+read logical seal and finalization veto are separate fields. Whole-run completion
+requires watchdog0, a matching complete logical seal, no finalization veto and
+no parent control. The elapsed measurement ends before parent publication and
+does not pretend to include its own write.
 Parent interrupt forwarding targets only its newly owned process group; repeated
 signals cannot bypass waiting. No unrelated PID is signaled.
+Before claim or Docker admission, production `run` verifies the actual Linux
+controller→GNU timeout→launcher PID/start-time/cmdline/session chain, the exact
+TERM/KILL duration, controller source binding and the launcher's still-open owned
+result descriptor. Public metadata is read only for this known chain. Caller
+timestamps alone cannot bypass the independent watchdog. The launcher creates an
+exclusive sibling `<result>.supervision.json` and binds its raw hash; there is
+no public test/skip-admission mode.
 
 Static admission checks the full source/package/parent/held-input/runtime/user
 chain before acquiring the durable exclusive campaign claim. Once claimed, this
@@ -101,14 +116,23 @@ The Task 2 signal scope wraps the unchanged generic scope and preserves its
 actual first control object. Different/repeated signals within one cleanup
 command cannot replace it. A local transaction adapter promotes that first
 control over an earlier ordinary fault only after generic full-ID cleanup;
-all handlers and context state are restored on exit.
+all handlers and context state are restored on exit. This protection remains
+active through campaign seal and fsync. Signals during sealing defer until the
+owned publication finishes; the actual first control then stops the controller.
+Any sealing failure publishes `campaign-seal-failure.json` when writable and
+vetoes success. A logical `campaign-result.json` explicitly has
+`whole_run_claim=false`; a partial/late seal can never establish completion by
+itself, including when writing its failure veto also fails.
 
 ## Frozen schedule and accounting
 
-1. Invoke the unchanged held qualification method once, with shared exact
-   512 actions/512 samples/8 Adam/256 resets, 120-second soft and at most
+1. Invoke the unchanged held qualification method once, with shared ceilings
+   of512 actions/512 samples/8 Adam/256 resets, 120-second soft and at most
    600-second whole lease; output is within 1 GiB of the total 12 GiB allowance.
-   Failure stops everything. Qualification weights never become a campaign parent.
+   Failure stops everything. Actual totals may be lower; no filler effects run.
+   Host independently reconciles actual effects with both real reports/saved
+   prefixes and the expected update1→2 progression. Qualification weights never
+   become a campaign parent.
 2. Evaluate the original B checkpoint on the fixed 64-case CPU development panel.
 3. Run fixed, randomized and mixed arms in that order. Each starts from original
    B weights with fresh state and paired seeds 1103/2207/3301/4409. Each short arm
@@ -175,9 +199,11 @@ The fresh runtime root is
 - `attempts/<job-id>.json`: actual Docker command stdout/stderr/exits, owned
   cleanup/admission outcome, reserved/actual effects and failure/control notes.
 - `progress/NNNN.json`: append-only prefix/effect/availability snapshots.
-- `campaign-result.json`: final child result, all true prefixes, availability,
-  charged/reserved attempts and error. The independent sibling
-  `launcher-result.json` closes actual child-exit accounting.
+- `campaign-result.json`: controller logical result, all true prefixes,
+  availability, charged/reserved attempts and error, with no whole-run claim.
+  `campaign-seal-failure.json`, when present, vetoes completion. The independent
+  sibling `launcher-result.json` records actual watchdog wait/accounting and
+  separately reports controller logical evidence and unavailable controller OS exit.
 
 Inspect these files read-only. No monitoring command changes a service or
 signals a GPU process. If a timeout, native fault, close failure or publication

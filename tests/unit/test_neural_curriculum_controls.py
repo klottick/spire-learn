@@ -178,8 +178,9 @@ class ControlContractTests(unittest.TestCase):
                 result_path=Path(directory)/'outer.json', clock=lambda: now[0], run=execute)
             retained = json.loads((Path(directory)/'outer.json').read_text())
         self.assertEqual(result, 17)
-        self.assertEqual(retained['child_exit_code'], 17)
-        self.assertEqual(calls[0][0][:5], ['/usr/bin/timeout', '--signal=TERM', '--kill-after=90s', '35900s', sys.executable])
+        self.assertEqual(retained['watchdog_exit_status'], 17)
+        self.assertEqual(retained['controller_os_exit_status']['availability'], 'unavailable')
+        self.assertEqual(calls[0][0][:5], ['/usr/bin/timeout', '--signal=TERM', '--kill-after=90s', '35899s', sys.executable])
         self.assertEqual(calls[0][1]['env']['SPIRE_LEARN_CURRICULUM_PARENT_DEADLINE'], '36005.0')
         self.assertEqual(retained['elapsed_seconds'], 1.)
 
@@ -191,7 +192,7 @@ class ControlContractTests(unittest.TestCase):
                 api.launch_guard(['run'], result_path=path, clock=lambda: 5.,
                     run=lambda *a, **k: (_ for _ in ()).throw(OSError('spawn failed')))
             retained = json.loads(path.read_text())
-        self.assertIsNone(retained['child_exit_code'])
+        self.assertIsNone(retained['watchdog_exit_status'])
         self.assertEqual(retained['error']['type'], 'OSError')
 
     def test_schedule_is_fixed_and_availability_preserves_missing_prefixes(self):
@@ -302,6 +303,112 @@ print('fresh import/help/stale-validation/discovery: six optional prefixes block
             capture_output=True, text=True)
         self.assertEqual(child.returncode, 0, child.stderr)
         self.assertIn('zero attempts', child.stdout)
+
+    def test_run_rejects_forged_parent_timestamps_before_static_admission(self):
+        api = self.controls()
+        with patch.dict(os.environ, {'SPIRE_LEARN_CURRICULUM_PARENT_START': '100.0',
+                'SPIRE_LEARN_CURRICULUM_PARENT_DEADLINE': '36100.0'}), \
+             patch.object(api, 'validate_release', side_effect=AssertionError('unowned static admission')) as validate:
+            with self.assertRaisesRegex(ValueError, 'supervis'):
+                api.run_campaign(ROOT, package_path=Path('unused'), source_snapshot=Path('unused'),
+                    release_path=Path('unused'), dependencies=api.HostDependencies(clock=lambda: 100.))
+        validate.assert_not_called()
+
+    def test_watchdog_timeout_and_control_status_never_become_controller_os_exit(self):
+        api = self.controls()
+        for code in (0, 124, 137, 143, -signal.SIGTERM):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)/'outer.json'
+                api.launch_guard(['run'], result_path=path, clock=lambda: 5.,
+                    run=lambda argv, **kwargs: subprocess.CompletedProcess(argv, code))
+                result = json.loads(path.read_text())
+                self.assertEqual(result['watchdog_exit_status'], code)
+                self.assertEqual(result['controller_os_exit_status'], {
+                    'availability': 'unavailable', 'reason': 'only GNU timeout was directly waited on'})
+                self.assertFalse(result['whole_run_complete'])
+
+    def test_capture_cli_rejects_provenance_overrides(self):
+        api = self.controls()
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)/'never.json'
+            with self.assertRaises(SystemExit) as stopped:
+                api.main(['capture', '--root', str(ROOT), '--destination', str(destination), '--head', 'a'*40])
+            self.assertEqual(stopped.exception.code, 2)
+            self.assertFalse(destination.exists())
+
+    def test_actual_owned_launch_proc_access_reaches_only_rejected_static_admission(self):
+        api = self.controls()
+        with tempfile.TemporaryDirectory(dir=ROOT/api.DOMAIN/'task-2') as directory:
+            base = Path(directory)
+            rejected, result_path = base/'invalid.json', base/'outer.json'
+            rejected.write_text('{}')
+            environment = {k: v for k, v in os.environ.items() if not k.startswith('SPIRE_LEARN_RUN_')}
+            environment['PYTHONPATH'] = 'src'
+            command = [sys.executable, '-B', str(ROOT/'scripts/neural/curriculum_controls.py'), '_launch',
+                '--root', str(ROOT), '--package', str(package_fixture()[0]/'package.json'),
+                '--source', str(rejected), '--release', str(rejected), '--result', str(result_path)]
+            child = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15)
+            self.assertEqual(child.returncode, 1, child.stderr)
+            self.assertIn('source snapshot schema differs', child.stderr)
+            result = json.loads(result_path.read_text())
+            self.assertEqual(result['watchdog_exit_status'], 1)
+            self.assertFalse(result['whole_run_complete'])
+            self.assertEqual(result['controller_os_exit_status']['availability'], 'unavailable')
+            self.assertFalse((ROOT/api.RUNTIME).exists())
+
+    def test_supervisor_policy_checks_chain_limits_open_result_and_source_binding(self):
+        api = self.controls()
+        with tempfile.TemporaryDirectory(dir=ROOT/api.DOMAIN/'task-2') as directory:
+            base = Path(directory)
+            result, binding_path = base/'result.json', base/'binding.json'
+            result.touch()
+            info = result.stat()
+            inputs = dict(package_path=package_fixture()[0]/'package.json', source_snapshot=base/'source.json',
+                          release_path=base/'release.json')
+            child_argv = api._controller_argv(ROOT, **inputs)
+            watchdog_argv = ['/usr/bin/timeout', '--signal=TERM', '--kill-after=90s', '35898s', *child_argv]
+            ticks = os.sysconf('SC_CLK_TCK')
+            launcher_pid, watchdog_pid, child_pid = 55501, 55502, os.getpid()
+            common = dict(uid=1000, state='S', cwd=str(ROOT), executable=str(Path(sys.executable).resolve()))
+            facts = {
+                launcher_pid: dict(common, pid=launcher_pid, ppid=1, pgid=launcher_pid, session=launcher_pid,
+                    start_ticks=1000*ticks, argv=[sys.executable, '-B', child_argv[2], '_launch']),
+                watchdog_pid: dict(common, pid=watchdog_pid, ppid=launcher_pid, pgid=watchdog_pid, session=watchdog_pid,
+                    start_ticks=1000*ticks+1, argv=watchdog_argv, executable=str(Path('/usr/bin/timeout').resolve())),
+                child_pid: dict(common, pid=child_pid, ppid=watchdog_pid, pgid=watchdog_pid, session=watchdog_pid,
+                    start_ticks=1000*ticks+2, argv=child_argv)}
+            binding = dict(schema='spire-learn-curriculum-supervision-v1', launcher_pid=launcher_pid,
+                launcher_start_ticks=1000*ticks, parent_start=1000., whole_deadline=37000.,
+                watchdog_argv=watchdog_argv, result_path=str(result), result_fd=3,
+                result_device=info.st_dev, result_inode=info.st_ino, controller_source_sha256=api.package_api.sha256(Path(api.__file__)))
+            descriptor = dict(path=str(result), device=info.st_dev, inode=info.st_ino, uid=1000, regular=True, writable=True)
+            def verify(rows=facts, link=descriptor, value=binding):
+                binding_path.write_text(json.dumps(value))
+                with blocked_optional(), patch.dict(os.environ, {
+                    'SPIRE_LEARN_CURRICULUM_SUPERVISION': str(binding_path),
+                    'SPIRE_LEARN_CURRICULUM_SUPERVISION_SHA256': api.package_api.sha256(binding_path),
+                    'SPIRE_LEARN_CURRICULUM_PARENT_START': '1000.0',
+                    'SPIRE_LEARN_CURRICULUM_PARENT_DEADLINE': '37000.0'}), \
+                     patch.object(api, '_proc_identity', side_effect=lambda pid: copy.deepcopy(rows[pid])), \
+                     patch.object(api, '_result_descriptor', return_value=link):
+                    return api._verify_supervision(ROOT, **inputs, clock=lambda: 1001.)
+            self.assertEqual(verify()['watchdog_pid'], watchdog_pid)
+            for mutation in ('missing_parent', 'wrong_timeout', 'wrong_launcher', 'wrong_fd', 'wrong_source'):
+                with self.subTest(mutation=mutation):
+                    rows, link, value = copy.deepcopy(facts), dict(descriptor), copy.deepcopy(binding)
+                    if mutation == 'missing_parent':
+                        del rows[launcher_pid]
+                    elif mutation == 'wrong_timeout':
+                        rows[watchdog_pid]['argv'][2] = '--kill-after=91s'
+                        value['watchdog_argv'][2] = '--kill-after=91s'
+                    elif mutation == 'wrong_launcher':
+                        rows[launcher_pid]['argv'][3] = 'run'
+                    elif mutation == 'wrong_fd':
+                        link['writable'] = False
+                    else:
+                        value['controller_source_sha256'] = '0'*64
+                    with self.assertRaises(ValueError):
+                        verify(rows, link, value)
 
 
 class ProjectedHostTests(unittest.TestCase):
@@ -577,6 +684,70 @@ class ProjectedHostTests(unittest.TestCase):
                         lifecycle={'container_id': 'a'*64, 'removal_entered': True,
                             'admission': {'job_id': self.context['job_id']}}, budget=budget, clock=lambda: self.now)
 
+    def test_qualification_actual_effects_and_one_update_progression_cross_reconcile(self):
+        self.execute(self.prepare('qualification', job='qualification-crosscheck'))
+        originals = {path: path.read_bytes() for path in self.output.rglob('*.json')}
+        for mutation in ('actions', 'samples', 'adam', 'resets', 'report_actions', 'update_count'):
+            with self.subTest(mutation=mutation):
+                for path, raw in originals.items():
+                    path.write_bytes(raw)
+                receipt_path = self.output/'job-receipt.json'
+                receipt = json.loads(receipt_path.read_text())
+                if mutation == 'report_actions':
+                    segment = receipt['qualification_segments'][0]
+                    checkpoint = self.api._mapped(self.context, self.output, segment['checkpoint']['path'])
+                    summary_path = checkpoint.parent/'summary.json'
+                    envelope = json.loads(summary_path.read_text())
+                    segment['report']['collection']['attempted_environment_slots'] += 4
+                    envelope['summary']['collection']['attempted_environment_slots'] += 4
+                    envelope['summary_sha256'] = self.api.transport.canonical_sha256(envelope['summary'])
+                    summary_path.write_text(json.dumps(envelope))
+                elif mutation == 'update_count':
+                    segment = receipt['qualification_segments'][0]
+                    checkpoint = self.api._mapped(self.context, self.output, segment['checkpoint']['path'])
+                    metadata_path = checkpoint/'metadata.json'
+                    metadata = json.loads(metadata_path.read_text())
+                    metadata['training_state']['counters']['update_count'] = 2
+                    metadata['run_metadata']['cumulative_prefix']['update_count'] = 2
+                    metadata_path.write_text(json.dumps(metadata))
+                    segment['saved_prefix']['update_count'] = 2
+                    segment['checkpoint']['inventory']['metadata.json'] = {
+                        'sha256': self.api.package_api.sha256(metadata_path), 'size_bytes': metadata_path.stat().st_size}
+                else:
+                    kind = dict(actions='environment_attempts', samples='sample_rows', adam='optimizer_attempts', resets='reset_slots')[mutation]
+                    difference = -1 if mutation == 'adam' else 1
+                    control = self.output/'campaign-control'
+                    attempts_path = control/'attempts.json'
+                    attempts = json.loads(attempts_path.read_text())
+                    receipt['qualification_attempts'][mutation] += difference
+                    attempts['qualification_attempts'][mutation] += difference
+                    for key in ('reserved', 'attempted', 'delivered'):
+                        receipt['effects'][kind][key] += difference
+                        attempts['effects'][kind][key] += difference
+                        attempts['categories']['qualification-'+mutation][key] += difference
+                    selected = None
+                    for part in attempts['journal']:
+                        path = control/part['path']
+                        journal = json.loads(path.read_text())
+                        for row in journal['records']:
+                            if selected is None and row['kind'] == kind:
+                                selected = row['operation_id']
+                            if row['operation_id'] == selected:
+                                row['reserved'] += difference
+                                if row['event'] == 'settle':
+                                    row['attempted'] += difference
+                                    row['delivered'] += difference
+                        path.write_text(json.dumps(journal))
+                        part.update(sha256=self.api.package_api.sha256(path), size_bytes=path.stat().st_size)
+                    attempts_path.write_text(json.dumps(attempts))
+                receipt_path.write_text(json.dumps(receipt))
+                budget = self.api.CampaignBudget(self.api.CAPS, start=100., deadline=36100., clock=lambda: self.now)
+                budget.reserve(self.context['job_id'], self.context['reservation'])
+                with self.assertRaises(ValueError):
+                    self.api.reconcile_job(ROOT, self.verified, self.context, self.output,
+                        lifecycle={'container_id': 'a'*64, 'removal_entered': True,
+                            'admission': {'job_id': self.context['job_id']}}, budget=budget, clock=lambda: self.now)
+
     def test_preflight_interrupt_keeps_lease_and_owned_cleanup_runs_once(self):
         prepared = self.prepare(arm='fixed', index=0)
         self.harness.close_error = SystemExit('close control')
@@ -732,6 +903,7 @@ class ProjectedHostTests(unittest.TestCase):
                 'SPIRE_LEARN_CURRICULUM_PARENT_START': '100.0',
                 'SPIRE_LEARN_CURRICULUM_PARENT_DEADLINE': '36100.0'}), \
              patch.object(api, 'RUNTIME', self.h.relative_to(ROOT)), \
+             patch.object(api, '_verify_supervision', return_value={'parent_start': 100., 'whole_deadline': 36100.}), \
              patch.object(api, 'validate_release', return_value=self.verified), \
              patch.object(api.low, '_docker_binary', return_value='/fake/docker'), \
              patch.object(api.cdi, 'verify_host_profile'), \
@@ -739,6 +911,18 @@ class ProjectedHostTests(unittest.TestCase):
             seal = api.run_campaign(ROOT, package_path=self.fixture/'package.json',
                 source_snapshot=self.source_path, release_path=self.release_path,
                 dependencies=self.deps, clock=lambda: self.now)
+            normal = self.base/'normal-watchdog-result.json'
+            api.launch_guard(['run', '--root', str(ROOT)], result_path=normal, parent_start=100.,
+                clock=lambda: self.now, run=lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0))
+            observed = json.loads(normal.read_text())
+            self.assertTrue(observed['whole_run_complete'])
+            self.assertEqual(observed['controller_logical_result']['status'], 'complete')
+            self.assertEqual(observed['controller_os_exit_status']['availability'], 'unavailable')
+            api._write(self.h/'campaign-seal-failure.json', {'status': 'failed'})
+            veto = self.base/'veto-watchdog-result.json'
+            api.launch_guard(['run', '--root', str(ROOT)], result_path=veto, parent_start=100.,
+                clock=lambda: self.now, run=lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0))
+            self.assertFalse(json.loads(veto.read_text())['whole_run_complete'])
         self.assertEqual(seal['status'], 'complete')
         self.assertEqual([row['job_id'] for row in seal['jobs']], [
             'curriculum-qualification', 'curriculum-panel-original-b', 'curriculum-fixed-000',
@@ -757,6 +941,54 @@ class ProjectedHostTests(unittest.TestCase):
         with patch.object(self.api.low, 'tree_bytes', return_value=0):
             with self.assertRaises(RuntimeError):
                 self.api.storage_admission(ROOT, self.h, self.deps, reservation=1)
+
+    def test_signal_scope_covers_seal_write_fsync_and_failure_veto_publication(self):
+        api = self.api
+        original_write, original_fsync = api._write, os.fsync
+        for index, stage in enumerate(('write', 'fsync', 'veto_failure')):
+            with self.subTest(stage=stage):
+                host = self.base/f'seal-{index}'
+                active = [False]
+                def deliver():
+                    self.assertIsNotNone(api._control_state.get(), 'sealing lost its owned signal scope')
+                    signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+                    signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+                def write(path, value):
+                    if Path(path).name == 'campaign-result.json':
+                        if stage in ('write', 'veto_failure'):
+                            deliver()
+                        active[0] = True
+                        try:
+                            if stage == 'veto_failure':
+                                raise OSError('seal publication failed')
+                            return original_write(path, value)
+                        finally:
+                            active[0] = False
+                    if Path(path).name == 'campaign-seal-failure.json' and stage == 'veto_failure':
+                        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+                        raise SystemExit('later veto publication control')
+                    return original_write(path, value)
+                def fsync(descriptor):
+                    if active[0] and stage == 'fsync':
+                        deliver()
+                    return original_fsync(descriptor)
+                previous = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
+                with blocked_optional(), patch.object(api, 'RUNTIME', host.relative_to(ROOT)), \
+                     patch.object(api, '_verify_supervision', return_value={'parent_start': 100., 'whole_deadline': 36100.}), \
+                     patch.object(api, 'validate_release', return_value=self.verified), \
+                     patch.object(api.low, '_docker_binary', return_value='/fake/docker'), \
+                     patch.object(api.CampaignSchedule, 'next', return_value=None), \
+                     patch.object(api, '_write', side_effect=write), patch.object(os, 'fsync', side_effect=fsync):
+                    with self.assertRaises(api.low._Termination) as stopped:
+                        api.run_campaign(ROOT, package_path=self.fixture/'package.json', source_snapshot=self.source_path,
+                            release_path=self.release_path, dependencies=self.deps, clock=lambda: self.now)
+                self.assertEqual(str(stopped.exception), 'signal '+str(signal.SIGINT))
+                self.assertEqual({number: signal.getsignal(number) for number in previous}, previous)
+                if (host/'campaign-result.json').exists():
+                    self.assertFalse(json.loads((host/'campaign-result.json').read_text())['whole_run_claim'])
+                if stage != 'veto_failure':
+                    self.assertEqual(json.loads((host/'campaign-seal-failure.json').read_text())['status'], 'failed')
+                self.assertEqual(self.calls, [])
 
 
 if __name__ == '__main__':

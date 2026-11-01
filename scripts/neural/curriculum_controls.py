@@ -59,10 +59,14 @@ def campaign_signal_scope():
     """Reuse owned cleanup deferral, retaining the actual first signal object."""
     with transport.signal_scope():
         deferred = transport._signals.get()
-        state = {'first': None}
+        state = {'first': None, 'sealing': False}
         token = _control_state.set(state)
         previous = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
         def handler(number, frame):
+            if state['sealing']:
+                if state['first'] is None:
+                    state['first'] = low._Termination('signal '+str(number))
+                return  # Finish the owned seal/veto write before unwinding.
             # The generic handler replaces deferred controls. Stop that
             # replacement before it happens, including within one command.
             if deferred['cleanup'] and deferred['deferred'] is not None:
@@ -82,6 +86,8 @@ def campaign_signal_scope():
             signal.signal(number, handler)
         try:
             yield
+            if state['first'] is not None:
+                raise state['first']
         except BaseException as error:
             first = state['first']
             if first is not None and first is not error:
@@ -307,6 +313,100 @@ def _counts(value):
     if any(type(v) is not int or v < 0 for v in value.values()):
         raise ValueError('effect values must be nonnegative primitive integers')
     return dict(value)
+
+
+def _proc_identity(pid):
+    """Public Linux metadata for one known controller/owned ancestor only."""
+    if type(pid) is not int or pid <= 0:
+        raise ValueError('invalid supervisor process identity')
+    directory = Path('/proc')/str(pid)
+    fields = (directory/'stat').read_text().rsplit(') ', 1)[1].split()
+    return dict(pid=pid, ppid=int(fields[1]), pgid=int(fields[2]), session=int(fields[3]),
+        start_ticks=int(fields[19]), state=fields[0], uid=directory.stat().st_uid,
+        executable=os.readlink(directory/'exe'), cwd=os.readlink(directory/'cwd'),
+        argv=[part.decode() for part in (directory/'cmdline').read_bytes().split(b'\0') if part])
+
+
+def _result_descriptor(pid, descriptor):
+    if type(descriptor) is not int or not 0 <= descriptor < 1048576:
+        raise ValueError('invalid supervisor result descriptor')
+    path = Path('/proc')/str(pid)/'fd'/str(descriptor)
+    info = path.stat()
+    flags = next(line.split()[1] for line in (path.parent.parent/'fdinfo'/str(descriptor)).read_text().splitlines()
+                 if line.startswith('flags:'))
+    return dict(path=os.readlink(path), device=info.st_dev, inode=info.st_ino, uid=info.st_uid,
+        regular=stat.S_ISREG(info.st_mode), writable=int(flags, 8)&os.O_ACCMODE in (os.O_WRONLY, os.O_RDWR))
+
+
+def _controller_argv(root, package_path, source_snapshot, release_path):
+    return [sys.executable, '-B', str(Path(__file__).resolve()), 'run', '--root', str(root),
+        '--package', str(Path(package_path).absolute()), '--source', str(Path(source_snapshot).absolute()),
+        '--release', str(Path(release_path).absolute())]
+
+
+def _verify_supervision(root, *, package_path, source_snapshot, release_path, clock=time.monotonic):
+    """Require the live owned timeout→launcher chain and its open result file."""
+    try:
+        binding_path = low._safe(root, os.environ['SPIRE_LEARN_CURRICULUM_SUPERVISION'], exists=True)
+        binding = package_api.read_json(binding_path, maximum=65536)
+        if package_api.sha256(binding_path) != os.environ['SPIRE_LEARN_CURRICULUM_SUPERVISION_SHA256']:
+            raise ValueError('supervision binding raw bytes differ')
+        expected_keys = {'schema', 'launcher_pid', 'launcher_start_ticks', 'parent_start', 'whole_deadline',
+            'watchdog_argv', 'result_path', 'result_fd', 'result_device', 'result_inode', 'controller_source_sha256'}
+        if set(binding) != expected_keys or binding['schema'] != 'spire-learn-curriculum-supervision-v1':
+            raise ValueError('supervision binding schema differs')
+        start = _number(binding['parent_start'], 'supervisor start')
+        deadline = _number(binding['whole_deadline'], 'supervisor deadline')
+        if (deadline != start+36000. or not start <= clock() < deadline-110.
+                or float(os.environ['SPIRE_LEARN_CURRICULUM_PARENT_START']) != start
+                or float(os.environ['SPIRE_LEARN_CURRICULUM_PARENT_DEADLINE']) != deadline
+                or binding['controller_source_sha256'] != package_api.sha256(Path(__file__))):
+            raise ValueError('supervision whole deadline/source differs')
+        expected_child = _controller_argv(root, package_path, source_snapshot, release_path)
+        command = binding['watchdog_argv']
+        child = _proc_identity(os.getpid())
+        if child['argv'] != expected_child:
+            raise ValueError('actual supervised controller command differs')
+        watchdog = _proc_identity(child['ppid'])
+        if (watchdog['argv'] != command or watchdog['executable'] != str(Path('/usr/bin/timeout').resolve())
+                or watchdog['ppid'] != binding['launcher_pid']):
+            raise ValueError('actual owned supervision watchdog differs')
+        launcher = _proc_identity(watchdog['ppid'])
+        if (not isinstance(command, list) or len(command) != 4+len(expected_child)
+                or command[:3] != ['/usr/bin/timeout', '--signal=TERM', '--kill-after=90s']
+                or re.fullmatch(r'[1-9][0-9]*s', command[3]) is None
+                or not 1 <= int(command[3][:-1]) <= 35900 or command[4:] != expected_child
+                or child['argv'] != expected_child or watchdog['argv'] != command
+                or watchdog['executable'] != str(Path('/usr/bin/timeout').resolve())
+                or launcher['pid'] != binding['launcher_pid'] or launcher['start_ticks'] != binding['launcher_start_ticks']
+                or launcher['executable'] != str(Path(sys.executable).resolve())
+                or len(launcher['argv']) < 4 or launcher['argv'][1] != '-B'
+                or str((Path(launcher['cwd'])/launcher['argv'][2]).resolve()) != str(Path(__file__).resolve())
+                or launcher['argv'][3] != '_launch'
+                or any(row['uid'] != 1000 or row['state'] in ('Z', 'X') for row in (child, watchdog, launcher))
+                or watchdog['session'] != watchdog['pid'] or watchdog['pgid'] != watchdog['pid']
+                or child['session'] != watchdog['session'] or child['pgid'] != watchdog['pgid']
+                or not launcher['start_ticks'] <= watchdog['start_ticks'] <= child['start_ticks']):
+            raise ValueError('actual owned supervision process chain differs')
+        ticks = os.sysconf('SC_CLK_TCK')
+        if (not -.1 <= start-launcher['start_ticks']/ticks <= 30.
+                or watchdog['start_ticks']/ticks+int(command[3][:-1])+90. > start+35990.1):
+            raise ValueError('actual watchdog hard-stop limit differs')
+        result_path = low._safe(root, binding['result_path'], exists=True)
+        info = result_path.lstat()
+        observed = _result_descriptor(launcher['pid'], binding['result_fd'])
+        expected = dict(path=str(result_path), device=binding['result_device'], inode=binding['result_inode'],
+            uid=1000, regular=True, writable=True)
+        if (observed != expected or not stat.S_ISREG(info.st_mode) or info.st_uid != 1000
+                or (info.st_dev, info.st_ino) != (binding['result_device'], binding['result_inode'])
+                or info.st_size != 0 or info.st_mode & 0o002):
+            raise ValueError('owned supervisor result descriptor differs')
+        if any(_proc_identity(row['pid'])['start_ticks'] != row['start_ticks'] for row in (launcher, watchdog)):
+            raise ValueError('supervision identity changed during admission')
+        return dict(parent_start=start, whole_deadline=deadline, binding_sha256=package_api.sha256(binding_path),
+            launcher_pid=launcher['pid'], watchdog_pid=watchdog['pid'], result_path=str(result_path))
+    except (OSError, KeyError, IndexError, StopIteration, TypeError) as error:
+        raise ValueError('independent owned supervision is missing or unavailable') from error
 
 
 class CampaignBudget:
@@ -768,9 +868,9 @@ def reconcile_job(root, verified, context, output, *, lifecycle, budget, clock=t
                 or any(type(actual[k]) is not int or not 0 < actual[k] <= context['reservation'][v]
                        or actual[k] != receipt['effects'][v]['attempted'] for k, v in names.items())):
             raise ValueError('exact healthy held qualification evidence differs')
-        if actual['adam'] != 8:
-            raise ValueError('held qualification did not complete its eight Adam attempts')
         from spire_learn.neural.runner import _checkpoint_recovery
+        previous_prefix = {}
+        expected_attempts = dict.fromkeys(names, 0)
         for index, segment in enumerate(receipt['qualification_segments']):
             checkpoint_path = _mapped(context, output, segment['checkpoint']['path'])
             if checkpoint_inventory(checkpoint_path) != segment['checkpoint']['inventory']:
@@ -783,7 +883,8 @@ def reconcile_job(root, verified, context, output, *, lifecycle, budget, clock=t
             # parent verbatim; campaign producers use /inputs/parent instead.
             expected_parent = (package['original_parent']['checkpoint_directory'] if index == 0 else
                 receipt['qualification_segments'][index-1]['checkpoint']['path'])
-            if (saved_prefix != segment['saved_prefix'] or segment['next_shard'].get('shard_index') != index+1
+            if (saved_prefix != segment['saved_prefix'] or saved_prefix['update_count'] != index+1
+                    or segment['next_shard'].get('shard_index') != index+1
                     or saved.metadata['run_metadata']['scenario_stream']['current']['shard_index'] != index
                     or saved.metadata.get('parent_checkpoint') != {'path': expected_parent}
                     or any(saved_prefix[k] for k in ('uncertain_environment_slots', 'uncertain_reset_slots', 'optimizer_uncertain_steps'))):
@@ -793,6 +894,28 @@ def reconcile_job(root, verified, context, output, *, lifecycle, budget, clock=t
             _report(context, output, report, files)
             if report.get('status') != 'complete' or report.get('fault') or report.get('lifecycle', {}).get('close_errors'):
                 raise ValueError('qualification segment failed lifecycle')
+            collection = report['collection']
+            local = {name: producer._integer(collection[field], 'held report '+field) for name, field in (
+                ('actions', 'attempted_environment_slots'), ('resets', 'attempted_reset_slots'),
+                ('samples', 'learned_decisions'))}
+            local['samples'] += producer._integer(collection['undispatched_actor_decisions'], 'held undispatched samples')
+            local['adam'] = saved_prefix['optimizer_attempted_steps']-previous_prefix.get('optimizer_attempted_steps', 0)
+            expected_effects = {}
+            for name, kind in names.items():
+                count = producer._integer(local[name], 'held actual '+name)
+                expected_attempts[name] += count
+                delivered = (producer._integer(collection['delivered_environment_slots'], 'held delivered actions')
+                    if name == 'actions' else producer._integer(collection['delivered_reset_slots'], 'held delivered resets')
+                    if name == 'resets' else count)
+                expected_effects[kind] = dict(reserved=count, attempted=count, delivered=delivered, uncertain=0)
+            expected_effects['fixed_random_choices'] = dict.fromkeys(('reserved', 'attempted', 'delivered', 'uncertain'), 0)
+            reconciled, _ = reconcile_segment(config, {'prefix': previous_prefix, 'parent': {'path': expected_parent}},
+                report, saved.metadata, expected_effects, elapsed=receipt['elapsed_seconds'])
+            if reconciled != saved_prefix:
+                raise ValueError('held report and saved prefix disagree')
+            previous_prefix = saved_prefix
+        if actual != expected_attempts:
+            raise ValueError('held actual effects disagree with the two reports/saved prefixes')
     else:
         rows = package['panel']['cases']
         by_id = {row['case_id']: row for row in rows}
@@ -1000,13 +1123,20 @@ def dispatch_job(root, host, verified, budget, *, deps, docker, client, **reques
 
 def run_campaign(root: Path, *, package_path: Path, source_snapshot: Path, release_path: Path,
                  dependencies=None, clock=time.monotonic) -> Mapping:
+    """Keep ownership and first-control protection through final seal publication."""
+    with campaign_signal_scope():
+        return _run_campaign(root, package_path=package_path, source_snapshot=source_snapshot,
+            release_path=release_path, dependencies=dependencies, clock=clock)
+
+
+def _run_campaign(root: Path, *, package_path: Path, source_snapshot: Path, release_path: Path,
+                 dependencies=None, clock=time.monotonic) -> Mapping:
     """Fresh campaign only, admitted by an independently supervised launcher."""
     root = Path(root).resolve(strict=True)
     deps = dependencies or HostDependencies(clock=clock)
-    deadline = _number(float(os.environ.get('SPIRE_LEARN_CURRICULUM_PARENT_DEADLINE', 'nan')), 'parent deadline')
-    start = _number(float(os.environ.get('SPIRE_LEARN_CURRICULUM_PARENT_START', 'nan')), 'parent start')
-    if deadline != start+36000. or not start <= deps.clock() < deadline-110.:
-        raise ValueError('independent parent whole deadline required')
+    supervision = _verify_supervision(root, package_path=package_path, source_snapshot=source_snapshot,
+                                     release_path=release_path, clock=deps.clock)
+    start, deadline = supervision['parent_start'], supervision['whole_deadline']
     budget = CampaignBudget(CAPS, start=start, deadline=deadline, clock=deps.clock)
     verified = dict(validate_release(root, package_path=package_path, source_snapshot=source_snapshot, release_path=release_path),
         package_path=Path(package_path), source_snapshot=Path(source_snapshot), release_path=Path(release_path))
@@ -1021,66 +1151,66 @@ def run_campaign(root: Path, *, package_path: Path, source_snapshot: Path, relea
     verified['claim_path'] = host/'campaign-claim.json'
     claim = dict(schema=CLAIM_SCHEMA, campaign_id=package_api.CAMPAIGN_ID,
         source_sha256=package_api.sha256(source_snapshot), release_sha256=package_api.sha256(release_path),
-        package_sha256=package_api.sha256(package_path), parent_start=start, whole_deadline=deadline)
+        package_sha256=package_api.sha256(package_path), parent_start=start, whole_deadline=deadline,
+        supervision=supervision)
     plan = CampaignSchedule(verified['package'], start=start, training_seconds=budget.training_seconds)
     original = verified['package']['original_parent']
     original_parent = dict(path=str(root/original['checkpoint_directory']), inventory=original['inventory'])
     results, primary, status = [], None, 'running'
     try:
-        with campaign_signal_scope():
-            _write(verified['claim_path'], claim)
-            transport._sync_claim_ancestors(root, host)
-            client = host/'docker-client'; client.mkdir()
-            initialize_stage(root, host, verified)
-            docker = low._docker_binary()
-            while True:
-                request = plan.next(deps.clock())
-                if request is None:
-                    status = 'complete'
-                    break
-                kind = request['kind']
-                arm = request.get('arm')
-                if kind == 'panel':
-                    slot = request['slot']
-                    parent = original_parent if arm is None else plan.checkpoints[arm]
-                    if parent is None:
-                        plan.finish_panel(slot, status='unavailable', reason='no healthy arm checkpoint')
-                        continue
-                    try:
-                        budget.job_deadlines('panel')
-                    except TimeoutError as error:
-                        plan.finish_panel(slot, status='not_started', reason=str(error))
-                        continue
-                    job_id = 'curriculum-panel-'+slot
-                    parameters = dict(kind=kind, slot=slot, parent=parent)
-                elif kind == 'segment':
-                    try:
-                        budget.job_deadlines('segment', arm_deadline=request['arm_deadline'])
-                    except TimeoutError:
-                        plan.stop_arm(arm, reason='time')
-                        continue
-                    job_id = f"curriculum-{arm}-{request['index']:03d}"
-                    parameters = dict(request, parent=plan.checkpoints[arm] or original_parent,
-                        prefix=plan.prefixes[arm], predecessor=plan.predecessors[arm])
-                else:
-                    job_id = 'curriculum-qualification'
-                    parameters = dict(kind=kind, parent=original_parent)
-                result = dispatch_job(root, host, verified, budget, deps=deps, docker=docker,
-                    client=client, job_id=job_id, **parameters)
-                results.append(dict(job_id=job_id, receipt=result['receipt_binding'], checkpoint=result['checkpoint'],
-                                    host_elapsed_seconds=result['host_elapsed_seconds']))
-                if kind == 'qualification':
-                    plan.accept_qualification()
-                elif kind == 'segment':
-                    plan.accept_segment(arm, result)
-                else:
-                    complete = not result['receipt']['missing_case_ids'] and result['receipt']['summary']['status'] == 'complete'
-                    plan.finish_panel(slot, status='complete' if complete else 'incomplete', reason='actual CPU panel receipt',
-                        result=result['receipt_binding'])
-                _write(host/'progress'/f'{len(results):04d}.json', dict(jobs=results, availability=plan.availability,
-                    prefixes=plan.prefixes, effects=budget.attempted, reserved=budget.reserved,
-                    evaluation_seconds=budget.evaluation_seconds, training_seconds=budget.training_seconds,
-                    qualification_seconds=budget.qualification_seconds, elapsed_seconds=deps.clock()-start))
+        _write(verified['claim_path'], claim)
+        transport._sync_claim_ancestors(root, host)
+        client = host/'docker-client'; client.mkdir()
+        initialize_stage(root, host, verified)
+        docker = low._docker_binary()
+        while True:
+            request = plan.next(deps.clock())
+            if request is None:
+                status = 'complete'
+                break
+            kind = request['kind']
+            arm = request.get('arm')
+            if kind == 'panel':
+                slot = request['slot']
+                parent = original_parent if arm is None else plan.checkpoints[arm]
+                if parent is None:
+                    plan.finish_panel(slot, status='unavailable', reason='no healthy arm checkpoint')
+                    continue
+                try:
+                    budget.job_deadlines('panel')
+                except TimeoutError as error:
+                    plan.finish_panel(slot, status='not_started', reason=str(error))
+                    continue
+                job_id = 'curriculum-panel-'+slot
+                parameters = dict(kind=kind, slot=slot, parent=parent)
+            elif kind == 'segment':
+                try:
+                    budget.job_deadlines('segment', arm_deadline=request['arm_deadline'])
+                except TimeoutError:
+                    plan.stop_arm(arm, reason='time')
+                    continue
+                job_id = f"curriculum-{arm}-{request['index']:03d}"
+                parameters = dict(request, parent=plan.checkpoints[arm] or original_parent,
+                    prefix=plan.prefixes[arm], predecessor=plan.predecessors[arm])
+            else:
+                job_id = 'curriculum-qualification'
+                parameters = dict(kind=kind, parent=original_parent)
+            result = dispatch_job(root, host, verified, budget, deps=deps, docker=docker,
+                client=client, job_id=job_id, **parameters)
+            results.append(dict(job_id=job_id, receipt=result['receipt_binding'], checkpoint=result['checkpoint'],
+                                host_elapsed_seconds=result['host_elapsed_seconds']))
+            if kind == 'qualification':
+                plan.accept_qualification()
+            elif kind == 'segment':
+                plan.accept_segment(arm, result)
+            else:
+                complete = not result['receipt']['missing_case_ids'] and result['receipt']['summary']['status'] == 'complete'
+                plan.finish_panel(slot, status='complete' if complete else 'incomplete', reason='actual CPU panel receipt',
+                    result=result['receipt_binding'])
+            _write(host/'progress'/f'{len(results):04d}.json', dict(jobs=results, availability=plan.availability,
+                prefixes=plan.prefixes, effects=budget.attempted, reserved=budget.reserved,
+                evaluation_seconds=budget.evaluation_seconds, training_seconds=budget.training_seconds,
+                qualification_seconds=budget.qualification_seconds, elapsed_seconds=deps.clock()-start))
     except BaseException as error:
         primary, status = error, 'failed'
     seal = dict(schema='spire-learn-curriculum-campaign-result-v1', campaign_id=package_api.CAMPAIGN_ID,
@@ -1091,12 +1221,50 @@ def run_campaign(root: Path, *, package_path: Path, source_snapshot: Path, relea
         qualification_seconds=budget.qualification_seconds, elapsed_seconds=deps.clock()-start,
         parent_start=start, whole_deadline=deadline, source_sha256=claim['source_sha256'],
         release_sha256=claim['release_sha256'], qualifications=verified['package']['campaign']['qualifications'])
+    return _publish_campaign_result(root, host, deps, seal, primary)
+
+
+def _publish_campaign_result(root, host, deps, seal, primary):
+    state = _control_state.get()
+    if state is None:
+        raise RuntimeError('campaign sealing requires its owned signal scope')
+    state['sealing'] = True
+    def retain(error):
+        nonlocal primary
+        if not isinstance(error, Exception) and state['first'] is None:
+            state['first'] = error
+        if primary is not error:
+            primary = low._promote(primary, error)
+        if state['first'] is not None and primary is not state['first']:
+            state['first'].add_note('other finalization failure: '+str(low._error(primary)))
+            primary = state['first']
+    if primary is not None:
+        retain(primary)
+    elif state['first'] is not None:
+        retain(state['first'])
+    seal['status'] = 'failed' if primary is not None else seal['status']
+    seal['error'] = None if primary is None else low._error(primary)
+    seal['whole_run_claim'] = False
+    seal['outcome_scope'] = 'controller logical outcome; independent watchdog wait and absence of finalization veto required'
     try:
         storage_admission(root, host, deps)
         _write(host/'campaign-result.json', seal)
+        if deps.clock() >= seal['whole_deadline']-10.:
+            raise TimeoutError('campaign sealing exhausted independent parent exit tail')
     except BaseException as error:
-        primary = low._promote(primary, error)
+        retain(error)
+    if state['first'] is not None:
+        retain(state['first'])
     if primary is not None:
+        failure = dict(schema='spire-learn-curriculum-seal-failure-v1', status='failed', whole_run_claim=False,
+            parent_start=seal['parent_start'], whole_deadline=seal['whole_deadline'],
+            error=low._error(primary), source_sha256=seal['source_sha256'])
+        try:
+            _write(host/'campaign-seal-failure.json', failure)
+        except BaseException as error:
+            retain(error)
+        if state['first'] is not None:
+            retain(state['first'])
         raise primary
     return seal
 
@@ -1137,8 +1305,27 @@ def supervise(command, *, env, deadline, clock=time.monotonic):
     return result
 
 
+def _controller_logical_result(arguments, *, start, deadline):
+    unavailable = dict(availability='unavailable', status=None, finalization_veto=True)
+    if '--root' not in arguments:
+        return unavailable
+    try:
+        root = Path(arguments[arguments.index('--root')+1]).resolve(strict=True)
+        host = root/RUNTIME
+        claim, seal = _read(host/'campaign-claim.json'), _read(host/'campaign-result.json')
+        if any(value.get('parent_start') != start or value.get('whole_deadline') != deadline for value in (claim, seal)):
+            return unavailable
+        if any(seal.get(k) != claim.get(k) for k in ('campaign_id', 'source_sha256', 'release_sha256')):
+            return unavailable
+        veto = (host/'campaign-seal-failure.json').exists()
+        return dict(availability='published', status='failed' if veto else seal['status'], finalization_veto=veto,
+            path=str(host/'campaign-result.json'), sha256=package_api.sha256(host/'campaign-result.json'))
+    except (OSError, ValueError, KeyError, IndexError):
+        return unavailable
+
+
 def launch_guard(arguments, *, result_path, clock=time.monotonic, run=None, parent_start=None):
-    """Independent supervisor retains the child exit after TERM/KILL completion."""
+    """Wait on the owned watchdog; controller OS exit is not directly observed."""
     start = _number(clock() if parent_start is None else parent_start, 'launcher start')
     if start > clock():
         raise ValueError('launcher start cannot renew time in the future')
@@ -1156,19 +1343,36 @@ def launch_guard(arguments, *, result_path, clock=time.monotonic, run=None, pare
     with result_path.open('x') as stream:
         result, primary = None, None
         # File reservation/setup consumes this same parent allowance.
-        term_seconds = max(1, math.floor(start+35900.-clock()))
+        term_seconds = max(1, math.floor(start+35900.-clock()-1.))
         command[3] = str(term_seconds)+'s'
+        launcher = _proc_identity(os.getpid())
+        result_info = os.fstat(stream.fileno())
+        binding = dict(schema='spire-learn-curriculum-supervision-v1', launcher_pid=os.getpid(),
+            launcher_start_ticks=launcher['start_ticks'], parent_start=start, whole_deadline=deadline,
+            watchdog_argv=command, result_path=str(result_path.absolute()), result_fd=stream.fileno(),
+            result_device=result_info.st_dev, result_inode=result_info.st_ino,
+            controller_source_sha256=package_api.sha256(Path(__file__)))
+        binding_path = result_path.with_name(result_path.name+'.supervision.json')
+        _write(binding_path, binding)
+        env['SPIRE_LEARN_CURRICULUM_SUPERVISION'] = str(binding_path.absolute())
+        env['SPIRE_LEARN_CURRICULUM_SUPERVISION_SHA256'] = package_api.sha256(binding_path)
         try:
             result = (supervise(command, env=env, deadline=deadline, clock=clock) if run is None
                 else run(command, env=env, check=False, timeout=max(1., deadline-clock()-5.)))
         except BaseException as error:
             primary = error
         record = dict(schema='spire-learn-curriculum-launcher-result-v1', parent_start=start,
-            whole_deadline=deadline, child_exit_code=None if result is None else result.returncode,
+            whole_deadline=deadline, watchdog_exit_status=None if result is None else result.returncode,
+            controller_os_exit_status=dict(availability='unavailable', reason='only GNU timeout was directly waited on'),
             error=None if primary is None else low._error(primary), elapsed_seconds=clock()-start,
             command=command, term_after_seconds=term_seconds, kill_grace_seconds=90,
             parent_control=getattr(result, 'parent_control', None),
-            measurement_boundary='actual child exit before parent result publication; final 10 seconds reserved')
+            measurement_boundary='actual owned GNU timeout wait completed before parent result publication; final 10 seconds reserved')
+        logical = _controller_logical_result(arguments, start=start, deadline=deadline)
+        record['controller_logical_result'] = logical
+        record['whole_run_complete'] = (primary is None and result is not None and result.returncode == 0
+            and record['parent_control'] is None and clock() < deadline and logical.get('status') == 'complete'
+            and logical.get('finalization_veto') is False)
         try:
             json.dump(record, stream, sort_keys=True, allow_nan=False)
             stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
@@ -1200,10 +1404,11 @@ def main(argv=None):
         return low._safe(root, value)
     if args.command == 'capture':
         required('destination')
+        if args.head is not None or args.dirty_json is not None:
+            parser.error('production capture always records actual Git provenance; overrides are fixture API only')
         from scripts.neural.gpu_runtime_proof_helpers import _git_state
         actual_head, actual_dirty = _git_state(root, timeout=10.)
-        value = capture_source(root, path(args.destination), learner_head=args.head or actual_head,
-            dirty=_read(path(args.dirty_json)) if args.dirty_json else actual_dirty)
+        value = capture_source(root, path(args.destination), learner_head=actual_head, dirty=actual_dirty)
     elif args.command == 'release-template':
         required('package', 'source', 'destination', 'user_approval')
         value = release_template(root, package_path=path(args.package), source_snapshot=path(args.source),

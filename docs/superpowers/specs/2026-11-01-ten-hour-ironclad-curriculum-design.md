@@ -10,7 +10,7 @@ Fresh campaign ID `curriculum-20261101-a`; source baseline `fceeee49d4023ef3728d
 
 ## Budget and schedule
 
-One enclosing runtime begins only after all source/package/controller reviews pass. Its hard whole deadline is36,000seconds, including qualification, all GPU/CPU jobs, staging, checkpoints, postchecks and cleanup. Source development/preparation before launch is not runtime. A host watchdog sends TERM with90seconds reserved before hard KILL. No more than one runtime job is active.
+One enclosing runtime begins only after all source/package/controller reviews pass. Its hard whole deadline is36,000seconds, including qualification, all GPU/CPU jobs, staging, checkpoints, postchecks and cleanup. Source development/preparation before launch is not runtime. A host watchdog sends TERM at35,900seconds and hard KILL90seconds later, leaving10seconds forindependentparent exit/resultpublication withinits36,000second deadline. No more than one runtime job is active.
 
 1. Run the approved qualification exactly once: two256-entry native catalog normalizations, original-B warm start, one64-row update, same-shard parity, next-shard64-row update. Preserve its exact shared caps512native actions/512sampled rows/8Adam attempts/256reset slots/120soft/600whole,1GiB new output. Actual failure or uncertain effect stops everything; no automatic retry.
 2. Evaluate originalB on the fixed64-case development panel. No training final cases.

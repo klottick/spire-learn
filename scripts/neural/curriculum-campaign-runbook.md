@@ -96,6 +96,15 @@ no parent control. The elapsed measurement ends before parent publication and
 does not pretend to include its own write.
 Parent interrupt forwarding targets only its newly owned process group; repeated
 signals cannot bypass waiting. No unrelated PID is signaled.
+The same first-control scope spans sidecar creation, watchdog wait and parent
+result write/fsync. A wait-time SIGINT remains first if SIGTERM arrives during
+publication. After wait/reap the process handle is disarmed and no later signal
+targets that PGID. Sidecar failure records a zero-child failure; no claim starts.
+Parent publication failures/control publish `<result>.failure.json` when writable
+and make one failure-only correction to the still-owned reserved result. The veto
+retains its initial publication candidate. This repairs metadata only: no spawn,
+effect or authority operation is retried. A failure veto always invalidates any
+remaining partial/candidate result, even when correcting that result also fails.
 Before claim or Docker admission, production `run` verifies the actual Linux
 controller→GNU timeout→launcher PID/start-time/cmdline/session chain, the exact
 TERM/KILL duration, controller source binding and the launcher's still-open owned
@@ -123,6 +132,13 @@ Any sealing failure publishes `campaign-seal-failure.json` when writable and
 vetoes success. A logical `campaign-result.json` explicitly has
 `whole_run_claim=false`; a partial/late seal can never establish completion by
 itself, including when writing its failure veto also fails.
+Any dispatch failure is recorded at the scheduling boundary before stopping.
+The attempted job stays in the campaign job list; a failed panel slot is `failed`
+with its concrete error, while later opportunities remain `not_started`. Claim,
+attempt, context, receipt and guest-failure references bind actual retained bytes,
+or state explicitly that they are unavailable. Partial raw reports are retained
+as unreconciled evidence and never promoted to successful cases or fault losses.
+Unknown effect leases remain conservatively reserved; no successor starts.
 
 ## Frozen schedule and accounting
 
@@ -204,6 +220,8 @@ The fresh runtime root is
   `campaign-seal-failure.json`, when present, vetoes completion. The independent
   sibling `launcher-result.json` records actual watchdog wait/accounting and
   separately reports controller logical evidence and unavailable controller OS exit.
+  Its `failure_veto_path` names the sibling parent-publication veto, whose presence
+  invalidates completion regardless of any earlier candidate bytes.
 
 Inspect these files read-only. No monitoring command changes a service or
 signals a GPU process. If a timeout, native fault, close failure or publication

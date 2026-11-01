@@ -195,6 +195,145 @@ class ControlContractTests(unittest.TestCase):
         self.assertIsNone(retained['watchdog_exit_status'])
         self.assertEqual(retained['error']['type'], 'OSError')
 
+    def test_launcher_sidecar_failure_retains_failed_result_without_spawning(self):
+        api = self.controls()
+        calls = []
+        original = api._write
+        def write(path, value):
+            if str(path).endswith('.supervision.json'):
+                raise OSError('owned supervision sidecar failed')
+            return original(path, value)
+        with tempfile.TemporaryDirectory() as directory:
+            result_path = Path(directory)/'outer.json'
+            with patch.object(api, '_write', side_effect=write):
+                with self.assertRaises(OSError):
+                    api.launch_guard(['run'], result_path=result_path, clock=lambda: 5.,
+                        run=lambda *args, **kwargs: calls.append(args))
+            record = json.loads(result_path.read_text())
+            self.assertIsNone(record['watchdog_exit_status'])
+            self.assertEqual(record['error']['type'], 'OSError')
+            self.assertFalse(record['whole_run_complete'])
+            self.assertTrue(result_path.with_name(result_path.name+'.failure.json').exists())
+        self.assertEqual(calls, [])
+
+    def test_launcher_retains_first_wait_control_through_result_write_and_fsync(self):
+        api = self.controls()
+        for stage in ('write', 'fsync', 'veto_failure'):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)/'outer.json'
+                sent, entered, injected = [], [False], [False]
+                process = SimpleNamespace(pid=43210, returncode=None)
+                def wait(**kwargs):
+                    signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+                    process.returncode = 130
+                    return 130
+                process.wait = wait
+                original_dump, original_fsync, original_write = json.dump, os.fsync, api._write
+                def late_control():
+                    handler = signal.getsignal(signal.SIGTERM)
+                    self.assertTrue(callable(handler), 'launcher publication lost its signal scope')
+                    handler(signal.SIGTERM, None)
+                    signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+                    injected[0] = True
+                def dump(value, stream, **kwargs):
+                    entered[0] = True
+                    if stage != 'fsync' and not injected[0]:
+                        late_control()
+                    return original_dump(value, stream, **kwargs)
+                def fsync(descriptor):
+                    if entered[0] and stage == 'fsync' and not injected[0]:
+                        late_control()
+                    return original_fsync(descriptor)
+                def write(file, value):
+                    if str(file).endswith('.failure.json') and stage == 'veto_failure':
+                        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+                        raise OSError('later launcher veto failed')
+                    return original_write(file, value)
+                previous = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
+                with patch.object(api.subprocess, 'Popen', return_value=process), \
+                     patch.object(os, 'killpg', side_effect=lambda pid, number: sent.append((pid, number))), \
+                     patch.object(json, 'dump', side_effect=dump), patch.object(os, 'fsync', side_effect=fsync), \
+                     patch.object(api, '_write', side_effect=write):
+                    with self.assertRaises(api.low._Termination) as stopped:
+                        api.launch_guard(['run'], result_path=path, clock=lambda: 5.)
+                self.assertEqual(str(stopped.exception), 'signal '+str(signal.SIGINT))
+                self.assertEqual(sent, [(43210, signal.SIGINT)])
+                self.assertEqual({number: signal.getsignal(number) for number in previous}, previous)
+                record = json.loads(path.read_text())
+                self.assertEqual(record['watchdog_exit_status'], 130)
+                self.assertEqual(record['parent_control'], signal.SIGINT)
+                self.assertFalse(record['whole_run_complete'])
+
+    def test_first_parent_control_only_during_postwait_publication_never_signals_reaped_group(self):
+        api = self.controls()
+        sent = []
+        process = SimpleNamespace(pid=43211, returncode=None)
+        def wait(**kwargs):
+            process.returncode = 0
+            return 0
+        process.wait = wait
+        original_dump = json.dump
+        injected = [False]
+        def dump(value, stream, **kwargs):
+            if not injected[0]:
+                handler = signal.getsignal(signal.SIGTERM)
+                self.assertTrue(callable(handler), 'postwait publication handler missing')
+                handler(signal.SIGTERM, None)
+                injected[0] = True
+            return original_dump(value, stream, **kwargs)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'outer.json'
+            with patch.object(api.subprocess, 'Popen', return_value=process), \
+                 patch.object(os, 'killpg', side_effect=lambda pid, number: sent.append((pid, number))), \
+                 patch.object(api, '_controller_logical_result', return_value={'status': 'complete', 'finalization_veto': False}), \
+                 patch.object(json, 'dump', side_effect=dump):
+                with self.assertRaises(api.low._Termination):
+                    api.launch_guard(['run'], result_path=path, clock=lambda: 5.)
+            self.assertFalse(json.loads(path.read_text())['whole_run_complete'])
+            self.assertTrue(path.with_name(path.name+'.failure.json').exists())
+        self.assertEqual(sent, [])
+
+    def test_parent_result_fsync_failure_keeps_actual_wait_and_failure_veto(self):
+        api = self.controls()
+        original_dump, original_fsync = json.dump, os.fsync
+        publication, failed = [False], [False]
+        def dump(value, stream, **kwargs):
+            publication[0] = True
+            return original_dump(value, stream, **kwargs)
+        def fsync(descriptor):
+            if publication[0] and not failed[0]:
+                failed[0] = True
+                raise OSError('parent result fsync failed')
+            return original_fsync(descriptor)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'outer.json'
+            with patch.object(json, 'dump', side_effect=dump), patch.object(os, 'fsync', side_effect=fsync), \
+                 patch.object(api, '_controller_logical_result', return_value={'status': 'complete', 'finalization_veto': False}):
+                with self.assertRaises(OSError):
+                    api.launch_guard(['run'], result_path=path, clock=lambda: 5.,
+                        run=lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0))
+            result = json.loads(path.read_text())
+            veto = json.loads(path.with_name(path.name+'.failure.json').read_text())
+            self.assertEqual(result['watchdog_exit_status'], 0)
+            self.assertFalse(result['whole_run_complete'])
+            self.assertEqual(result['error']['type'], 'OSError')
+            self.assertTrue(veto['publication_candidate']['whole_run_complete'])
+            self.assertFalse(veto['whole_run_complete'])
+
+    def test_failed_dispatch_references_are_explicitly_unavailable_without_valid_bytes(self):
+        api = self.controls()
+        with tempfile.TemporaryDirectory() as directory:
+            host = Path(directory)
+            missing = api._failed_dispatch_references(host, 'curriculum-missing')
+            self.assertTrue(all(row['availability'] == 'unavailable' for row in missing['references'].values()))
+            self.assertEqual(missing['partial_report_availability']['availability'], 'unavailable')
+            context = host/'jobs/curriculum-missing/control/job.json'
+            context.parent.mkdir(parents=True)
+            context.write_text('{invalid JSON')
+            unreadable = api._failed_dispatch_references(host, 'curriculum-missing')['references']['context']
+            self.assertEqual(unreadable['availability'], 'unavailable')
+            self.assertEqual(unreadable['raw']['sha256'], api.package_api.sha256(context))
+
     def test_schedule_is_fixed_and_availability_preserves_missing_prefixes(self):
         api = self.controls()
         package = package_fixture()[1]
@@ -941,6 +1080,77 @@ class ProjectedHostTests(unittest.TestCase):
         with patch.object(self.api.low, 'tree_bytes', return_value=0):
             with self.assertRaises(RuntimeError):
                 self.api.storage_admission(ROOT, self.h, self.deps, reservation=1)
+
+    def test_actual_failed_panel_is_failed_in_sealed_availability_and_job_history(self):
+        api = self.api
+        self.h = self.base/'failed-panel-campaign'
+        self.client = self.h/'docker-client'
+        original_factory = self.harness.factory
+        evaluations = []
+        def factory(config, **kwargs):
+            if kwargs['purpose'] == 'evaluate':
+                evaluations.append(config.cases.cases[0].case_id)
+                self.harness.wrong = 'eval-policy-version' if len(evaluations) == 2 else None
+            return original_factory(config, **kwargs)
+        self.harness.factory = factory
+        with blocked_optional(), patch.object(api, 'RUNTIME', self.h.relative_to(ROOT)), \
+             patch.object(api, '_verify_supervision', return_value={'parent_start': 100., 'whole_deadline': 36100.}), \
+             patch.object(api, 'validate_release', return_value=self.verified), \
+             patch.object(api.low, '_docker_binary', return_value='/fake/docker'), \
+             patch.object(api.cdi, 'verify_host_profile'):
+            with self.assertRaisesRegex(RuntimeError, 'operational_failure'):
+                api.run_campaign(ROOT, package_path=self.fixture/'package.json', source_snapshot=self.source_path,
+                    release_path=self.release_path, dependencies=self.deps, clock=lambda: self.now)
+        seal = json.loads((self.h/'campaign-result.json').read_text())
+        self.assertEqual(seal['status'], 'failed')
+        self.assertEqual(seal['availability']['original-b']['status'], 'failed')
+        self.assertIn('operational_failure', seal['availability']['original-b']['reason'])
+        self.assertTrue(all(row['status'] == 'not_started' for slot, row in seal['availability'].items() if slot != 'original-b'))
+        failed = seal['jobs'][-1]
+        self.assertEqual(failed['job_id'], 'curriculum-panel-original-b')
+        self.assertEqual(failed['status'], 'failed')
+        self.assertFalse(failed['receipt_reconciled'])
+        for name in ('claim', 'attempt', 'context', 'receipt', 'guest_failure'):
+            reference = failed['references'][name]
+            self.assertEqual(reference['availability'], 'retained')
+            self.assertEqual(api.package_api.sha256(Path(reference['path'])), reference['sha256'])
+        receipt = json.loads(Path(failed['references']['receipt']['path']).read_text())
+        self.assertEqual(receipt['status'], 'operational_failure')
+        self.assertEqual(len(receipt['reports']), 2)
+        self.assertEqual(len(failed['partial_reports']), 2)
+        self.assertEqual(seal['attempts'][failed['job_id']]['state'], 'reserved')
+        self.assertEqual(len(evaluations), 2)
+        self.assertFalse(any(row[0] == 'warm_start' and row[1] == self.base/'parent' for row in self.harness.factory_calls))
+        self.assertEqual(len(self.removed), 2)
+
+    def test_failed_panel_reference_inspection_finishes_under_repeated_controls(self):
+        api = self.api
+        host = self.base/'interrupted-failure-evidence'
+        original_reference, injected = api._retained_reference, [False]
+        def reference(*args, **kwargs):
+            if not injected[0]:
+                injected[0] = True
+                signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+                signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+            return original_reference(*args, **kwargs)
+        with blocked_optional(), patch.object(api, 'RUNTIME', host.relative_to(ROOT)), \
+             patch.object(api, '_verify_supervision', return_value={'parent_start': 100., 'whole_deadline': 36100.}), \
+             patch.object(api, 'validate_release', return_value=self.verified), \
+             patch.object(api.low, '_docker_binary', return_value='/fake/docker'), \
+             patch.object(api.CampaignSchedule, 'next', return_value={'kind': 'panel', 'slot': 'original-b', 'arm': None}), \
+             patch.object(api, 'dispatch_job', side_effect=RuntimeError('earlier panel dispatch failure')), \
+             patch.object(api, '_retained_reference', side_effect=reference):
+            with self.assertRaises(api.low._Termination) as stopped:
+                api.run_campaign(ROOT, package_path=self.fixture/'package.json', source_snapshot=self.source_path,
+                    release_path=self.release_path, dependencies=self.deps, clock=lambda: self.now)
+        self.assertEqual(str(stopped.exception), 'signal '+str(signal.SIGINT))
+        seal = json.loads((host/'campaign-result.json').read_text())
+        self.assertEqual(seal['availability']['original-b']['status'], 'failed')
+        self.assertIn('earlier panel dispatch failure', seal['availability']['original-b']['reason'])
+        self.assertEqual(len(seal['jobs']), 1)
+        self.assertTrue(all(value['availability'] == 'unavailable' and 'expected_path' in value
+                            for value in seal['jobs'][0]['references'].values()))
+        self.assertEqual(self.calls, [])
 
     def test_signal_scope_covers_seal_write_fsync_and_failure_veto_publication(self):
         api = self.api

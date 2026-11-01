@@ -52,6 +52,7 @@ RELEASE_KEYS = {'schema', 'state', 'campaign_id', 'single_use', 'source_snapshot
     'package_sha256', 'campaign_raw_sha256', 'qualification_input_inventory', 'runtime_pins',
     'caps', 'user_approval', 'review'}
 _control_state = ContextVar('curriculum_first_control', default=None)
+_launcher_state = ContextVar('curriculum_launcher_control', default=None)
 
 
 @contextmanager
@@ -1129,6 +1130,45 @@ def run_campaign(root: Path, *, package_path: Path, source_snapshot: Path, relea
             release_path=release_path, dependencies=dependencies, clock=clock)
 
 
+def _retained_reference(host, path, *, json_document=True):
+    """A failed job's bytes are evidence, never a reconciled success receipt."""
+    raw = None
+    try:
+        path = low._safe(host, path, exists=True)
+        if not path.is_file():
+            raise ValueError('retained reference is not a regular file')
+        raw = dict(path=str(path), sha256=package_api.sha256(path), size_bytes=path.stat().st_size)
+        if json_document:
+            _read(path)
+        return dict(availability='retained', **raw)
+    except Exception as error:
+        return dict(availability='unavailable', expected_path=str(path), error=low._error(error), raw=raw)
+
+
+def _failed_dispatch_references(host, job_id):
+    host = Path(host)
+    job, output = host/'jobs'/job_id, host/'jobs'/job_id/'output'
+    references = {name: _retained_reference(host, path) for name, path in (
+        ('claim', host/'job-claims'/(job_id+'.json')), ('attempt', host/'attempts'/(job_id+'.json')),
+        ('context', job/'control/job.json'), ('receipt', output/'job-receipt.json'),
+        ('guest_failure', output/'guest-failure.json'))}
+    partial = []
+    try:
+        directories = sorted(path for path in output.iterdir()
+            if re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{32}', path.name))
+        if len(directories) > 64:
+            raise ValueError('partial report directory bound exceeded')
+        for directory in directories:
+            partial.append(dict(directory=str(directory), receipt_reconciled=False,
+                summary=_retained_reference(host, directory/'summary.json'),
+                lifecycle=_retained_reference(host, directory/'lifecycle.json'),
+                events=_retained_reference(host, directory/'events.jsonl', json_document=False)))
+        availability = dict(availability='retained', interpretation='unreconciled raw reports only')
+    except Exception as error:
+        availability = dict(availability='unavailable', error=low._error(error))
+    return dict(references=references, partial_reports=partial, partial_report_availability=availability)
+
+
 def _run_campaign(root: Path, *, package_path: Path, source_snapshot: Path, release_path: Path,
                  dependencies=None, clock=time.monotonic) -> Mapping:
     """Fresh campaign only, admitted by an independently supervised launcher."""
@@ -1195,8 +1235,31 @@ def _run_campaign(root: Path, *, package_path: Path, source_snapshot: Path, rele
             else:
                 job_id = 'curriculum-qualification'
                 parameters = dict(kind=kind, parent=original_parent)
-            result = dispatch_job(root, host, verified, budget, deps=deps, docker=docker,
-                client=client, job_id=job_id, **parameters)
+            try:
+                result = dispatch_job(root, host, verified, budget, deps=deps, docker=docker,
+                    client=client, job_id=job_id, **parameters)
+            except BaseException as error:
+                # Dispatch has stopped permanently. Retain its bookkeeping
+                # before repeated controls unwind the owned finalization path.
+                state = _control_state.get()
+                if state is not None:
+                    state['sealing'] = True
+                failed = dict(job_id=job_id, kind=kind, status='failed', dispatch_entered=True,
+                    receipt_reconciled=False, error=low._error(error), references={name: dict(
+                        availability='unavailable', reason='failure evidence inspection did not finish')
+                        for name in ('claim', 'attempt', 'context', 'receipt', 'guest_failure')}, partial_reports=[])
+                results.append(failed)
+                if kind == 'panel':
+                    failed['slot'] = slot
+                    plan.finish_panel(slot, status='failed', reason=type(error).__name__+': '+str(error)[:2048],
+                        result={'job_id': job_id, 'receipt_reconciled': False})
+                try:
+                    failed.update(_failed_dispatch_references(host, job_id))
+                except BaseException as retention:
+                    final = low._promote(error, retention)
+                    if final is not error:
+                        raise final
+                raise
             results.append(dict(job_id=job_id, receipt=result['receipt_binding'], checkpoint=result['checkpoint'],
                                 host_elapsed_seconds=result['host_elapsed_seconds']))
             if kind == 'qualification':
@@ -1269,40 +1332,67 @@ def _publish_campaign_result(root, host, deps, seal, primary):
     return seal
 
 
-def supervise(command, *, env, deadline, clock=time.monotonic):
-    """Wait for an owned timeout process; repeated parent controls cannot skip it."""
-    process, first, sent = None, None, False
-    def forward(number, frame):
-        nonlocal first, sent
-        if first is None:
-            first = number
-        if process is not None and not sent:
-            sent = True
-            try:
-                os.killpg(process.pid, first)
-            except ProcessLookupError:
-                pass
-    previous = {number: signal.signal(number, forward) for number in (signal.SIGINT, signal.SIGTERM)}
-    try:
-        process = subprocess.Popen(command, env=env, start_new_session=True)
-        if first is not None:
-            forward(first, None)
+def _forward_launcher_control(state):
+    process = state['process']
+    if (process is not None and not state['wait_finished'] and not state['sent']
+            and getattr(process, 'returncode', None) is None):
+        state['sent'] = True
         try:
-            code = process.wait(timeout=max(.1, deadline-clock()-5.))
-        except subprocess.TimeoutExpired:
-            # Only this freshly spawned process group is controlled. GNU
-            # timeout normally completes its independent KILL before this.
+            os.killpg(process.pid, state['number'])
+        except ProcessLookupError:
+            pass
+
+
+@contextmanager
+def _launcher_signal_scope():
+    existing = _launcher_state.get()
+    if existing is not None:
+        yield existing
+        return
+    state = dict(first=None, number=None, process=None, wait_finished=False, sent=False, finish=None)
+    token = _launcher_state.set(state)
+    def handler(number, frame):
+        if state['first'] is None:
+            state['first'], state['number'] = low._Termination('signal '+str(number)), number
+        _forward_launcher_control(state)
+    previous = {number: signal.signal(number, handler) for number in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        yield state
+        if state['first'] is not None and state['finish'] is not None:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            code = process.wait(timeout=max(.1, deadline-clock()-1.))
+                state['finish'](state['first'])
+            except BaseException as retention:
+                state['first'].add_note('late launcher veto failed: '+str(low._error(retention)))
+            raise state['first']
     finally:
+        state['process'], state['wait_finished'] = None, True
         for number, handler in previous.items():
             signal.signal(number, handler)
-    result = subprocess.CompletedProcess(command, code)
-    result.parent_control = first
-    return result
+        _launcher_state.reset(token)
+
+
+def supervise(command, *, env, deadline, clock=time.monotonic):
+    """Share the launcher's first control, and disarm its PGID after wait."""
+    with _launcher_signal_scope() as state:
+        try:
+            process = subprocess.Popen(command, env=env, start_new_session=True)
+            state['process'] = process
+            if state['first'] is not None:
+                _forward_launcher_control(state)
+            try:
+                code = process.wait(timeout=max(.1, deadline-clock()-5.))
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                code = process.wait(timeout=max(.1, deadline-clock()-1.))
+        finally:
+            state['process'], state['wait_finished'] = None, True
+        result = subprocess.CompletedProcess(command, code)
+        result.parent_control = state['number']
+        result.parent_control_error = state['first']
+        return result
 
 
 def _controller_logical_result(arguments, *, start, deadline):
@@ -1326,6 +1416,12 @@ def _controller_logical_result(arguments, *, start, deadline):
 
 def launch_guard(arguments, *, result_path, clock=time.monotonic, run=None, parent_start=None):
     """Wait on the owned watchdog; controller OS exit is not directly observed."""
+    with _launcher_signal_scope() as state:
+        return _launch_guard(arguments, result_path=result_path, clock=clock, run=run,
+                             parent_start=parent_start, state=state)
+
+
+def _launch_guard(arguments, *, result_path, clock, run, parent_start, state):
     start = _number(clock() if parent_start is None else parent_start, 'launcher start')
     if start > clock():
         raise ValueError('launcher start cannot renew time in the future')
@@ -1342,43 +1438,86 @@ def launch_guard(arguments, *, result_path, clock=time.monotonic, run=None, pare
     result_path.parent.mkdir(parents=True, exist_ok=True)
     with result_path.open('x') as stream:
         result, primary = None, None
-        # File reservation/setup consumes this same parent allowance.
-        term_seconds = max(1, math.floor(start+35900.-clock()-1.))
-        command[3] = str(term_seconds)+'s'
-        launcher = _proc_identity(os.getpid())
-        result_info = os.fstat(stream.fileno())
-        binding = dict(schema='spire-learn-curriculum-supervision-v1', launcher_pid=os.getpid(),
-            launcher_start_ticks=launcher['start_ticks'], parent_start=start, whole_deadline=deadline,
-            watchdog_argv=command, result_path=str(result_path.absolute()), result_fd=stream.fileno(),
-            result_device=result_info.st_dev, result_inode=result_info.st_ino,
-            controller_source_sha256=package_api.sha256(Path(__file__)))
-        binding_path = result_path.with_name(result_path.name+'.supervision.json')
-        _write(binding_path, binding)
-        env['SPIRE_LEARN_CURRICULUM_SUPERVISION'] = str(binding_path.absolute())
-        env['SPIRE_LEARN_CURRICULUM_SUPERVISION_SHA256'] = package_api.sha256(binding_path)
+        veto_path = result_path.with_name(result_path.name+'.failure.json')
+        def retain(error):
+            nonlocal primary
+            primary = low._promote(primary, error) if primary is not error else error
+            if state['first'] is not None and primary is not state['first']:
+                state['first'].add_note('other launcher failure: '+str(low._error(primary)))
+                primary = state['first']
         try:
+            # Sidecar failure is a recorded zero-child launch failure.
+            term_seconds = max(1, math.floor(start+35900.-clock()-1.))
+            command[3] = str(term_seconds)+'s'
+            launcher = _proc_identity(os.getpid())
+            result_info = os.fstat(stream.fileno())
+            binding = dict(schema='spire-learn-curriculum-supervision-v1', launcher_pid=os.getpid(),
+                launcher_start_ticks=launcher['start_ticks'], parent_start=start, whole_deadline=deadline,
+                watchdog_argv=command, result_path=str(result_path.absolute()), result_fd=stream.fileno(),
+                result_device=result_info.st_dev, result_inode=result_info.st_ino,
+                controller_source_sha256=package_api.sha256(Path(__file__)))
+            binding_path = result_path.with_name(result_path.name+'.supervision.json')
+            _write(binding_path, binding)
+            env['SPIRE_LEARN_CURRICULUM_SUPERVISION'] = str(binding_path.absolute())
+            env['SPIRE_LEARN_CURRICULUM_SUPERVISION_SHA256'] = package_api.sha256(binding_path)
+            if state['first'] is not None:
+                raise state['first']
             result = (supervise(command, env=env, deadline=deadline, clock=clock) if run is None
                 else run(command, env=env, check=False, timeout=max(1., deadline-clock()-5.)))
+            earlier = getattr(result, 'parent_control', None)
+            if earlier is not None and earlier != state['number']:
+                state['number'] = earlier
+                state['first'] = getattr(result, 'parent_control_error', None) or low._Termination('signal '+str(earlier))
         except BaseException as error:
-            primary = error
+            retain(error)
+        finally:
+            state['process'], state['wait_finished'] = None, True
+        if state['first'] is not None:
+            retain(state['first'])
         record = dict(schema='spire-learn-curriculum-launcher-result-v1', parent_start=start,
             whole_deadline=deadline, watchdog_exit_status=None if result is None else result.returncode,
             controller_os_exit_status=dict(availability='unavailable', reason='only GNU timeout was directly waited on'),
             error=None if primary is None else low._error(primary), elapsed_seconds=clock()-start,
             command=command, term_after_seconds=term_seconds, kill_grace_seconds=90,
-            parent_control=getattr(result, 'parent_control', None),
+            parent_control=state['number'], failure_veto_path=str(veto_path),
             measurement_boundary='actual owned GNU timeout wait completed before parent result publication; final 10 seconds reserved')
-        logical = _controller_logical_result(arguments, start=start, deadline=deadline)
+        try:
+            logical = _controller_logical_result(arguments, start=start, deadline=deadline)
+        except BaseException as error:
+            retain(error)
+            logical = dict(availability='unavailable', status=None, finalization_veto=True)
+            record['error'] = low._error(primary)
         record['controller_logical_result'] = logical
         record['whole_run_complete'] = (primary is None and result is not None and result.returncode == 0
             and record['parent_control'] is None and clock() < deadline and logical.get('status') == 'complete'
             and logical.get('finalization_veto') is False)
+        def failure_veto(error):
+            _write(veto_path, dict(schema='spire-learn-curriculum-launcher-failure-v1', whole_run_complete=False,
+                watchdog_exit_status=record['watchdog_exit_status'], parent_control=state['number'],
+                error=low._error(error), publication_candidate=record))
+        state['finish'] = failure_veto
         try:
             json.dump(record, stream, sort_keys=True, allow_nan=False)
             stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
         except BaseException as retention:
-            primary = low._promote(primary, retention)
+            retain(retention)
+        if state['first'] is not None:
+            retain(state['first'])
         if primary is not None:
+            try:
+                failure_veto(primary)
+            except BaseException as retention:
+                retain(retention)
+            # This new reserved file has not successfully finalized. Retain
+            # its initial candidate in the veto, then make one failure-only
+            # correction; no child/effect or authority operation is retried.
+            record = dict(record, whole_run_complete=False, error=low._error(primary), parent_control=state['number'])
+            try:
+                stream.seek(0); stream.truncate()
+                json.dump(record, stream, sort_keys=True, allow_nan=False)
+                stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
+            except BaseException as retention:
+                retain(retention)
             raise primary
     return result.returncode
 

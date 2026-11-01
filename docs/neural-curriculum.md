@@ -1,10 +1,11 @@
 # Randomized Ironclad combat curriculum
 
 The broad curriculum passed its bounded native/CUDA qualification, including
-checkpoint continuation. Its approved ten-hour campaign then stopped on a native
-standalone combat fault before the randomized/mixed learning comparison could
-complete. The results below separate saved fixed-control work from incomplete
-broad training. The [qualification protocol](../scripts/neural/curriculum-qualification-runbook.md)
+checkpoint continuation. Both the original campaign and the later campaign on
+Gym's delivered fixes stopped on native standalone faults before the broad
+learning comparison could complete. The latest campaign saved two randomized
+checkpoints, but their evaluation never started. The results below separate
+saved work from incomplete comparisons. The [qualification protocol](../scripts/neural/curriculum-qualification-runbook.md)
 is historical preparation material; this document authorizes no retry or new
 workload. The earlier sustained campaign's native Run fault remains a separate
 unresolved result.
@@ -51,6 +52,67 @@ needed before another campaign. This result does not show that randomized decks
 are the wrong learning approach. Saved checkpoints are retained; the consumed
 campaign will not retry. Final evaluation is untouched, and RNG-001, TIME-001,
 finite Ironclad A0 content and simulator-only transfer limits remain explicit.
+
+## Fixed-Gym campaign c
+
+Campaign `curriculum-20261101-c` ran from Learn source `9ad64019` against Gym
+`a86df922` / native SHA256 `96d54621…`, after the separately recorded fixes to
+the earlier incidents. Its launcher measured 1,507.798 seconds (about 25 minutes)
+before failure; the primary later retrieved actual launcher exit 1. That retrieval
+timestamp is an observation time, not the time the process exited.
+
+All arms started from campaign a's healthy `curriculum-fixed-003` weights with
+fresh optimizer, RNG and progress state. This is a new warm-start comparison,
+not exact continuation of the earlier failed randomized job.
+
+| Arm | Saved segments | Learned decisions | Accepted Adam steps | PPO updates |
+| --- | ---: | ---: | ---: | ---: |
+| Fixed | 4 | 16,384 | 1,024 | 32 |
+| Randomized | 2 | 8,192 | 512 | 16 |
+| **Total** | **6** | **24,576** | **1,536** | **48** |
+
+The same 64 development cases, lineages and environment seeds paired exactly:
+
+| Checkpoint | Wins | Deaths |
+| --- | ---: | ---: |
+| Warm-start fixed-003 | 31/64 | 33 |
+| After four new fixed segments | 35/64 | 29 |
+
+Five cases changed to wins and one to a loss. This is a small improvement in one
+paired development replicate, with unknown historical parent exposure. It does
+not establish a reliable generalization gain. The two randomized checkpoints
+were not evaluated; mixed training never began. Six planned panels, or 384 case
+opportunities, remain unavailable rather than losses or zero scores.
+
+The third randomized segment faulted after 160 accepted B16 calls / 2,560
+delivered actions. The next 16 action slots remain uncertain. Its raw journals
+also record 2,576 delivered samples, 160 accepted Adam steps and 124 resets;
+this partial work produced no healthy receipt or checkpoint. Its full lease
+remains charged, separate from the six saved segments. Prior campaign b's
+qualification-only host-reconciliation failure and its charged lease remain
+separate and unchanged.
+
+The internal Gym cause and failing public case are unknown. P1 Gym issue
+`spire-14g` tracks the incident; Learn issue `spire_learn-pa7` tracks the missing
+pending-action/first-fault capture needed for stronger diagnosis. No replay or
+retry was performed. A generic `RunFaultError` does not identify a shared cause
+with the earlier defects.
+
+The [final retained audit](../artifacts/development/neural-combat/curriculum-campaign-v3/audit/final-runtime-report.md)
+and [independent review](../artifacts/development/neural-combat/curriculum-campaign-v3/audit/final-runtime-review.md)
+reconcile the source, runtime pins, checkpoints, effects and cleanup for all ten
+campaign containers. The review matched all 2,018 inventory entries and records
+37 passing evidence checks. It clarifies the audit's timing wording: delayed
+status retrieval does not establish clock drift or an execution overrun. No
+post-run free-disk sample exists; retained output sizes and removal records are
+reported separately.
+
+The campaign is closed as failed and training is stopped. The saved randomized
+work shows that broader training executed, but its learning benefit remains
+unmeasured. It does not show that random decks are ineffective or that more
+fixed training solves broad combat. Final evaluation remains untouched;
+simulator-only, finite-content, RNG-001 and TIME-001 limits remain in force.
+No further workload is authorized by this result report.
 
 ## Inputs and coverage
 

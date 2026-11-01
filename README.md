@@ -73,7 +73,14 @@ Gym's delivered native-fault fixes at `a86df922` are now staged in a separate
 Learn runtime overlay. Both adapters and the unchanged schema identities passed
 a zero-gameplay container check. See the [runtime upgrade](docs/neural-runtime-upgrade.md)
 for the exact pins, diagnosed causes and new config templates. Historical
-campaign records remain unchanged; this update did not restart training.
+campaign records remain unchanged. A separately approved campaign on this
+release then stopped after about 25 minutes on another native standalone fault.
+Six healthy segments saved 24,576 decisions and 1,536 optimizer steps, including
+two randomized checkpoints. Fixed training's paired development panel moved
+from 31/64 to 35/64 wins; randomized evaluation and mixed training never started.
+The [fixed-Gym campaign results](docs/neural-curriculum.md#fixed-gym-campaign-c)
+record the retained audit, independent review and P1 Gym issue `spire-14g`.
+The internal cause remains unknown. Training is stopped; no retry is authorized.
 
 Python **3.12** matches the gym's current Python package requirement. Spire Learn
 declares no runtime dependencies, and this project has not installed packages

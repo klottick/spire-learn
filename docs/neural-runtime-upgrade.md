@@ -54,3 +54,14 @@ fault-evidence capture issue `spire_learn-pa7` remains open.
 See the [Learn qualification and refresh report](../artifacts/development/neural-combat/gym-refresh-20261101/report.md)
 for retained commands, tests, source changes, preservation and limits. RNG-001,
 TIME-001, finite content and simulator-only qualifications remain in force.
+
+## Subsequent campaign result
+
+The separately approved campaign `curriculum-20261101-c` used this exact overlay
+and passed its native/CUDA qualification. It then stopped on another standalone
+native fault after six healthy training segments, including two randomized
+checkpoints. Gym issue `spire-14g` tracks this new incident; its internal cause
+and relationship to earlier bugs remain unknown. The [campaign results](neural-curriculum.md#fixed-gym-campaign-c)
+retain the saved work, incomplete evaluation and reviewed failure evidence.
+Training is stopped with no retry. The adoption check and earlier upstream
+replays remain historical evidence; they do not establish long-run reliability.

@@ -114,6 +114,42 @@ class EncodedBatch:
     def batch_size(self) -> int:
         return int(self.action_mask.shape[0])
 
+    def select_rows(self, indices: Any) -> EncodedBatch:
+        """Copy ordered rows after checking bounds on CPU before device indexing.
+
+        Indices may come from any device supporting a CPU copy. The checked
+        vector is transferred once to the batch device; index_select allocates
+        independent writable storage, including for duplicate selected rows.
+        """
+        import torch
+
+        if (not isinstance(indices, torch.Tensor)
+                or indices.dtype != torch.int64
+                or indices.ndim != 1
+                or indices.numel() == 0
+                or indices.layout != torch.strided):
+            raise ContractError("row indices must be a nonempty 1-D int64 tensor")
+        try:
+            cpu_indices = indices.detach().cpu()
+            invalid = ((cpu_indices < 0) | (cpu_indices >= self.batch_size)).any().item()
+        except (TypeError, RuntimeError, ValueError) as error:
+            raise ContractError("row indices must support CPU bounds validation") from error
+        if invalid:
+            raise ContractError("row indices are outside the encoded batch")
+        device_indices = cpu_indices.to(device=self.action_mask.device)
+
+        def select_mapping(values: Mapping[str, Any]) -> dict[str, Any]:
+            return {key: tensor.index_select(0, device_indices) for key, tensor in values.items()}
+
+        return EncodedBatch(
+            schema_fingerprint=self.schema_fingerprint,
+            values=select_mapping(self.values),
+            known=select_mapping(self.known),
+            occupied=select_mapping(self.occupied),
+            action_mask=self.action_mask.index_select(0, device_indices),
+            known_coverage=select_mapping(self.known_coverage),
+        )
+
 
 def _torch_dtype(torch: Any, dtype: str) -> Any:
     if dtype == "int8":
@@ -123,14 +159,15 @@ def _torch_dtype(torch: Any, dtype: str) -> Any:
     raise ContractError(f"unsupported descriptor tensor dtype {dtype!r}")
 
 
-def _copy_tensor(torch: Any, frame: CombatFrame, key: str, device: str) -> Any:
-    """Copy immutable bytes through a fresh writable buffer before Torch sees them."""
-    buffer = frame.tensors[key]
-    writable = bytearray(buffer.data)
+def _pack_tensor(torch: Any, frames: Sequence[CombatFrame], key: str, device: str) -> Any:
+    """Pack one public tensor key into fresh writable batch storage on CPU."""
+    buffer = frames[0].tensors[key]
+    writable = bytearray().join(frame.tensors[key].data for frame in frames)
     try:
         view = torch.frombuffer(writable, dtype=_torch_dtype(torch, buffer.dtype))
-        owned = view.reshape(buffer.shape).clone()
-        return owned.to(device=device)
+        # frombuffer retains its writable owner. CPU views keep that storage
+        # alive; a synchronous device copy needs no retained host duplicate.
+        return view.reshape(len(frames), *buffer.shape).to(device=device)
     except (TypeError, RuntimeError, ValueError) as error:
         raise ContractError(f"could not tensorize public frame buffer {key}") from error
 
@@ -159,11 +196,8 @@ def encode_frames(
         if not isinstance(frame, CombatFrame):
             raise ContractError("frames must contain only CombatFrame values")
         validate_frame(frame, schema)
-    for key, spec in schema.tensors.items():
-        raw_by_key[key] = torch.stack(
-            tuple(_copy_tensor(torch, frame, key, device) for frame in selected),
-            dim=0,
-        )
+    for key in schema.tensors:
+        raw_by_key[key] = _pack_tensor(torch, selected, key, device)
 
     value_tensors: dict[str, Any] = {}
     known_tensors: dict[str, Any] = {}

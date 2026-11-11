@@ -1,0 +1,35 @@
+{
+  "schema": "spire-learn-curriculum-predecessor-v1",
+  "campaign_id": "curriculum-20261102-a",
+  "profile": "fresh-gym-afb51f5f",
+  "artifacts": {
+    "audit": {
+      "path": "artifacts/development/neural-combat/curriculum-campaign-v4/preflight-failure-audit.json",
+      "sha256": "ba59143f84fef94f790cec3c4edf06174658314da38d86666cb500316c62d02a"
+    },
+    "result": {
+      "path": "artifacts/development/neural-combat/curriculum-campaign-v4/runtime/campaign-result.json",
+      "sha256": "52f9a12b00aa895e69bda041685d2007e75e783cdf7c8ac792c7e007e1a5a479"
+    },
+    "attempt": {
+      "path": "artifacts/development/neural-combat/curriculum-campaign-v4/runtime/attempts/curriculum-qualification.json",
+      "sha256": "05ebe7b65173007af50806bf1ca148ed894ec0d30d5fb1838bd18bc7b69e894f"
+    },
+    "launcher_result": {
+      "path": "artifacts/development/neural-combat/curriculum-campaign-v4/launcher-result.json",
+      "sha256": "415862340fc67b63cb47e49a54e97e4eb4aad37da200369be95e1fe756f1ce2f"
+    },
+    "launcher_os_exit": {
+      "path": "artifacts/development/neural-combat/curriculum-campaign-v4/launcher-os-exit-observed.json",
+      "sha256": "3c085a9c76afa7f82d28e7c9d6161a88c1f205e9327786ddf73e8dc1f66d78b3"
+    }
+  },
+  "retained_lease": {
+    "environment_attempts": 512,
+    "sample_rows": 512,
+    "optimizer_attempts": 8,
+    "reset_slots": 256,
+    "fixed_random_choices": 0
+  },
+  "debit_reason": "Retain the complete accepted qualification lease after the terminal preflight failure; no refund is made for observed zero effects."
+}

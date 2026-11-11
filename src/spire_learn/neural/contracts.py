@@ -9,6 +9,7 @@ import re
 from types import MappingProxyType
 
 from spire_learn.contracts import ContractError
+from spire_learn.neural.gym_contracts import COMMON_FINGERPRINTS
 
 
 _FINGERPRINT = re.compile(r"[0-9a-fA-F]{64}\Z")
@@ -100,7 +101,8 @@ class CombatFrame:
         copied = dict(self.tensors)
         if not isinstance(self.schema_fingerprint, str) or _FINGERPRINT.fullmatch(self.schema_fingerprint) is None:
             raise ContractError("schema_fingerprint must be 64 hexadecimal characters")
-        if self.schema_fingerprint != _COMMON_VIEW_FINGERPRINT:
+        if (self.schema_fingerprint != _COMMON_VIEW_FINGERPRINT
+                and self.schema_fingerprint not in COMMON_FINGERPRINTS):
             raise ContractError("CombatFrame schema_fingerprint is not the accepted common view")
         if any(not isinstance(name, str) or name not in _COMMON_ACTOR_TENSOR_NAMES
                for name in copied):
@@ -121,6 +123,8 @@ class Lifecycle:
     combats_entered: int
     combats_settled: int
     last_exit: Mapping[str, object] | None
+    phase: str | None = None
+    selection_resume_phase: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.active) is not bool:
@@ -131,10 +135,16 @@ class Lifecycle:
             raise ContractError("Lifecycle routing must be noncombat, combat, or combat_selection")
         if self.routing == "combat_selection":
             if (not isinstance(self.selection_owner, str)
-                    or self.selection_owner not in {"card", "potion", "end_turn"}):
+                    or self.selection_owner not in {"card", "potion", "end_turn", "relic", "power"}):
                 raise ContractError("combat_selection requires a recognized selection_owner")
         elif self.selection_owner is not None:
             raise ContractError("selection_owner must be None when routing has no selector")
+        phases = {"decision", "selection", "player_action", "enemy_turn", "round_end",
+                  "player_start", "terminal"}
+        for name in ("phase", "selection_resume_phase"):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not str or value not in phases):
+                raise ContractError(f"Lifecycle {name} must be a public combat phase or None")
         if self.active_visit is not None and (type(self.active_visit) is not int or self.active_visit < 0):
             raise ContractError("Lifecycle active_visit must be a non-negative integer or None")
         for name, value in (("combats_entered", self.combats_entered),

@@ -1,0 +1,123 @@
+{
+  "inventory": {
+    "spire_lab-0.1.0.dist-info/METADATA": {
+      "sha256": "f08d60c689b0dea85cbd57d6504e9c58fbdae49f7f5749f6d13b2a1e91ff475d",
+      "size_bytes": 327
+    },
+    "spire_lab-0.1.0.dist-info/RECORD": {
+      "sha256": "ef12ee007f0be62f172a28b32e3499401fa360b539e8fb62347d306c22d010c7",
+      "size_bytes": 2461
+    },
+    "spire_lab-0.1.0.dist-info/WHEEL": {
+      "sha256": "e0e4491603fb19c3e99102899bbcf9ea57c4113133ea1398220fdb57b09f57a6",
+      "size_bytes": 109
+    },
+    "spire_lab-0.1.0.dist-info/licenses/LICENSE": {
+      "sha256": "04fb7812e6a475faf88281570adc0fe4f6789783090fd1e9d737b0a4da68e40a",
+      "size_bytes": 1070
+    },
+    "spire_lab-0.1.0.dist-info/sboms/spire-python.cyclonedx.json": {
+      "sha256": "7d49f2fcdc3fae9b742d5e72346a6c0a4f5b01179957b7cf9537dd401df76202",
+      "size_bytes": 62437
+    },
+    "spire_lab/__init__.py": {
+      "sha256": "f44c9d8d701de8e38bcece91efec618c80f6d2d440a5b19bad715cc0a9ccbcf7",
+      "size_bytes": 102
+    },
+    "spire_lab/_native.cpython-312-x86_64-linux-gnu.so": {
+      "sha256": "1656e912d88b91043f3a1bc7632989638b63bd2b5554b53703d9484658990eac",
+      "size_bytes": 8934512
+    },
+    "spire_lab/_native.pyi": {
+      "sha256": "a1545b35990027cb0b4baa0f46efcff35e786b603dd829e723df949269550f9a",
+      "size_bytes": 6598
+    },
+    "spire_lab/card_metadata.py": {
+      "sha256": "1c06852f77c00b8236269cbe5c4df20801312105a4c4ff5d78bcadde25dfe7cb",
+      "size_bytes": 2372
+    },
+    "spire_lab/combat/__init__.py": {
+      "sha256": "cc514988f422bcc0c65968c03865ad730ad9d2a1f3a769bf0380c2e68973eace",
+      "size_bytes": 96
+    },
+    "spire_lab/combat/content.py": {
+      "sha256": "389e88bc339a2b2b22719c5021fefc92217be566ffbca6b3ce40757b505d55a4",
+      "size_bytes": 1050
+    },
+    "spire_lab/combat/effects.py": {
+      "sha256": "e6f7774d3038cc43ebbdbabeedf26b16a9c477d3362d938456ffb7b1b7464ad0",
+      "size_bytes": 6714
+    },
+    "spire_lab/combat/engine.py": {
+      "sha256": "df937ab69b6d14ce5665674d4593dc2df142ec534b93fc70bdbe8f0f5879b587",
+      "size_bytes": 8416
+    },
+    "spire_lab/combat/model.py": {
+      "sha256": "57a8a3643ece88d12fe0ed928c11ac98c64ceeef8e3e1119ff4426a5ab2b8614",
+      "size_bytes": 19898
+    },
+    "spire_lab/combat/piles.py": {
+      "sha256": "fbcffd0b67631945da144b89a618eefa24e1a8137a01b7d2279b46263de03286",
+      "size_bytes": 3222
+    },
+    "spire_lab/combat/rng.py": {
+      "sha256": "5f5e85aa52d88c983d5de3d454576681675c3b665f516136d57e9811d0e2e823",
+      "size_bytes": 7655
+    },
+    "spire_lab/combat/rules.py": {
+      "sha256": "eb5e5d96226aa0b9192df06c7026ab54ceb03ad33c83cd341f54cacccf2e1b71",
+      "size_bytes": 4881
+    },
+    "spire_lab/combat/snapshot.py": {
+      "sha256": "d529ec0d6aea206fca43338d01cdfe559204375ff5868361e4b786b66adecf93",
+      "size_bytes": 1985
+    },
+    "spire_lab/combat/turns.py": {
+      "sha256": "8d22f4eb3375188266a75ba3cc2690ef05b5c0fd1ec8fea0043ee4b4e9a3baa1",
+      "size_bytes": 5179
+    },
+    "spire_lab/combat/view.py": {
+      "sha256": "c9b047f7d6a2e059aac32cdf4f7f2a56f4a343d99ab438555678b7e685232cb5",
+      "size_bytes": 3201
+    },
+    "spire_lab/gymnasium/__init__.py": {
+      "sha256": "55ec08ceb0306766a9b7605257167c541e86090c42cde3d36dd82d151807fe30",
+      "size_bytes": 353
+    },
+    "spire_lab/gymnasium/_common.py": {
+      "sha256": "83bd5a3dac94478daa158ec5c0a96121d5cf7990bbc68dd791fbe6bb3e52647e",
+      "size_bytes": 2808
+    },
+    "spire_lab/gymnasium/ironclad.py": {
+      "sha256": "6555b6460bbc24cf935fb5590d072e0b5cfe549d7ac009d756f37df4329200cf",
+      "size_bytes": 6305
+    },
+    "spire_lab/gymnasium/ironclad_vector.py": {
+      "sha256": "0f15fa7d3aa4ce61b51ed816e5ad0c1ed4e9a81ae2847387cb2322ad356480fd",
+      "size_bytes": 6436
+    },
+    "spire_lab/gymnasium/run.py": {
+      "sha256": "3df0a14cdb5982d6982a0e1167064f42252f777dddc9d67c4fa8b4bbd9ae51cc",
+      "size_bytes": 5228
+    },
+    "spire_lab/gymnasium/single.py": {
+      "sha256": "70504f87ffff12d37286e5c050a99a7f91d3c751e1af3108785b74c6436f3547",
+      "size_bytes": 3272
+    },
+    "spire_lab/gymnasium/spaces.py": {
+      "sha256": "50d3816db0828d45eef6ea93e2fedd7be15755b7898ab0816acf92c6abc77f58",
+      "size_bytes": 1202
+    },
+    "spire_lab/gymnasium/vector.py": {
+      "sha256": "b85e0cf322a75bb6c43563b8b7498a9fdaa15fff2833f0d51038eb09f6decef1",
+      "size_bytes": 8898
+    },
+    "spire_lab/readiness.py": {
+      "sha256": "33694acb52e84f9676221f2a32c2d1376d25838365113d32557e1cb73b27afaa",
+      "size_bytes": 6335
+    }
+  },
+  "reusable_package_sha256": "fb548fb4564b6955131914aa66a31a62fa70092459fd87ef46f9f9d7f4113afe",
+  "runtime_profile_sha256": "22074808f75244325ba754eaea417a956b36ac919c345875ce40564b3c43d7d7",
+  "schema": "spire-learn-curriculum-overlay-v1"
+}

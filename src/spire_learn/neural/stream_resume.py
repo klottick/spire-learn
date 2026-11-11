@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import hashlib
+import json
 from pathlib import Path
 import tomllib
 from typing import TYPE_CHECKING
@@ -21,17 +22,77 @@ if TYPE_CHECKING:
 
 _SCHEMA = 'spire-learn-scenario-stream-v1'
 _FIELDS = {'schema', 'recipe_path', 'arm', 'shard_index', 'distribution_sha256'}
+_SKIP_AUTHORIZATION = {
+    'schema': 'spire-learn-scenario-stream-gap-v1',
+    'campaign_id': 'curriculum-20261103-twenty-hour-continuation-1',
+    'from_shard_index': 337,
+    'expected_next_shard_index': 338,
+    'skipped_shard_index': 338,
+    'to_shard_index': 339,
+    'parent_receipt_sha256': 'b2afb649a3887bbcc101c397831cbe6b5c0e639476c377cbace20f4f1e333fd0',
+    'parent_checkpoint_inventory_sha256': '071a05b8bdec51f38b9f7591dec553a0d7f5547cc2dd2131094d678fe617054e',
+    'skipped_attempt_sha256': '67b1adf91b865246f34d43ad30a1724b804aacccb8db6daa8e2fa55e7e0beea8',
+    'skipped_claim_sha256': '37ad8526dce9e4431d6a0b0c43ee3f5a51bb7ac4ee530d11a186bef18de110f9',
+    'skipped_lease': {
+        'environment_attempts': 4096,
+        'sample_rows': 4096,
+        'optimizer_attempts': 256,
+        'reset_slots': 4112,
+        'fixed_random_choices': 0,
+    },
+    'actual': None,
+    'receipt_binding': None,
+    'user_authority_sha256': '1c1c1d85b858caf1900db84bfdec5ba9696cdd8d71823b9fbada0bebae2e35c4',
+}
+_SKIP_AUTHORIZATION_CORRECTED = {
+    **_SKIP_AUTHORIZATION,
+    'campaign_id': 'curriculum-20261103-twenty-hour-continuation-2',
+    'user_authority_sha256': '161a5ed34029a62cd4229c0b4fb852cbca6d0a78fcc4813e75b966f7d1e7cd22',
+}
+_SKIP_AUTHORIZATION_REPAIRED = {
+    **_SKIP_AUTHORIZATION,
+    'campaign_id': 'curriculum-20261103-twenty-hour-continuation-3',
+    'user_authority_sha256': '5f86c21f1d1321287f09a2307dcf16d5ebb16656984e038355264bb40da1d2bf',
+}
+_SKIP_AUTHORIZATIONS = (_SKIP_AUTHORIZATION, _SKIP_AUTHORIZATION_CORRECTED,
+                        _SKIP_AUTHORIZATION_REPAIRED)
 _MAX_CONFIG_BYTES = 32 * 1024
+
+
+def validate_continuation_skip_authorization(value: Mapping[str, object]) -> Mapping[str, object]:
+    """Accept only the recorded one-shard skip from healthy337 across unknown338."""
+    if isinstance(value, str):
+        def pairs(rows):
+            result = {}
+            for key, item in rows:
+                if key in result:
+                    raise ValueError('duplicate continuation skip authorization field')
+                result[key] = item
+            return result
+        try:
+            value = json.loads(value, object_pairs_hook=pairs,
+                parse_constant=lambda token: (_ for _ in ()).throw(ValueError('nonfinite skip authorization')))
+        except (json.JSONDecodeError, TypeError) as error:
+            raise ValueError('continuation skip authorization encoding differs') from error
+    if (not isinstance(value, Mapping)
+            or not any(content_sha256(json_value(value)) == content_sha256(authorized)
+                       for authorized in _SKIP_AUTHORIZATIONS)):
+        raise ValueError('continuation stream skip authorization differs')
+    return json_value(value)
 
 
 def _stable_document(raw: Mapping[str, object]) -> dict[str, object]:
     value = json_value(raw)
+    table = value.get('scenario_stream') if isinstance(value, dict) else None
     if (not isinstance(value, dict) or 'manifest_path' not in value
-            or not isinstance(value.get('scenario_stream'), dict)
-            or set(value['scenario_stream']) != _FIELDS):
+            or not isinstance(table, dict)
+            or set(table) not in (_FIELDS, _FIELDS | {'resume_skip'})):
         raise ValueError('scenario_stream source document is malformed')
+    if 'resume_skip' in table:
+        validate_continuation_skip_authorization(table['resume_skip'])
     value.pop('manifest_path')
     value['scenario_stream'].pop('shard_index')
+    value['scenario_stream'].pop('resume_skip', None)
     return value
 
 
@@ -42,8 +103,16 @@ def normalize_stream_config(raw: Mapping[str, object], source: Path,
     if len(config_source.encode('utf-8')) > _MAX_CONFIG_BYTES:
         raise ValueError('scenario_stream config source exceeds 32 KiB metadata bound')
     table = raw['scenario_stream']
-    if not isinstance(table, Mapping) or set(table) != _FIELDS or table['schema'] != _SCHEMA:
+    if (not isinstance(table, Mapping)
+            or set(table) not in (_FIELDS, _FIELDS | {'resume_skip'})
+            or table['schema'] != _SCHEMA):
         raise ValueError('scenario_stream must have the exact supported fields/schema')
+    if 'resume_skip' in table:
+        authorization = validate_continuation_skip_authorization(table['resume_skip'])
+        if table.get('arm') != 'mixed' or table.get('shard_index') != 339:
+            raise ValueError('continuation stream skip authorization is only valid for shard339')
+    else:
+        authorization = None
     if (raw['mode'], raw['operation'], raw['split'], raw['partition']) != (
             'standalone', 'train', 'train', 'train'):
         raise ValueError('scenario_stream requires standalone train')
@@ -59,7 +128,10 @@ def normalize_stream_config(raw: Mapping[str, object], source: Path,
         raise ValueError('scenario_stream distribution does not match recipe/support/arm')
     if manifest_sha256 != shard.manifest_sha256:
         raise ValueError('scenario_stream manifest is not the actual derived shard')
-    return _freeze_json({**table, 'resolved_recipe_path': str(recipe_path),
+    normalized_table = dict(table)
+    if authorization is not None:
+        normalized_table['resume_skip'] = authorization
+    return _freeze_json({**normalized_table, 'resolved_recipe_path': str(recipe_path),
         'config_document': raw, 'config_source': config_source,
         'resolved_manifest_path': str(manifest_path),
         'resolved_output_root': str((source.parent / raw['output_root']).resolve()),
@@ -185,7 +257,16 @@ def validate_stream_resume(metadata: Mapping[str, object],
         raise ValueError('resume scenario_stream stable training identity changed')
     current = state['current']
     index = _validate_binding(current, recipe, destination.arm, table['config_document'])
-    if index not in {destination.shard_index, destination.shard_index - 1}:
+    authorization = table.get('resume_skip')
+    if authorization is not None:
+        authorization = validate_continuation_skip_authorization(authorization)
+    next_state = state.get('next')
+    gap_parent = (authorization is not None and isinstance(next_state, Mapping) and index == 337
+        and destination.shard_index == 339
+        and authorization['from_shard_index'] == index
+        and authorization['expected_next_shard_index'] == index + 1
+        and next_state.get('shard_index') == index + 1)
+    if index not in {destination.shard_index, destination.shard_index - 1} and not gap_parent:
         raise ValueError('resume scenario_stream permits only same or exactly next shard')
     successor = generate_scenario_shard(recipe, split='train', shard_index=index + 1, arm=destination.arm)
     if json_value(state['next']) != {'shard_index': index + 1, 'manifest_sha256': successor.manifest_sha256}:
@@ -197,19 +278,31 @@ def validate_stream_resume(metadata: Mapping[str, object],
     if metadata.get('controller_id') == 'neural-policy-resume-v1' and transition is None:
         raise ValueError('resumed scenario_stream checkpoint is missing its transition binding')
     if transition is not None:
-        if (not isinstance(transition, Mapping) or set(transition) != {'identity', 'from', 'to'}
+        if (not isinstance(transition, Mapping)
+                or set(transition) not in ({'identity', 'from', 'to'},
+                                           {'identity', 'from', 'to', 'resume_skip_authorization'})
                 or json_value(transition['identity']) != identity
                 or json_value(transition['to']) != json_value(current)):
             raise ValueError('resume scenario_stream transition destination/identity changed')
+        recorded_skip = transition.get('resume_skip_authorization')
+        if recorded_skip is not None:
+            recorded_skip = validate_continuation_skip_authorization(recorded_skip)
         previous_index = _validate_binding(transition['from'], recipe, destination.arm,
                                            table['config_document'])
-        if previous_index not in {index, index - 1}:
+        recorded_gap = (recorded_skip is not None and previous_index == 337
+            and index == 339 and transition['to']['shard_index'] == 339)
+        if previous_index not in {index, index - 1} and not recorded_gap:
             raise ValueError('resume scenario_stream historical transition is not same/next')
+    else:
+        recorded_gap = False
     if index == destination.shard_index and dict(current) != destination_binding:
         raise ValueError('same-shard resume requires exact source and manifest bytes')
     return {'identity': identity, 'current': json_value(current),
             'destination': destination_binding, 'next': json_value(state['next']),
-            'sampler_state': _sampler_state(recipe, destination, state['sampler_state'])}
+            'sampler_state': _sampler_state(recipe, destination, state['sampler_state']),
+            **({'resume_skip_authorization': json_value(authorization if gap_parent else recorded_skip)}
+               if gap_parent or recorded_gap else {})}
 
 
-__all__ = ['stream_identity', 'validate_stream_resume', 'stream_checkpoint_state']
+__all__ = ['stream_identity', 'validate_stream_resume', 'stream_checkpoint_state',
+           'validate_continuation_skip_authorization']

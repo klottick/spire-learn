@@ -67,6 +67,21 @@ class ControlContractTests(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             budget.job_deadlines('panel')
 
+    def test_owned_tree_live_scan_is_opt_in_and_global_aggregate_is_live(self):
+        api = self.controls()
+        deps = SimpleNamespace(disk_usage=lambda root: SimpleNamespace(free=100*api.GIB))
+        for live in (False, True):
+            with self.subTest(live=live), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with patch.object(api.low, 'tree_bytes', return_value=7) as scan:
+                    result = api.storage_admission(root, root/'runtime', deps, live=live)
+                    self.assertEqual(result['new_bytes'], 7)
+                    self.assertEqual(scan.call_args_list[0].kwargs, dict(strict=True, live=live))
+                    self.assertEqual(scan.call_args_list[1].kwargs, dict(strict=False, live=True))
+                with patch.object(api.low, 'tree_bytes', side_effect=[12*api.GIB, 20*api.GIB]):
+                    with self.assertRaisesRegex(RuntimeError, 'storage admission'):
+                        api.storage_admission(root, root/'runtime', deps, reservation=1, live=live)
+
     def test_help_and_import_do_not_resolve_optional_packages(self):
         with blocked_optional() as attempts:
             api = self.controls()
@@ -1020,6 +1035,46 @@ class ProjectedHostTests(unittest.TestCase):
         self.assertEqual(self.budget.training_seconds, {'fixed': 0., 'randomized': 0., 'mixed': 18.5})
         self.assertEqual(self.budget.evaluation_seconds, 0.)
 
+    def test_live_dispatch_tolerates_temporary_unlink_then_reconciles_closed_output(self):
+        original_lstat = Path.lstat
+        scans = []
+        scan = self.api.low.tree_bytes
+        removed_temporary = []
+
+        def measured(path, **kwargs):
+            scans.append((Path(path), kwargs))
+            return scan(path, **kwargs)
+
+        def run(argv, **kwargs):
+            if argv[0] == '/fake/docker' and argv[5] == 'start':
+                transient = self.output/'temporary-library-file'
+                transient.write_bytes(b'temporary')
+                self.now += 6.  # Also reach the live aggregate-storage check.
+
+                def lstat(path, *args, **options):
+                    if path == transient:
+                        transient.unlink()
+                        removed_temporary.append(path)
+                    return original_lstat(path, *args, **options)
+
+                with patch.object(Path, 'lstat', lstat):
+                    kwargs['progress_check']()
+            return self.docker(argv, **kwargs)
+
+        deps = replace(self.deps, run=run)
+        with patch.object(self.api.low, 'tree_bytes', measured), patch.object(self.api.cdi, 'verify_host_profile'):
+            result = self.api.dispatch_job(ROOT, self.h, self.verified, self.budget, deps=deps,
+                docker='/fake/docker', client=self.client, kind='segment', job_id='curriculum-live-scan',
+                parent={'path': str(self.original), 'inventory': self.package['original_parent']['inventory']},
+                arm='mixed', index=0, max_updates=1)
+        self.assertEqual(len(removed_temporary), 1)
+        self.assertEqual(result['checkpoint']['counters']['update_count'], 1)
+        self.assertEqual(self.removed, ['a'*64])
+        self.assertEqual(self.budget.jobs['curriculum-live-scan']['state'], 'settled')
+        self.assertIn((self.output, dict(strict=True, live=True)), scans)
+        self.assertIn((self.h, dict(strict=True, live=True)), scans)
+        self.assertIn((self.h, dict(strict=True, live=False)), scans)
+
     def test_late_host_publication_cannot_return_a_passing_successor(self):
         original = self.api._write
         def publication(path, value):
@@ -1037,7 +1092,8 @@ class ProjectedHostTests(unittest.TestCase):
 
     def test_complete_controller_projects_real_gate_baseline_training_and_time_cutoff(self):
         api = self.api
-        self.h = self.base/'campaign'
+        self.h = self.base/'campaign'/'runtime'
+        self.h.parent.mkdir()
         self.client = self.h/'docker-client'
         real_next = api.CampaignSchedule.next
         def next_request(plan, now):
@@ -1047,7 +1103,7 @@ class ProjectedHostTests(unittest.TestCase):
         with blocked_optional(), patch.dict(os.environ, {
                 'SPIRE_LEARN_CURRICULUM_PARENT_START': '100.0',
                 'SPIRE_LEARN_CURRICULUM_PARENT_DEADLINE': '36100.0'}), \
-             patch.object(api, 'RUNTIME', self.h.relative_to(ROOT)), \
+             patch.object(api.profiles, 'current', return_value=replace(api.profiles.current(), domain=self.h.parent.relative_to(ROOT))), \
              patch.object(api, '_verify_supervision', return_value={'parent_start': 100., 'whole_deadline': 36100.}), \
              patch.object(api, 'validate_release', return_value=self.verified), \
              patch.object(api.low, '_docker_binary', return_value='/fake/docker'), \
@@ -1089,7 +1145,8 @@ class ProjectedHostTests(unittest.TestCase):
 
     def test_actual_failed_panel_is_failed_in_sealed_availability_and_job_history(self):
         api = self.api
-        self.h = self.base/'failed-panel-campaign'
+        self.h = self.base/'failed-panel-campaign'/'runtime'
+        self.h.parent.mkdir()
         self.client = self.h/'docker-client'
         original_factory = self.harness.factory
         evaluations = []
@@ -1099,7 +1156,7 @@ class ProjectedHostTests(unittest.TestCase):
                 self.harness.wrong = 'eval-policy-version' if len(evaluations) == 2 else None
             return original_factory(config, **kwargs)
         self.harness.factory = factory
-        with blocked_optional(), patch.object(api, 'RUNTIME', self.h.relative_to(ROOT)), \
+        with blocked_optional(), patch.object(api.profiles, 'current', return_value=replace(api.profiles.current(), domain=self.h.parent.relative_to(ROOT))), \
              patch.object(api, '_verify_supervision', return_value={'parent_start': 100., 'whole_deadline': 36100.}), \
              patch.object(api, 'validate_release', return_value=self.verified), \
              patch.object(api.low, '_docker_binary', return_value='/fake/docker'), \
@@ -1131,7 +1188,8 @@ class ProjectedHostTests(unittest.TestCase):
 
     def test_failed_panel_reference_inspection_finishes_under_repeated_controls(self):
         api = self.api
-        host = self.base/'interrupted-failure-evidence'
+        host = self.base/'interrupted-failure-evidence'/'runtime'
+        host.parent.mkdir()
         original_reference, injected = api._retained_reference, [False]
         def reference(*args, **kwargs):
             if not injected[0]:
@@ -1139,7 +1197,7 @@ class ProjectedHostTests(unittest.TestCase):
                 signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
                 signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
             return original_reference(*args, **kwargs)
-        with blocked_optional(), patch.object(api, 'RUNTIME', host.relative_to(ROOT)), \
+        with blocked_optional(), patch.object(api.profiles, 'current', return_value=replace(api.profiles.current(), domain=host.parent.relative_to(ROOT))), \
              patch.object(api, '_verify_supervision', return_value={'parent_start': 100., 'whole_deadline': 36100.}), \
              patch.object(api, 'validate_release', return_value=self.verified), \
              patch.object(api.low, '_docker_binary', return_value='/fake/docker'), \
@@ -1163,7 +1221,8 @@ class ProjectedHostTests(unittest.TestCase):
         original_write, original_fsync = api._write, os.fsync
         for index, stage in enumerate(('write', 'fsync', 'veto_failure')):
             with self.subTest(stage=stage):
-                host = self.base/f'seal-{index}'
+                host = self.base/f'seal-{index}'/'runtime'
+                host.parent.mkdir()
                 active = [False]
                 def deliver():
                     self.assertIsNotNone(api._control_state.get(), 'sealing lost its owned signal scope')
@@ -1189,7 +1248,7 @@ class ProjectedHostTests(unittest.TestCase):
                         deliver()
                     return original_fsync(descriptor)
                 previous = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
-                with blocked_optional(), patch.object(api, 'RUNTIME', host.relative_to(ROOT)), \
+                with blocked_optional(), patch.object(api.profiles, 'current', return_value=replace(api.profiles.current(), domain=host.parent.relative_to(ROOT))), \
                      patch.object(api, '_verify_supervision', return_value={'parent_start': 100., 'whole_deadline': 36100.}), \
                      patch.object(api, 'validate_release', return_value=self.verified), \
                      patch.object(api.low, '_docker_binary', return_value='/fake/docker'), \

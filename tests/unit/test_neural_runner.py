@@ -1022,6 +1022,67 @@ class NeuralRunnerTests(unittest.TestCase):
         self.assertEqual(accounting["incomplete"], 0)
         self.assertEqual(accounting["not_started"], 0)
 
+    def test_evaluation_preserves_zero_positive_and_reference_policy_versions(self):
+        from spire_learn.neural import runner
+
+        config = self.selection_config
+        cases = config.cases.for_mode(config.mode)
+
+        class StrictVersionCollector(FakeCollector):
+            def __init__(self, config, rollouts, *, version, learned, expected):
+                super().__init__(config, rollouts)
+                self.policy._behavior_policy_version = version
+                self.learned_combat_policy = learned
+                self.expected_version = expected
+
+            def collect(self, *, max_learned_decisions, max_env_actions, policy_version):
+                if policy_version != self.expected_version:
+                    raise ValueError("evaluation policy version changed before collection")
+                return super().collect(
+                    max_learned_decisions=max_learned_decisions,
+                    max_env_actions=max_env_actions,
+                    policy_version=policy_version,
+                )
+
+        for version, learned, expected in (
+            (0, True, 0),
+            (7, True, 7),
+            (None, False, "reference-policy-v1"),
+        ):
+            with self.subTest(version=version, learned=learned):
+                allocations = tuple(
+                    _allocation(config, 0, ordinal, case_index=ordinal)
+                    for ordinal in range(len(cases))
+                )
+                rollouts = tuple(
+                    _rollout(config, (_record(
+                        config, slot=0, decision=ordinal,
+                        version=version if type(version) is int else 0,
+                        terminal=True, learned=learned, task_id=f"task-0-{ordinal}"),),
+                        allocations=allocations[:ordinal + 1],
+                    )
+                    for ordinal in range(len(cases))
+                )
+                collector = StrictVersionCollector(
+                    config, rollouts, version=version, learned=learned, expected=expected,
+                )
+                runtime = FakeRuntime(config, collector)
+                writer = FakeWriter()
+                with patch.object(runner, "_writer_start",
+                                  return_value=(writer, Path("/tmp/neural-eval-version"))):
+                    report = runner.evaluate_policy(config, runtime=runtime, clock=lambda: 0.0)
+
+                self.assertEqual(report.exit_code, 0, report.summary)
+                self.assertEqual(report.summary["case_accounting"]["complete"], len(cases))
+                self.assertEqual([call[2] for call in collector.collect_calls], [expected] * len(cases))
+                self.assertEqual(runtime.close_calls, 1)
+                self.assertEqual(writer.close_calls, 1)
+                self.assertEqual(runtime.update_calls, [])
+                self.assertEqual(runtime.saved, [])
+                self.assertEqual(runtime.optimizer_attempted_steps, 0)
+                self.assertEqual(runtime.optimizer_accepted_steps, 0)
+                self.assertEqual(runtime.update_count, 0)
+
     def test_fixed_case_evaluation_rejects_multirow_before_runtime_construction(self):
         from spire_learn.neural.runner import create_runtime, evaluate_policy
 

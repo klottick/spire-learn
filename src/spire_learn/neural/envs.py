@@ -30,6 +30,7 @@ from spire_learn.neural.contracts import CombatFrame, Lifecycle
 from spire_learn.neural.schema import CombatCandidate, CombatSchema, candidates
 from spire_learn.neural.schema import parse_common_descriptor, parse_lifecycle, validate_frame
 from spire_learn.neural.snapshot import snapshot_common
+from spire_learn.neural.gym_contracts import contract_for_revision
 
 
 _MAX_ERROR_TEXT = 512
@@ -989,8 +990,20 @@ def _validate_factory_inputs(config: NeuralConfig, cases: NeuralCases) -> None:
     if (not isinstance(config.environment_revision, str)
             or config.environment_revision not in ACCEPTED_RUNTIME_GYM_REVISIONS):
         raise ContractError("NeuralConfig does not pin the accepted Gym revision")
-    if config.common_view_id != COMMON_VIEW_ID or config.common_view_fingerprint != COMMON_VIEW_FINGERPRINT:
+    contract = contract_for_revision(config.environment_revision)
+    if config.common_view_id != COMMON_VIEW_ID or config.common_view_fingerprint != contract.common_fingerprint:
         raise ContractError("NeuralConfig does not pin the accepted common combat view")
+    if config.mode == "run" and (
+        config.profile_id != RUN_PROFILE_ID or config.run_observation_fingerprint != contract.run_fingerprint
+    ):
+        raise ContractError("Run config does not pin the accepted v3 Run observation")
+    if not config.accepted_identities or any(
+        config.mode not in identity.accepted_raw_mode_mappings or any(
+            mapping != contract.raw_mode_mappings.get(mode)
+            for mode, mapping in identity.accepted_raw_mode_mappings.items()
+        ) for identity in config.accepted_identities
+    ):
+        raise ContractError("NeuralConfig raw-mode mapping disagrees with the selected release")
     if (cases.sha256 != config.cases.sha256 or cases.path != config.cases.path
             or cases.split != config.split or cases.partition != config.partition):
         raise ContractError("make_driver cases do not match the authenticated config manifest")
@@ -1076,7 +1089,8 @@ def make_driver(config: NeuralConfig, cases: NeuralCases) -> CombatDriver:
     if (run_case.profile_id != RUN_PROFILE_ID or run_case.character != "ironclad"
             or run_case.ascension != 0):
         raise ContractError("Run case must be Ironclad A0 m10-ironclad-policy")
-    if config.profile_id != RUN_PROFILE_ID or config.run_observation_fingerprint != RUN_OBSERVATION_FINGERPRINT:
+    if (config.profile_id != RUN_PROFILE_ID or config.run_observation_fingerprint
+            != contract_for_revision(config.environment_revision).run_fingerprint):
         raise ContractError("Run config does not pin the accepted v3 Run observation")
     env = runtime.run_env(
         "ironclad",

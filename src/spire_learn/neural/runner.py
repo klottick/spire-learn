@@ -1538,10 +1538,13 @@ def evaluate_policy(
             diagnostics = _current_collection(runtime)
             learned_cap = 0 if getattr(runtime.collector, "learned_combat_policy", True) is False else config.budgets.max_training_decisions
             try:
+                policy_version = _runtime_policy_version(runtime)
+                if policy_version is None:
+                    policy_version = "reference-policy-v1"
                 rollout = runtime.collector.collect(
                     max_learned_decisions=learned_cap,
                     max_env_actions=config.budgets.max_environment_actions,
-                    policy_version=_runtime_policy_version(runtime) or "reference-policy-v1",
+                    policy_version=policy_version,
                 )
             except BaseException as error:
                 partial = getattr(runtime.collector, "partial_rollout", None)
@@ -2125,6 +2128,8 @@ def create_runtime(
         stream_transition = {"identity": stream_state["identity"],
                              "from": stream_state["current"],
                              "to": stream_state["destination"]}
+        if "resume_skip_authorization" in stream_state:
+            stream_transition["resume_skip_authorization"] = stream_state["resume_skip_authorization"]
 
     case_sampler = None
     if config.scenario_stream is not None and config.scenario_stream["arm"] == "mixed":

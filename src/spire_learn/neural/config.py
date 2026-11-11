@@ -19,13 +19,14 @@ from spire_learn.neural.cases import (
     validate_neural_case_lineage,
 )
 from spire_learn.neural.contracts import ModelConfig, NeuralIdentity, PPOConfig
+from spire_learn.neural.gym_contracts import GymContract, RUNTIME_REVISIONS, contract_for_revision
 
 
 ACCEPTED_GYM_REVISION = "533dad1c8aec86df624b3742b6b3ad1dbf1d0033"
 # The original descriptor/support provenance stays frozen. Runtime revisions
 # are explicit: schema compatibility does not imply arbitrary build acceptance.
 FIXED_GYM_REVISION = "a86df922a9dc598645820cc6544df36aefb3d2cc"
-ACCEPTED_RUNTIME_GYM_REVISIONS = frozenset({ACCEPTED_GYM_REVISION, FIXED_GYM_REVISION})
+ACCEPTED_RUNTIME_GYM_REVISIONS = RUNTIME_REVISIONS
 COMMON_VIEW_ID = "spire-gym-combat-policy-view-v1"
 COMMON_VIEW_FINGERPRINT = "02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78"
 RUN_PROFILE_ID = "m10-ironclad-policy"
@@ -164,7 +165,7 @@ def _stream_runtime_projection(config: NeuralConfig) -> dict[str, object]:
     return runtime
 
 
-def _identity(raw: object, *, model_hash: str, ppo_hash: str) -> NeuralIdentity:
+def _identity(raw: object, *, model_hash: str, ppo_hash: str, contract: GymContract) -> NeuralIdentity:
     required = {
         "model_id", "features_id", "action_id", "objective_id",
         "accepted_raw_mode_mappings", "config_hashes",
@@ -177,10 +178,7 @@ def _identity(raw: object, *, model_hash: str, ppo_hash: str) -> NeuralIdentity:
     if set(mappings) - {"standalone", "run"}:
         raise ValueError("identity declares an unsupported raw mode")
     for raw_mode, mapping_id in mappings.items():
-        expected_mapping = {
-            "standalone": STANDALONE_RAW_MAPPING_ID,
-            "run": RUN_RAW_MAPPING_ID,
-        }[raw_mode]
+        expected_mapping = contract.raw_mode_mappings[raw_mode]
         if not isinstance(mapping_id, str) or mapping_id != expected_mapping:
             raise ValueError(f"identity {raw_mode} mapping does not match the accepted raw-mode contract")
     if set(hashes) != {"model", "ppo"}:
@@ -275,9 +273,10 @@ def load_neural_config(path: Path) -> NeuralConfig:
     if (not isinstance(environment["gym_revision"], str)
             or environment["gym_revision"] not in ACCEPTED_RUNTIME_GYM_REVISIONS):
         raise ValueError("unsupported Gym revision")
+    contract = contract_for_revision(environment["gym_revision"])
     if environment["common_view_id"] != COMMON_VIEW_ID:
         raise ValueError("unsupported common combat view")
-    if environment["common_view_fingerprint"] != COMMON_VIEW_FINGERPRINT:
+    if environment["common_view_fingerprint"] != contract.common_fingerprint:
         raise ValueError("unsupported common combat view fingerprint")
     profile_id: str | None = None
     observation_version: int | None = None
@@ -290,12 +289,12 @@ def load_neural_config(path: Path) -> NeuralConfig:
             raise ValueError("Run mode requires observation schema v3")
         if type(environment["replay_version"]) is not int or environment["replay_version"] != RUN_REPLAY_VERSION:
             raise ValueError("Run mode requires replay schema v3")
-        if environment["run_observation_fingerprint"] != RUN_OBSERVATION_FINGERPRINT:
+        if environment["run_observation_fingerprint"] != contract.run_fingerprint:
             raise ValueError("Run mode requires the accepted Run observation fingerprint")
         profile_id = RUN_PROFILE_ID
         observation_version = RUN_OBSERVATION_VERSION
         replay_version = RUN_REPLAY_VERSION
-        run_observation_fingerprint = RUN_OBSERVATION_FINGERPRINT
+        run_observation_fingerprint = contract.run_fingerprint
 
     seed_values = _exact_keys(raw["seeds"], {"policy", "optimizer", "curriculum", "noncombat"}, "seeds")
     seeds = SeedStreams(**seed_values)
@@ -351,7 +350,7 @@ def load_neural_config(path: Path) -> NeuralConfig:
     identity_values = raw["accepted_identities"]
     if not isinstance(identity_values, list) or not identity_values:
         raise ValueError("accepted_identities must be a non-empty array of tables")
-    identities = tuple(_identity(item, model_hash=model_hash, ppo_hash=ppo_hash)
+    identities = tuple(_identity(item, model_hash=model_hash, ppo_hash=ppo_hash, contract=contract)
                        for item in identity_values)
     if any(mode not in identity.accepted_raw_mode_mappings for identity in identities):
         raise ValueError("every accepted identity must declare the selected raw mode")

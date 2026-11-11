@@ -1,0 +1,10 @@
+{
+  "fixture": "common-afb51f5.json",
+  "kind": "public observation descriptor, not gameplay or engine source",
+  "gym_revision": "afb51f5f222b4c4331ed34067c5eebeda606db91",
+  "sha256": "c820bf8001b532abb881ada5dfaf405f808013c75654ea6dd50a88f31f484cc6",
+  "fingerprint": "4c73f7de04d7b2875f473f8034c1cbacf984ea2d52d0a9428289c30cf1dff463",
+  "source": "single released zero-gameplay Learn adapter qualification 2026-11-02; retained output/view-v1-descriptor.json",
+  "license": "Spire Gym MIT; no original-game code or assets",
+  "timing": "test fixture added after qualification source postcheck; does not rewrite that snapshot"
+}

@@ -1,0 +1,90 @@
+{
+  "schema": "spire-learn-curriculum-campaign-v1",
+  "campaign_id": "curriculum-20261102-c",
+  "whole_seconds": 34200,
+  "training_stop_second": 31800,
+  "global_effect_caps": {
+    "environment_attempts": 1182976,
+    "sample_rows": 1099360,
+    "optimizer_attempts": 69984,
+    "reset_slots": 1099670,
+    "fixed_random_choices": 0
+  },
+  "training_shards": {
+    "fixed": 4,
+    "randomized": 4,
+    "mixed": 256
+  },
+  "training_budgets": {
+    "max_training_decisions": 1000000,
+    "max_environment_actions": 1000000,
+    "max_optimizer_steps": 65536,
+    "max_wall_seconds": 34200.0
+  },
+  "matched_arm": {
+    "environment_attempts": 16384,
+    "optimizer_attempts": 1024,
+    "whole_seconds": 3000
+  },
+  "segment": {
+    "updates": 8,
+    "environment_attempts": 4096,
+    "sample_rows": 4096,
+    "optimizer_attempts": 256,
+    "reset_slots": 4112,
+    "soft_seconds": 480,
+    "whole_seconds": 600
+  },
+  "qualification": {
+    "environment_attempts": 512,
+    "sample_rows": 512,
+    "optimizer_attempts": 8,
+    "reset_slots": 256,
+    "fixed_random_choices": 0,
+    "soft_seconds": 120,
+    "whole_seconds": 600,
+    "output_bytes": 1073741824
+  },
+  "evaluation": {
+    "total_seconds": 1800,
+    "case_actions": 256,
+    "case_seconds": 30,
+    "job_soft_seconds": 480,
+    "job_whole_seconds": 600
+  },
+  "evaluation_slots": [
+    "fresh-initial",
+    "matched-fixed",
+    "matched-randomized",
+    "matched-mixed",
+    "mixed-time-6000",
+    "mixed-time-12000",
+    "mixed-time-18000",
+    "final-mixed"
+  ],
+  "storage": {
+    "package_bytes": 268435456,
+    "new_output_bytes": 12884901888,
+    "aggregate_bytes": 42949672960,
+    "free_bytes": 32212254720,
+    "vram_free_bytes": 12884901888
+  },
+  "runtime": {
+    "gpu_uuid": "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d",
+    "threads": 4,
+    "interop_threads": 1
+  },
+  "qualifications": [
+    "RNG-001",
+    "TIME-001",
+    "standalone only",
+    "one paired replicate",
+    "no original-game transfer claim",
+    "fresh initialization, zero prior training exposure"
+  ],
+  "baseline": {
+    "label": "fresh-initial",
+    "selection": "untrained policy initialized under current schema with policy seed1103; no old policy selection",
+    "initialization": "same fresh current-schema weights for all arms; independent fresh Adam/RNG/progress; no legacy checkpoint conversion"
+  }
+}

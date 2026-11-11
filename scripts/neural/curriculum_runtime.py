@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import sys
 import time
+from types import SimpleNamespace
 
 if __package__ in (None, ''):
     _root = Path(__file__).resolve().parents[2]
@@ -40,6 +41,7 @@ DEPENDENCY_KEYS = frozenset(('factory', 'train', 'evaluate', 'load_checkpoint',
     'equal', 'fresh_rng_states', 'qualification_api', 'threads'))
 QUALIFICATION_HASHES = ('02643c5784a2c7d9bee3b7323b3583a53d49fdd93e419a6bcc5b8fcb06296f31',
                         '612172ae211ba5d3d7efd6d0799a6da6053565fdb0f72b1fc6a01e0d68dc7586')
+CONTINUATION_CUMULATIVE_ACTION_CAP = 4710400
 _ADMITTED_CONTEXT = None
 
 
@@ -59,6 +61,139 @@ def _digest(value, label):
     if not isinstance(value, str) or re.fullmatch('[0-9a-f]{64}', value) is None:
         raise ValueError(label + ' must be a SHA256')
     return value
+
+
+def _cumulative_action_ceiling(package):
+    """Keep legacy families closed while honoring this released continuation's cap."""
+    if not profiles.is_twenty_hour_continuation():
+        return 1000000
+    campaign = package.get('campaign') if isinstance(package, Mapping) else None
+    training_caps = campaign.get('training_caps') if isinstance(campaign, Mapping) else None
+    ceiling = training_caps.get('environment_attempts') if isinstance(training_caps, Mapping) else None
+    if type(ceiling) is not int or ceiling != CONTINUATION_CUMULATIVE_ACTION_CAP:
+        raise ValueError('continuation released cumulative action ceiling differs')
+    return ceiling
+
+
+SOURCE_TRANSITION_SCHEMA = 'spire-learn-curriculum-source-transition-v1'
+SOURCE_TRANSITION_FROM = '53cd32b7be83bde5c78f773a914dba7f89a0937840214e272dbbfaab71ff7d2e'
+CONTINUATION_SOURCE_FROM = 'd363f588bdafb4f2013828c149edeaff819eb422f6f48a6ff34493a257f7eb3a'
+CONTINUATION_PARENT_RECEIPT_SHA256 = 'b2afb649a3887bbcc101c397831cbe6b5c0e639476c377cbace20f4f1e333fd0'
+CONTINUATION_CHECKPOINT_INVENTORY_SHA256 = '071a05b8bdec51f38b9f7591dec553a0d7f5547cc2dd2131094d678fe617054e'
+CONTINUATION_AUTHORITY_SHA256 = '1c1c1d85b858caf1900db84bfdec5ba9696cdd8d71823b9fbada0bebae2e35c4'
+CORRECTED_CONTINUATION_AUTHORITY_SHA256 = '161a5ed34029a62cd4229c0b4fb852cbca6d0a78fcc4813e75b966f7d1e7cd22'
+REPAIRED_CONTINUATION_AUTHORITY_SHA256 = '5f86c21f1d1321287f09a2307dcf16d5ebb16656984e038355264bb40da1d2bf'
+SOURCE_TRANSITION_KEYS = frozenset(('schema', 'purpose', 'from_source_sha256',
+    'to_source_sha256', 'predecessor_sha256', 'checkpoint_inventory_sha256', 'user_approval_sha256'))
+
+
+def validate_source_transition(context, *, previous_source=None, authority=None):
+    """One campaign's explicit bridge; return the required predecessor source.
+
+    Structural validation is pure. The verified guest entry binds authority to
+    its released approval before admitting any backend, as for ordinary jobs.
+    """
+    if 'source_transition' not in context:
+        return context['source_sha256']
+    bridge = context['source_transition']
+    continuation = profiles.is_twenty_hour_continuation()
+    expected_campaign = (profiles.current().campaign_id if continuation
+                         else 'curriculum-20261102-c')
+    expected_index = 339 if continuation else None
+    if (not isinstance(bridge, Mapping) or set(bridge) != SOURCE_TRANSITION_KEYS
+            or bridge.get('schema') != SOURCE_TRANSITION_SCHEMA
+            or bridge.get('purpose') != 'authorized-checkpoint-continuation'
+            or context.get('campaign_id') != expected_campaign
+            or context.get('kind') != 'segment' or context.get('arm') != 'mixed'
+            or type(context.get('shard_index')) is not int
+            or (context['shard_index'] != expected_index if continuation
+                else context['shard_index'] < 1)):
+        raise ValueError('source transition fields/schema/purpose differ')
+    for key in SOURCE_TRANSITION_KEYS - {'schema', 'purpose'}:
+        _digest(bridge[key], 'source transition '+key)
+    from scripts.neural.gpu_runtime_proof_helpers import canonical_sha256
+    expected_source = CONTINUATION_SOURCE_FROM if continuation else SOURCE_TRANSITION_FROM
+    expected_predecessor = CONTINUATION_PARENT_RECEIPT_SHA256 if continuation else None
+    expected_inventory = CONTINUATION_CHECKPOINT_INVENTORY_SHA256 if continuation else None
+    expected_authority = (REPAIRED_CONTINUATION_AUTHORITY_SHA256
+        if profiles.is_repaired_twenty_hour_continuation() else CORRECTED_CONTINUATION_AUTHORITY_SHA256
+        if profiles.is_corrected_twenty_hour_continuation() else
+        CONTINUATION_AUTHORITY_SHA256 if continuation else None)
+    if (bridge['from_source_sha256'] != expected_source
+            or bridge['to_source_sha256'] != context['source_sha256']
+            or bridge['from_source_sha256'] == bridge['to_source_sha256']
+            or not isinstance(context.get('predecessor'), Mapping)
+            or bridge['predecessor_sha256'] != context['predecessor'].get('sha256')
+            or bridge['checkpoint_inventory_sha256'] != canonical_sha256(context['parent']['inventory'])
+            or continuation and (bridge['predecessor_sha256'] != expected_predecessor
+                or bridge['checkpoint_inventory_sha256'] != expected_inventory
+                or bridge['user_approval_sha256'] != expected_authority)
+            or previous_source is not None and previous_source != bridge['from_source_sha256']
+            or authority is not None and authority != bridge['user_approval_sha256']):
+        raise ValueError('source transition binding differs')
+    return bridge['from_source_sha256']
+
+
+def validate_twenty_hour_resume_skip(package: Mapping, context: Mapping,
+                                     previous: Mapping) -> bool:
+    """Validate the sole authorized shard337→339 bridge and the unknown338 lease."""
+    if not profiles.is_twenty_hour_continuation():
+        raise ValueError('continuation resume skip is outside its profile')
+    lineage = package.get('continuation')
+    parent = package.get('original_parent')
+    predecessor = context.get('predecessor')
+    from scripts.neural.gpu_runtime_proof_helpers import canonical_sha256
+    from spire_learn.neural.stream_resume import validate_continuation_skip_authorization
+    if not isinstance(lineage, Mapping) or not isinstance(parent, Mapping):
+        raise ValueError('continuation resume lineage is missing')
+    authorization = validate_continuation_skip_authorization(lineage.get('resume_skip_authorization'))
+    if (context.get('campaign_id') != profiles.current().campaign_id
+            or context.get('kind') != 'segment' or context.get('arm') != 'mixed'
+            or context.get('shard_index') != 339
+            or context.get('prefix') != lineage.get('parent_prefix')
+            or not isinstance(predecessor, Mapping)
+            or predecessor.get('sha256') != lineage.get('parent_receipt_sha256')
+            or parent.get('parent_campaign_id') != lineage.get('parent_campaign_id')
+            or parent.get('parent_source_sha256') != lineage.get('parent_source_sha256')
+            or parent.get('parent_package_sha256') != lineage.get('parent_package_sha256')
+            or parent.get('parent_shard_index') != 337
+            or parent.get('parent_next_shard_index') != 338
+            or parent.get('parent_receipt_sha256') != lineage.get('parent_receipt_sha256')
+            or parent.get('inventory') != context.get('parent', {}).get('inventory')
+            or canonical_sha256(parent.get('inventory'))
+                != lineage.get('parent_checkpoint_inventory_sha256')):
+        raise ValueError('continuation resume parent binding differs')
+    effects = previous.get('effects')
+    if (previous.get('schema') != RECEIPT_SCHEMA or previous.get('status') != 'complete'
+            or previous.get('campaign_id') != lineage.get('parent_campaign_id')
+            or previous.get('source_sha256') != lineage.get('parent_source_sha256')
+            or previous.get('package_sha256') != lineage.get('parent_package_sha256')
+            or previous.get('kind') != 'segment' or previous.get('arm') != 'mixed'
+            or previous.get('shard_index') != 337
+            or previous.get('next_shard') != {'shard_index': 338,
+                'manifest_sha256': lineage.get('parent_next_manifest_sha256')}
+            or previous.get('report', {}).get('status') != 'complete'
+            or previous.get('report', {}).get('fault') is not None
+            or previous.get('checkpoint', {}).get('inventory') != parent.get('inventory')
+            or previous.get('checkpoint', {}).get('counters') != lineage.get('parent_prefix')
+            or not isinstance(effects, Mapping) or set(effects) != set(EFFECT_KINDS)):
+        raise ValueError('continuation healthy parent receipt differs')
+    for key, lease in effects.items():
+        if (not isinstance(lease, Mapping)
+                or set(lease) != {'reserved', 'attempted', 'delivered', 'uncertain'}
+                or any(type(value) is not int or value < 0 for value in lease.values())
+                or lease['attempted'] != lease['delivered']
+                or lease['uncertain'] != 0
+                or lease['reserved'] < lease['attempted']):
+            raise ValueError('continuation parent effects are uncertain')
+    skipped = lineage.get('skipped_shard')
+    if (not isinstance(skipped, Mapping) or skipped.get('index') != 338
+            or skipped.get('attempt_sha256') != authorization['skipped_attempt_sha256']
+            or skipped.get('claim_sha256') != authorization['skipped_claim_sha256']
+            or skipped.get('lease') != authorization['skipped_lease']
+            or skipped.get('actual') is not None or skipped.get('receipt_binding') is not None):
+        raise ValueError('continuation full unknown shard338 lease differs')
+    return True
 
 
 def _json(value):
@@ -86,6 +221,8 @@ def source_paths(root: Path) -> list[str]:
                'sustained_package')]
     paths += ['tests/__init__.py', 'tests/neural/__init__.py', 'tests/neural/test_curriculum.py']
     paths += ['scripts/neural/curriculum_profiles.py']
+    if profiles.is_fresh_gym_family():
+        paths += ['scripts/neural/curriculum_fault_capture.py']
     return sorted(paths)
 
 
@@ -111,11 +248,13 @@ def validate_context(root: Path, context: Mapping, *, kind=None, clock=time.mono
     if not isinstance(context, Mapping) or context.get('kind') not in KIND_KEYS:
         raise ValueError('context kind is missing or unsupported')
     selected_kind = context['kind']
-    if (set(context) != COMMON_KEYS | KIND_KEYS[selected_kind]
+    if (set(context) != COMMON_KEYS | KIND_KEYS[selected_kind] |
+                ({'source_transition'} if 'source_transition' in context else set())
             or context.get('schema') != CONTEXT_SCHEMA
             or context.get('campaign_id') != profiles.current().campaign_id
             or kind is not None and selected_kind != kind):
         raise ValueError('context fields/schema/identity differ')
+    predecessor_source = validate_source_transition(context)
     if not isinstance(context['job_id'], str) or re.fullmatch(r'curriculum-[a-z0-9-]{1,100}', context['job_id']) is None:
         raise ValueError('context job ID must use its own namespace')
     if context['runtime_class'] != ('cpu' if selected_kind == 'panel' else 'gpu'):
@@ -167,8 +306,12 @@ def validate_context(root: Path, context: Mapping, *, kind=None, clock=time.mono
         arm = context['arm']
         if arm not in package['training']:
             raise ValueError('context training arm differs')
-        index = _integer(context['shard_index'], 'shard index', len(package['training'][arm]) - 1)
-        binding = package['training'][arm][index]
+        start_index = package.get('campaign', {}).get('training_start_indices', {}).get(arm, 0)
+        index = _integer(context['shard_index'], 'shard index', start_index + len(package['training'][arm]) - 1)
+        if index < start_index:
+            raise ValueError('context training stream precedes its reserved starting index')
+        offset = index - start_index
+        binding = package['training'][arm][offset]
         expected_inputs = {name: package['inventory'][name] for name in binding['inputs']}
         if context['input_inventory'] != expected_inputs:
             raise ValueError('context selected training input inventory differs')
@@ -186,7 +329,18 @@ def validate_context(root: Path, context: Mapping, *, kind=None, clock=time.mono
         prefix = context['prefix']
         if not isinstance(prefix, Mapping):
             raise ValueError('context prefix must be a mapping')
-        if index == 0:
+        if profiles.is_twenty_hour_continuation() and index == start_index:
+            if (not isinstance(context['predecessor'], Mapping)
+                    or set(context['predecessor']) != {'path', 'sha256'}):
+                raise ValueError('continuation shard339 needs its exact shard337 receipt')
+            predecessor_path = relative_file(root, context['predecessor']['path'])
+            if sha256(predecessor_path) != context['predecessor']['sha256']:
+                raise ValueError('continuation shard337 receipt changed')
+            previous = read_json(predecessor_path, maximum=32*1024**2)
+            if context.get('source_transition') is None or not validate_twenty_hour_resume_skip(
+                    package, context, previous):
+                raise ValueError('continuation shard337→339 transition is not authorized')
+        elif index == start_index:
             expected_parent = package['original_parent']
             if (prefix != {} or context['predecessor'] is not None
                     or parent['inventory'] != expected_parent['inventory']):
@@ -198,10 +352,10 @@ def validate_context(root: Path, context: Mapping, *, kind=None, clock=time.mono
             if sha256(predecessor_path) != context['predecessor']['sha256']:
                 raise ValueError('context predecessor receipt changed')
             previous = read_json(predecessor_path, maximum=32*1024**2)
-            previous_binding = package['training'][arm][index - 1]
+            previous_binding = package['training'][arm][offset - 1]
             if (previous.get('schema') != RECEIPT_SCHEMA or previous.get('status') != 'complete'
                     or previous.get('campaign_id') != context['campaign_id']
-                    or previous.get('source_sha256') != context['source_sha256']
+                    or previous.get('source_sha256') != predecessor_source
                     or previous.get('package_sha256') != context['package_sha256']
                     or previous.get('kind') != 'segment' or previous.get('arm') != arm
                     or previous.get('shard_index') != index - 1
@@ -216,7 +370,8 @@ def validate_context(root: Path, context: Mapping, *, kind=None, clock=time.mono
                     or previous.get('checkpoint', {}).get('counters') != prefix):
                 raise ValueError('context predecessor is not healthy immediate parent')
         updates = _integer(context['max_updates'], 'max updates')
-        actions = _integer(context['max_environment_actions'], 'max actions', 1000000)
+        actions = _integer(context['max_environment_actions'], 'max actions',
+                            _cumulative_action_ceiling(package))
         if (not prefix.get('update_count', 0) < updates <= prefix.get('update_count', 0) + 8
                 or not prefix.get('attempted_environment_slots', 0) < actions
                 <= prefix.get('attempted_environment_slots', 0) + limits['environment_attempts']):
@@ -310,6 +465,57 @@ def _require_verified_entry(context):
         raise RuntimeError('runtime requires verified guest entry admission')
 
 
+def _capture_fresh_profile_runtime(runtime, config=None):
+    """Install capture once on a newly created runtime for the fresh Gym profile."""
+    if not profiles.is_fresh_gym_family():
+        return runtime
+    directory = getattr(runtime, 'fault_capture_directory', None)
+    if directory is None:
+        driver = getattr(getattr(runtime, 'collector', None), 'driver', None)
+        existing = getattr(driver, '_spire_learn_curriculum_fault_capture', None)
+        directory = getattr(existing, 'directory', None)
+    if directory is None:
+        actual_config = getattr(runtime, 'config', None)
+        if actual_config is None:
+            actual_config = config
+        if actual_config is None:
+            raise TypeError('fresh-profile runtime capture requires its neural config')
+        from scripts.neural.curriculum_fault_capture import install_fault_capture
+        directory = install_fault_capture(runtime, actual_config.output_root)
+    runtime.fault_capture_directory = directory
+    return runtime
+
+
+def _capture_owned_runtime(factory, *args, **kwargs):
+    """Capture a factory result and close it exactly once if capture fails."""
+    runtime = factory(*args, **kwargs)
+    config = args[0] if args else kwargs.get('config')
+    try:
+        return _capture_fresh_profile_runtime(runtime, config)
+    except BaseException as error:
+        from spire_learn.neural.runner import _close_preserving
+        final = _close_preserving(error, runtime, 'curriculum fault capture')
+        if final is not error:
+            raise final
+        raise
+
+
+def _wrap_qualification_api(api):
+    """Copy the held API namespace and safely capture its runtime factory."""
+    if not profiles.is_fresh_gym_family():
+        return api
+    proxy = SimpleNamespace(**vars(api))
+    factory = getattr(api, 'create_runtime', None)
+    if not callable(factory):
+        raise TypeError('qualification API must expose create_runtime()')
+
+    def create_runtime(*args, **kwargs):
+        return _capture_owned_runtime(factory, *args, **kwargs)
+
+    proxy.create_runtime = create_runtime
+    return proxy
+
+
 def _factory(config, **kwargs):
     from spire_learn.neural.runner import create_runtime
     from spire_learn.neural.device import plan_runtime_device, require_runtime_execution_gate
@@ -317,6 +523,7 @@ def _factory(config, **kwargs):
     _threads()
     runtime = create_runtime(config, **kwargs)
     try:
+        _capture_fresh_profile_runtime(runtime, config)
         _threads()
     except BaseException as error:
         from spire_learn.neural.runner import _close_preserving
@@ -389,7 +596,8 @@ def _runtime_state(runtime, loaded, config, deps, *, resume, prefix):
             from spire_learn.neural.curriculum import CurriculumSampler
             from spire_learn.neural.scenario_stream import load_scenario_recipe, generate_scenario_shard
             recipe = load_scenario_recipe(Path(config.scenario_stream['resolved_recipe_path']))
-            shard = generate_scenario_shard(recipe, split='train', arm='mixed', shard_index=0)
+            shard = generate_scenario_shard(recipe, split='train', arm='mixed',
+                shard_index=config.scenario_stream['shard_index'])
             expected_sampler = CurriculumSampler(shard.annotations, distribution_sha256=shard.distribution_sha256,
                                                   categories=recipe.category_keys).snapshot()
         require(_json(runtime.collector.sampler_state) == _json(expected_sampler), 'fresh sampler')
@@ -506,7 +714,9 @@ def _receipt(context, started, clock, **values):
         release_sha256=context['release_sha256'], claim_sha256=context['claim_sha256'],
         parent=_json(context['parent']), input_inventory=_json(context['input_inventory']),
         elapsed_seconds=elapsed, deadline=context['deadline'], whole_deadline=context['whole_deadline'],
-        process=process_evidence(), **values)
+        process=process_evidence(),
+        **({'source_transition': _json(context['source_transition'])} if 'source_transition' in context else {}),
+        **values)
 
 
 def _finished(receipt, context, started, clock):
@@ -527,14 +737,18 @@ def run_segment(root: Path, context: Mapping, *, dependencies=None, clock=time.m
     from spire_learn.neural.runner import _checkpoint_recovery, RuntimeOperationLimits
     from spire_learn.neural.stream_runner import run_stream_segment
     from scripts.neural.sustained_runtime import effects, checkpoint_inventory, report_files, reconcile_segment
-    resume = context['shard_index'] > 0
+    start_index = package['campaign'].get('training_start_indices', {}).get(context['arm'], 0)
+    resume = (context['shard_index'] > start_index
+        or profiles.is_twenty_hour_continuation())
     purpose = 'resume' if resume else 'warm_start'
     preflight = preflight_checkpoint(parent, config.accepted_identities[0], purpose=purpose)
     prefix = _checkpoint_recovery(preflight, config)[1] if resume else {}
     if _json(prefix) != context['prefix']:
         raise ValueError('incoming preflight checkpoint prefix differs')
+    expected_parent_index = (337 if profiles.is_twenty_hour_continuation()
+        and context['shard_index'] == 339 else context['shard_index'] - 1)
     if resume and (preflight.metadata['run_metadata']['scenario_stream']['current']['shard_index']
-                   != context['shard_index'] - 1 or any(prefix[key] for key in
+                   != expected_parent_index or any(prefix[key] for key in
                    ('uncertain_environment_slots', 'uncertain_reset_slots', 'optimizer_uncertain_steps'))):
         raise ValueError('incoming checkpoint is not the healthy preceding shard')
     deps = _dependencies(dependencies)
@@ -630,7 +844,7 @@ def run_qualification(root: Path, context: Mapping, *, dependencies=None, clock=
             thread_evidence.append(evidence)
             boundary = deps['qualification_api'] or original_api
             with boundary(caps) as value:
-                yield value
+                yield _wrap_qualification_api(value)
             if deps['threads']() != evidence:
                 raise RuntimeError('qualification process threads changed')
         case = held.CurriculumIntegrationTests('test_public_catalog_tensor_resume_and_tiny_healthy_segments')

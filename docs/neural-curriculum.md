@@ -1,14 +1,104 @@
 # Randomized Ironclad combat curriculum
 
-The broad curriculum passed its bounded native/CUDA qualification, including
-checkpoint continuation. Both the original campaign and the later campaign on
-Gym's delivered fixes stopped on native standalone faults before the broad
-learning comparison could complete. The latest campaign saved two randomized
-checkpoints, but their evaluation never started. The results below separate
-saved work from incomplete comparisons. The [qualification protocol](../scripts/neural/curriculum-qualification-runbook.md)
+For the evidence behind curriculum and alternative learning strategies, see the
+[learning-strategy review](learning-strategies.md). Its conclusions distinguish
+focused combination starts, random decks and incremental card introduction;
+none is assumed to improve transfer without a matched comparison.
+
+For the later sustained training and continuation results, see the
+[November 4 investigation](learning-investigation-20261104.md). It records the
+35/64 parent versus 32/64 follow-up comparison, unevaluated checkpoint442, and
+the Learn Docker timeout/cleanup failures. Those later campaigns are separate
+from the completed fresh-Gym comparison below.
+
+The November 2–3 campaign on Gym `afb51f5f` completed its planned development
+comparison, including a user-requested throughput cutover. Its final mixed policy
+won **41/64 cases**, compared with **18/64 before training**. The earlier faulted
+campaigns remain separate historical results below. The
+[qualification protocol](../scripts/neural/curriculum-qualification-runbook.md)
 is historical preparation material; this document authorizes no retry or new
-workload. The earlier sustained campaign's native Run fault remains a separate
-unresolved result.
+workload.
+
+## Fresh-Gym campaign results (2026-11-03)
+
+Campaign `curriculum-20261102-c` used the current Gym vocabulary and the same fresh
+initial weights for fixed, randomized and mixed training. It accumulated
+**438,272 learned decisions, 27,392 accepted Adam steps and 856 PPO updates**.
+Fixed and randomized each trained 16,384 decisions; mixed trained 405,504.
+Disposable qualification updates are excluded from these learned-policy totals.
+There were no simulator faults or uncertain effects in the reconciled jobs.
+
+All eight planned panels completed the same 64 development cases with identical
+case/config/manifest/seed bindings: 512 reports, no missing or censored rows,
+and no evaluation operational failures. `final-mixed` names the last development
+checkpoint; it is not the protected final evaluation split, which remains unrun.
+
+| Development checkpoint | Wins | Rate |
+| --- | ---: | ---: |
+| Fresh initialization | 18/64 | 28.1% |
+| Matched fixed, 16,384 decisions | 34/64 | 53.1% |
+| Matched randomized, 16,384 decisions | 33/64 | 51.6% |
+| Matched mixed, 16,384 decisions | 35/64 | 54.7% |
+| Mixed at 6,000 charged training seconds | 37/64 | 57.8% |
+| Mixed at 12,000 seconds | 38/64 | 59.4% |
+| Mixed at 18,000 seconds | 36/64 | 56.2% |
+| Final mixed, 405,504 decisions | 41/64 | 64.1% |
+
+The final policy kept all 18 initial wins and converted 23 initial losses into
+wins. Its net gain is 35.9 percentage points on this panel. At matched short
+training budgets, the curricula differ by only one or two wins; this experiment
+does not establish that one curriculum is better. Long mixed training received
+much more experience, so its stronger final result cannot isolate the effect
+of mixing. The intermediate scores also fluctuate rather than rise steadily.
+
+| Development cohort | Initial | Final mixed |
+| --- | ---: | ---: |
+| Familiar composition, new seed | 9/16 | 12/16 |
+| Novel deck | 5/16 | 12/16 |
+| Reserved card pair | 2/16 | 10/16 |
+| Resource / later-tier diagnostic | 2/16 | 7/16 |
+
+The novel-deck and reserved-pair compositions are separated from this study's
+training partition. Those gains support useful combat learning beyond the
+narrow fixed control. Later-tier and constrained-resource fights remain harder.
+These are small, correlated development groups from one paired training
+replicate, repeatedly evaluated during the campaign. They do not establish
+seed-stable performance, full-Run strength or original-game transfer.
+
+### Throughput cutover and closure
+
+At the user's request, the original source execution stopped after fully
+recorded mixed shard 92, before another job was created. It retains launcher
+exit 1 and its intentional signal-15 interruption. The optimized continuation
+resumed at shard 93 with the exact saved model, Adam, RNG and recovery state,
+an explicit source-transition record, and a new owned execution namespace.
+No completed shard or evaluation panel was replayed.
+
+The original source phase averaged **13.60 mixed decisions/s** across 93 nonempty
+segments; the optimized phase averaged **61.92/s** across six, about **4.55× faster**.
+Those enclosing job intervals include setup and cleanup. Different shards and
+host conditions make this a natural campaign comparison, not a controlled
+benchmark. See [the data-path changes and CPU parity checks](neural-throughput.md).
+Environment width remained 16, with unchanged model/schema/PPO identities.
+
+The original absolute training cutoff and whole deadline stayed in force. An
+empty shard-99 admission hit its soft wall budget, performed zero actions,
+samples or Adam steps, and invoked the zero-progress stop guard. The final
+panel then completed. This was a normal budget stop, not a simulator fault.
+
+The continuation's actual launcher exit was 0, watchdog exit was 0, its logical
+seal was complete, and no finalization veto was present. All 118 campaign
+containers have retained successful removal and absence records. The audit
+passed 3,720 checks and inventoried 8,465 evidence files. A separate independent
+retained-evidence review passed the continuation, rehashed all 8,465 inventory
+entries and recalculated the results. It retains the original interruption and
+unreconciled pre-preparation bookkeeping-row qualification. RNG-001, TIME-001, finite Ironclad A0
+content and simulator-only qualifications remain explicit. No additional run is
+authorized by this result.
+
+[Final retained audit](../artifacts/development/neural-combat/curriculum-campaign-v6/throughput-switch-1/audit/final-runtime-report.md)
+· [Machine results](../artifacts/development/neural-combat/curriculum-campaign-v6/throughput-switch-1/audit/audit-results.json)
+· [Independent review](../artifacts/development/neural-combat/curriculum-campaign-v6/throughput-switch-1/audit/final-runtime-review.md)
 
 ## 2026-11-01 campaign outcome
 

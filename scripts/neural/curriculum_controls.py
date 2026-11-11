@@ -52,6 +52,75 @@ SOURCE_ROOTS = ('src', 'configs', 'scripts', 'tests')
 RELEASE_KEYS = {'schema', 'state', 'campaign_id', 'single_use', 'source_snapshot_sha256',
     'package_sha256', 'campaign_raw_sha256', 'qualification_input_inventory', 'runtime_pins',
     'caps', 'user_approval', 'review'}
+PREDECESSOR_ARTIFACT_PATHS = {
+    'audit': 'artifacts/development/neural-combat/curriculum-campaign-v4/preflight-failure-audit.json',
+    'result': 'artifacts/development/neural-combat/curriculum-campaign-v4/runtime/campaign-result.json',
+    'attempt': 'artifacts/development/neural-combat/curriculum-campaign-v4/runtime/attempts/curriculum-qualification.json',
+    'launcher_result': 'artifacts/development/neural-combat/curriculum-campaign-v4/launcher-result.json',
+    'launcher_os_exit': 'artifacts/development/neural-combat/curriculum-campaign-v4/launcher-os-exit-observed.json',
+}
+PREDECESSOR_AUDIT_HASH_PATHS = {
+    'result': 'runtime/campaign-result.json',
+    'attempt': 'runtime/attempts/curriculum-qualification.json',
+    'launcher_result': 'launcher-result.json',
+    'launcher_os_exit': 'launcher-os-exit-observed.json',
+}
+FAILED_QUALIFICATION_LEASE = dict(environment_attempts=512, sample_rows=512,
+    optimizer_attempts=8, reset_slots=256, fixed_random_choices=0)
+ADDITIONAL_PREDECESSOR_B_ARTIFACT_PATHS = {
+    'audit': 'artifacts/development/neural-combat/curriculum-campaign-v5/evaluation-failure-audit.json',
+    'result': 'artifacts/development/neural-combat/curriculum-campaign-v5/runtime/campaign-result.json',
+    'qualification_attempt': 'artifacts/development/neural-combat/curriculum-campaign-v5/runtime/attempts/curriculum-qualification.json',
+    'qualification_receipt': 'artifacts/development/neural-combat/curriculum-campaign-v5/runtime/jobs/curriculum-qualification/output/job-receipt.json',
+    'panel_attempt': 'artifacts/development/neural-combat/curriculum-campaign-v5/runtime/attempts/curriculum-panel-fresh-initial.json',
+    'panel_receipt': 'artifacts/development/neural-combat/curriculum-campaign-v5/runtime/jobs/curriculum-panel-fresh-initial/output/job-receipt.json',
+    'launcher_result': 'artifacts/development/neural-combat/curriculum-campaign-v5/launcher-result.json',
+    'launcher_os_exit': 'artifacts/development/neural-combat/curriculum-campaign-v5/launcher-os-exit-observed.json',
+}
+ADDITIONAL_PREDECESSOR_B_AUDIT_HASH_PATHS = {
+    'runtime/campaign-result.json': 'result',
+    'runtime/attempts/curriculum-qualification.json': 'qualification_attempt',
+    'runtime/jobs/curriculum-qualification/output/job-receipt.json': 'qualification_receipt',
+    'runtime/attempts/curriculum-panel-fresh-initial.json': 'panel_attempt',
+    'runtime/jobs/curriculum-panel-fresh-initial/output/job-receipt.json': 'panel_receipt',
+    'launcher-result.json': 'launcher_result',
+    'launcher-os-exit-observed.json': 'launcher_os_exit',
+}
+FAILED_B_QUALIFICATION_LEASE = dict(environment_attempts=512, sample_rows=512,
+    optimizer_attempts=8, reset_slots=256, fixed_random_choices=0)
+FAILED_B_QUALIFICATION_EFFECTS = dict(environment_attempts=128, sample_rows=128,
+    optimizer_attempts=8, reset_slots=10, fixed_random_choices=0)
+FAILED_B_PANEL_LEASE = dict(environment_attempts=16384, sample_rows=0,
+    optimizer_attempts=0, reset_slots=64, fixed_random_choices=0)
+FAILED_B_CHARGED_OR_RESERVED = dict(environment_attempts=16512, sample_rows=128,
+    optimizer_attempts=8, reset_slots=74, fixed_random_choices=0)
+FAILED_B_RESERVED_TIME_SECONDS = {'qualification': 600, 'panel': 600}
+FAILED_B_PANEL_CASE = 'dev-7c462a6b7d57517290f62cd156a688d88414c3a2e9868724'
+FAILED_B_CONTRACT_MESSAGE = 'learned choice statistics/version disagree with the requested policy'
+FAILED_B_CAUSE = ('evaluate_policy uses _runtime_policy_version(runtime) or reference-policy-v1; '
+    'valid integer0 becomes reference string, conflicting with learned choice behavior version0')
+FAILED_PRECHECK_STAGE = 'verify_guest_context before admitted context/held qualification/env construction or Torch workload'
+FAILED_PRECHECK_CAUSE = 'Learn guest verifier still compares against legacy profiles.NATIVE_SHA256 rather than selected profile native hash'
+TWENTY_HOUR_LIFETIME_CAPS = dict(environment_attempts=4899328, sample_rows=4719104,
+    optimizer_attempts=294920, reset_slots=4737984, fixed_random_choices=0)
+TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS = {
+    'campaign_release_approved': 'artifacts/development/neural-combat/twenty-hour-20261103/campaign-release-approved.json',
+    'campaign_claim': 'artifacts/development/neural-combat/twenty-hour-20261103/runtime/campaign-claim.json',
+    'campaign_result': 'artifacts/development/neural-combat/twenty-hour-20261103/runtime/campaign-result.json',
+    'seal_failure': 'artifacts/development/neural-combat/twenty-hour-20261103/runtime/campaign-seal-failure.json',
+    'launcher_result': 'artifacts/development/neural-combat/twenty-hour-20261103/launcher-result.json',
+    'launcher_supervision': 'artifacts/development/neural-combat/twenty-hour-20261103/launcher-result.json.supervision.json',
+    'owner_exit': 'artifacts/development/neural-combat/twenty-hour-20261103/launcher-os-exit-observed.json',
+    'progress_0084': 'artifacts/development/neural-combat/twenty-hour-20261103/runtime/progress/0084.json',
+    'shard_337_attempt': 'artifacts/development/neural-combat/twenty-hour-20261103/runtime/attempts/curriculum-mixed-337.json',
+    'shard_338_attempt': 'artifacts/development/neural-combat/twenty-hour-20261103/runtime/attempts/curriculum-mixed-338.json',
+    'shard_338_claim': 'artifacts/development/neural-combat/twenty-hour-20261103/runtime/job-claims/curriculum-mixed-338.json',
+    'shard_337_receipt': 'artifacts/development/neural-combat/twenty-hour-20261103/runtime/jobs/curriculum-mixed-337/output/job-receipt.json',
+    'shard_337_checkpoint_metadata': ('artifacts/development/neural-combat/twenty-hour-20261103/runtime/jobs/'
+        'curriculum-mixed-337/output/20261103T061627Z-c3c9a1f87bc548a98c6c368999b29c91/checkpoint-final/metadata.json'),
+    'restart_authority': 'artifacts/development/neural-combat/twenty-hour-20261103/race-fix/restart-authority.json',
+}
+TWENTY_HOUR_RESTART_AUTHORITY = TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS['restart_authority']
 _control_state = ContextVar('curriculum_first_control', default=None)
 _launcher_state = ContextVar('curriculum_launcher_control', default=None)
 
@@ -249,10 +318,1008 @@ def runtime_pins(root):
     return result
 
 
+def _predecessor_document(root):
+    selected = profiles.current()
+    if selected.predecessor_path is None:
+        return None
+    document = package_api.read_json(Path(root)/selected.predecessor_path)
+    if not isinstance(document, Mapping):
+        raise ValueError('source-bound campaign predecessor differs')
+    retained_lease = document.get('retained_lease')
+    if (set(document) != {'schema', 'campaign_id', 'profile', 'artifacts', 'retained_lease', 'debit_reason'}
+            or document['schema'] != 'spire-learn-curriculum-predecessor-v1'
+            or document['campaign_id'] != profiles.FRESH_GYM.campaign_id
+            or document['profile'] != profiles.FRESH_GYM.name
+            or not isinstance(retained_lease, Mapping) or set(retained_lease) != set(CAPS)
+            or any(type(value) is not int or value < 0 for value in retained_lease.values())
+            or retained_lease != FAILED_QUALIFICATION_LEASE
+            or not isinstance(document['debit_reason'], str) or not document['debit_reason']):
+        raise ValueError('source-bound campaign predecessor differs')
+    artifacts = document['artifacts']
+    if not isinstance(artifacts, Mapping) or set(artifacts) != set(PREDECESSOR_ARTIFACT_PATHS):
+        raise ValueError('campaign predecessor artifact set differs')
+    for name, expected_path in PREDECESSOR_ARTIFACT_PATHS.items():
+        binding = artifacts[name]
+        if (not isinstance(binding, Mapping) or set(binding) != {'path', 'sha256'}
+                or binding['path'] != expected_path
+                or not isinstance(binding['sha256'], str)
+                or re.fullmatch('[0-9a-f]{64}', binding['sha256']) is None):
+            raise ValueError('campaign predecessor artifact binding differs: '+name)
+    return document
+
+
+def _additional_predecessor_document(root):
+    selected = profiles.current()
+    if selected.additional_predecessor_path is None:
+        return None
+    document = package_api.read_json(Path(root)/selected.additional_predecessor_path)
+    charged = document.get('charged_or_reserved') if isinstance(document, Mapping) else None
+    if (not isinstance(document, Mapping)
+            or set(document) != {'schema', 'campaign_id', 'profile', 'artifacts',
+                                 'charged_or_reserved', 'reserved_time_seconds', 'debit_reason'}
+            or document['schema'] != 'spire-learn-curriculum-additional-predecessor-v1'
+            or document['campaign_id'] != profiles.FRESH_GYM_B.campaign_id
+            or document['profile'] != profiles.FRESH_GYM_B.name
+            or not isinstance(charged, Mapping) or set(charged) != set(CAPS)
+            or any(type(value) is not int or value < 0 for value in charged.values())
+            or charged != FAILED_B_CHARGED_OR_RESERVED
+            or document.get('reserved_time_seconds') != FAILED_B_RESERVED_TIME_SECONDS
+            or not isinstance(document['debit_reason'], str) or not document['debit_reason']):
+        raise ValueError('additional campaign predecessor differs')
+    artifacts = document['artifacts']
+    if not isinstance(artifacts, Mapping) or set(artifacts) != set(ADDITIONAL_PREDECESSOR_B_ARTIFACT_PATHS):
+        raise ValueError('additional campaign predecessor artifact set differs')
+    for name, expected_path in ADDITIONAL_PREDECESSOR_B_ARTIFACT_PATHS.items():
+        binding = artifacts[name]
+        if (not isinstance(binding, Mapping) or set(binding) != {'path', 'sha256'}
+                or binding['path'] != expected_path
+                or not isinstance(binding['sha256'], str)
+                or re.fullmatch('[0-9a-f]{64}', binding['sha256']) is None):
+            raise ValueError('additional campaign predecessor artifact binding differs: '+name)
+    return document
+
+
+def _validate_corrected_continuation_authority(root, predecessor):
+    """Bind the one corrected zero-job launch to its retained failure and parent."""
+    if not profiles.is_corrected_twenty_hour_continuation():
+        raise ValueError('corrected continuation authority is outside its profile')
+    root = Path(root).resolve(strict=True)
+    path = profiles.current().user_approval_path
+    if not isinstance(path, str) or not path:
+        raise ValueError('corrected continuation authority path is absent')
+    authority = package_api.read_json(root/path, maximum=65536)
+    expected_bindings = {
+        'launch_session': ('artifacts/development/neural-combat/twenty-hour-20261103-continuation-1/launch-session.json',
+            '76b78bafadae568863fdf33bf2d2fb3563f27ef3041e6cc793907289aa598372'),
+        'launcher_result': ('artifacts/development/neural-combat/twenty-hour-20261103-continuation-1/launcher-result.json',
+            '602438da6caaba6ad49084fedc8da862d20ecad726e1e55b7bdc3c2c04ddb19a'),
+        'launcher_supervision': ('artifacts/development/neural-combat/twenty-hour-20261103-continuation-1/launcher-result.json.supervision.json',
+            '6b5e457fe4cac7d645c116ce35d18c9c9845de146482778dc1414bd2dcfef557'),
+        'owner_exit': ('artifacts/development/neural-combat/twenty-hour-20261103-continuation-1/launcher-os-exit-observed.json',
+            'df14ffa075552d4ae0e73c4effb260c9687e97eda12474fbcb24b59f3bb99314'),
+    }
+    expected_parent = {
+        'campaign_id': profiles.TWENTY_HOUR.campaign_id,
+        'healthy_shard': 337,
+        'receipt_sha256': 'b2afb649a3887bbcc101c397831cbe6b5c0e639476c377cbace20f4f1e333fd0',
+        'checkpoint_inventory_sha256': '071a05b8bdec51f38b9f7591dec553a0d7f5547cc2dd2131094d678fe617054e',
+    }
+    lease = dict(environment_attempts=4096, sample_rows=4096, optimizer_attempts=256,
+        reset_slots=4112, fixed_random_choices=0)
+    expected_user_authority = {
+        'instruction': 'Fix that, then start more training',
+        'timing_steering': 'it can take 24 hours for all I care, timing is loose and the gpu is free',
+        'one_corrected_launch': True,
+        'preserve_all_failed_history': True,
+        'no_accepted_effect_retry': True,
+        'source_message_ids': [
+            '8a408503-5700-4bf2-aa90-15f613e34ec9',
+            'ccacdc24-cc28-4e29-ac2d-b6028049a4e8',
+            '7215e592-d6dc-40ee-a3a3-ac159d8566a4',
+        ],
+    }
+    expected_prior = {
+        'campaign_id': profiles.TWENTY_HOUR_CONTINUATION.campaign_id,
+        'owner_exec_session_id': 19939,
+        'write_stdin_exit_code': 1,
+        'launcher_elapsed_seconds': 304.97056149004493,
+        'watchdog_exit_status': 1,
+        'campaign_claim_published': False,
+        'job_dispatched': False,
+        'artifact_bindings': {
+            key: {'path': relative, 'sha256': digest}
+            for key, (relative, digest) in expected_bindings.items()
+        },
+    }
+    expected_skip = dict(shard_index=338, actual=None, receipt_binding=None,
+        lease=lease, first_new_shard_index=339)
+    expected_limits = dict(maximum_corrected_campaign_seconds=86400,
+        selected_whole_seconds=profiles.current().whole_seconds,
+        training_stop_second=profiles.current().training_stop_second,
+        no_new_effect_lease_for_zero_job_attempt=True)
+    if (set(authority) != {'schema', 'campaign_id', 'failed_predecessor', 'prior_zero_job_attempt',
+            'parent', 'skip', 'limits', 'user_authority'}
+            or authority.get('schema') != 'spire-learn-curriculum-corrected-continuation-authority-v1'
+            or authority.get('campaign_id') != profiles.current().campaign_id
+            or authority.get('failed_predecessor') != profiles.TWENTY_HOUR.campaign_id
+            or authority.get('prior_zero_job_attempt') != expected_prior
+            or authority.get('parent') != expected_parent
+            or authority.get('skip') != expected_skip
+            or authority.get('limits') != expected_limits
+            or authority.get('user_authority') != expected_user_authority
+            or profiles.current().whole_seconds > authority['limits']['maximum_corrected_campaign_seconds']
+            or predecessor.get('healthy_parent', {}).get('index') != 337
+            or predecessor.get('failed_shard', {}).get('index') != 338
+            or predecessor.get('failed_shard', {}).get('lease') != lease):
+        raise ValueError('corrected continuation authority scope differs')
+    for key, (relative, digest) in expected_bindings.items():
+        if package_api.sha256(package_api.relative_file(root, relative)) != digest:
+            raise ValueError('corrected continuation prior-attempt binding changed: '+key)
+    prior_domain = root/profiles.TWENTY_HOUR_CONTINUATION.domain
+    for relative in ('runtime/campaign-claim.json', 'runtime/campaign-result.json',
+                     'runtime/campaign-seal-failure.json', 'runtime/job-claims'):
+        if (prior_domain/relative).exists():
+            raise ValueError('corrected continuation prior attempt published campaign/job effects')
+    if (prior_domain/'runtime/progress').exists():
+        raise ValueError('corrected continuation prior attempt published campaign progress')
+    launch_session = package_api.read_json(root/expected_bindings['launch_session'][0])
+    launcher = package_api.read_json(root/expected_bindings['launcher_result'][0])
+    supervision = package_api.read_json(root/expected_bindings['launcher_supervision'][0])
+    owner_exit = package_api.read_json(root/expected_bindings['owner_exit'][0])
+    if (launch_session.get('campaign_id') != expected_prior['campaign_id']
+            or launch_session.get('owner_exec_session_id') != 19939
+            or launch_session.get('launcher_pid') != supervision.get('launcher_pid')
+            or launch_session.get('launcher_start_ticks') != supervision.get('launcher_start_ticks')
+            or launcher.get('watchdog_exit_status') != 1
+            or launcher.get('elapsed_seconds') != expected_prior['launcher_elapsed_seconds']
+            or launcher.get('whole_run_complete') is not False
+            or supervision.get('result_path') != str(root/expected_bindings['launcher_result'][0])
+            or supervision.get('parent_start') != launcher.get('parent_start')
+            or supervision.get('whole_deadline') != launcher.get('whole_deadline')
+            or owner_exit.get('owner_exec_session_id') != 19939
+            or owner_exit.get('write_stdin_exit_code') != 1):
+        raise ValueError('corrected continuation prior startup records disagree')
+    return authority
+
+
+def _twenty_hour_continuation_document(root):
+    """Validate staged source-bound debit data without opening host history."""
+    if not profiles.is_twenty_hour_continuation():
+        raise ValueError('twenty-hour continuation predecessor is outside its profile')
+    root = Path(root).resolve(strict=True)
+    document = package_api.read_json(root/profiles.current().predecessor_path)
+    if (not isinstance(document, Mapping)
+            or set(document) != {'schema', 'campaign_id', 'profile', 'source_sha256',
+                'package_sha256', 'release_sha256', 'original_whole_seconds',
+                'actual_launcher_elapsed_seconds', 'remaining_whole_seconds',
+                'settled_effects', 'charged_or_reserved', 'artifacts', 'failed_shard', 'healthy_parent'}
+            or document['schema'] != 'spire-learn-curriculum-twenty-hour-predecessor-v1'
+            or document['campaign_id'] != profiles.TWENTY_HOUR.campaign_id
+            or document['profile'] != profiles.TWENTY_HOUR.name
+            or document['source_sha256'] != 'd363f588bdafb4f2013828c149edeaff819eb422f6f48a6ff34493a257f7eb3a'
+            or document['package_sha256'] != '72dfb1fda0233de0fb867ab5b9dc0c869f6ebf6166b0585b43126fd0a17600d4'
+            or document['release_sha256'] != '59e070ccf2b06bc7c9eed7520fe25830a3e3994134d505352e3a321f02ef6857'
+            or document['original_whole_seconds'] != 72000
+            or document['actual_launcher_elapsed_seconds'] != 6001.25571680197
+            or document['remaining_whole_seconds'] != 65998
+            or math.floor(document['original_whole_seconds']-document['actual_launcher_elapsed_seconds'])
+                != document['remaining_whole_seconds']):
+        raise ValueError('twenty-hour continuation predecessor identity/time debit differs')
+    expected_settled = dict(environment_attempts=337471, sample_rows=336000,
+        optimizer_attempts=21000, reset_slots=15431, fixed_random_choices=0)
+    expected_charged = dict(environment_attempts=341567, sample_rows=340096,
+        optimizer_attempts=21256, reset_slots=19543, fixed_random_choices=0)
+    if (document['settled_effects'] != expected_settled
+            or document['charged_or_reserved'] != expected_charged
+            or not isinstance(document['artifacts'], Mapping)
+            or set(document['artifacts']) != set(TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS)):
+        raise ValueError('twenty-hour continuation predecessor debit/evidence set differs')
+    for name, expected_path in TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS.items():
+        binding = document['artifacts'][name]
+        if (not isinstance(binding, Mapping) or set(binding) != {'path', 'sha256'}
+                or binding['path'] != expected_path
+                or re.fullmatch('[0-9a-f]{64}', str(binding['sha256'])) is None):
+            raise ValueError('twenty-hour predecessor artifact binding differs: '+name)
+    lease = dict(environment_attempts=4096, sample_rows=4096,
+        optimizer_attempts=256, reset_slots=4112, fixed_random_choices=0)
+    if (document['failed_shard'] != dict(job_id='curriculum-mixed-338', index=338,
+            actual=None, receipt_binding=None, lease=lease)
+            or document.get('healthy_parent', {}).get('index') != 337):
+        raise ValueError('twenty-hour predecessor healthy parent/full unknown lease differs')
+    return document
+
+
+TWENTY_HOUR_FAILED_ADMISSION_SHA256 = '8aa8550d679c198b4a5dcb61badabf5cb75c21dc53e751884e5ad7d0c01fcc18'
+
+
+def _twenty_hour_failed_admission_document(root):
+    """Closed staged debit for continuation-2; actual effects remain unknown."""
+    if not profiles.is_repaired_twenty_hour_continuation():
+        raise ValueError('failed admission debit is outside its profile')
+    path = Path(root)/profiles.current().additional_predecessor_path
+    document = package_api.read_json(path)
+    lease = dict(environment_attempts=512, sample_rows=512, optimizer_attempts=8,
+        reset_slots=256, fixed_random_choices=0)
+    if (package_api.sha256(path) != TWENTY_HOUR_FAILED_ADMISSION_SHA256
+            or document.get('schema') != 'spire-learn-curriculum-failed-admission-predecessor-v1'
+            or document.get('campaign_id') != profiles.TWENTY_HOUR_CONTINUATION_2.campaign_id
+            or document.get('charged_or_reserved') != lease
+            or document.get('settled_effects') != dict.fromkeys(CAPS, 0)
+            or document.get('failed_job') != dict(job_id='curriculum-qualification',
+                actual=None, receipt_binding=None, lease=lease)):
+        raise ValueError('failed admission source-bound full lease debit differs')
+    return document
+
+
+def _validate_twenty_hour_failed_admission(root):
+    """Host-only retained failed-attempt identity, terminal state and cleanup."""
+    root = Path(root).resolve(strict=True)
+    document = _twenty_hour_failed_admission_document(root)
+    artifacts = document['artifacts']
+    for name, binding in artifacts.items():
+        if package_api.sha256(package_api.relative_file(root, binding['path'])) != binding['sha256']:
+            raise ValueError('failed admission raw artifact changed: '+name)
+    def read(name):
+        return _read(root/artifacts[name]['path'])
+    claim, job_claim, attempt = read('campaign_claim'), read('job_claim'), read('attempt')
+    result, failure, launcher = read('campaign_result'), read('seal_failure'), read('launcher_result')
+    supervision, session, owner = read('launcher_supervision'), read('launch_session'), read('owner_exit')
+    release = read('release')
+    lease = document['charged_or_reserved']
+    identities = dict(campaign_id=document['campaign_id'], source_sha256=document['source_sha256'],
+        package_sha256=document['package_sha256'], release_sha256=document['release_sha256'])
+    if (any(claim.get(key) != value or job_claim.get(key) != value for key, value in identities.items())
+            or claim.get('schema') != CLAIM_SCHEMA or job_claim.get('schema') != CLAIM_SCHEMA
+            or job_claim.get('campaign_claim_sha256') != artifacts['campaign_claim']['sha256']
+            or job_claim.get('job_id') != 'curriculum-qualification'
+            or job_claim.get('kind') != 'qualification' or job_claim.get('reservation') != lease
+            or attempt.get('reservation') != dict(state='reserved', lease=lease)
+            or attempt.get('receipt_binding') is not None
+            or release.get('state') != 'approved' or release.get('campaign_id') != document['campaign_id']
+            or release.get('source_snapshot_sha256') != document['source_sha256']
+            or release.get('package_sha256') != document['package_sha256']
+            or release.get('runtime_pins') != {**runtime_pins(root), 'profile': document['profile']}
+            or result.get('campaign_id') != document['campaign_id']
+            or result.get('source_sha256') != document['source_sha256']
+            or result.get('status') != 'failed' or result.get('whole_run_claim') is not False
+            or result.get('effects') != document['settled_effects']
+            or result.get('charged_or_reserved') != lease
+            or len(result.get('jobs', [])) != 1
+            or result['jobs'][0].get('job_id') != 'curriculum-qualification'
+            or result['jobs'][0].get('receipt_reconciled') is not False
+            or failure.get('status') != 'failed' or failure.get('whole_run_claim') is not False
+            or launcher.get('watchdog_exit_status') != 1 or launcher.get('whole_run_complete') is not False
+            or launcher.get('controller_logical_result', {}).get('finalization_veto') is not True
+            or launcher.get('controller_logical_result', {}).get('sha256') != artifacts['campaign_result']['sha256']
+            or supervision.get('parent_start') != claim.get('parent_start')
+            or supervision.get('whole_deadline') != claim.get('whole_deadline')
+            or claim.get('supervision', {}).get('binding_sha256') != artifacts['launcher_supervision']['sha256']
+            or session.get('owner_exec_session_id') != 38079 or owner.get('owner_exec_session_id') != 38079
+            or owner.get('write_stdin_exit_code') != 1
+            or owner.get('launcher_pid') != session.get('launcher_pid')
+            or owner.get('launcher_start_ticks') != session.get('launcher_start_ticks')):
+        raise ValueError('failed admission terminal/identity/full lease evidence differs')
+    _verify_retained_container_cleanup(attempt, 'curriculum-qualification',
+        expected_status='failed', expected_receipt=None)
+    prior = root/profiles.TWENTY_HOUR_CONTINUATION_2.domain/'runtime'
+    if ((prior/'progress').exists()
+            or (prior/'jobs/curriculum-qualification/output/job-receipt.json').exists()
+            or {p.name for p in (prior/'job-claims').iterdir()} != {'curriculum-qualification.json'}):
+        raise ValueError('failed admission unexpectedly published progress/receipt or another claim')
+    return document
+
+
+def _validate_repaired_continuation_authority(root):
+    """Authenticate the recorded standing user instruction and execution scope."""
+    if not profiles.is_repaired_twenty_hour_continuation():
+        raise ValueError('repaired continuation authority is outside its profile')
+    path = Path(root)/profiles.current().user_approval_path
+    authority = package_api.read_json(path, maximum=65536)
+    if (package_api.sha256(path) != producer.REPAIRED_CONTINUATION_AUTHORITY_SHA256
+            or authority.get('schema') != 'spire-learn-curriculum-repaired-continuation-authority-v1'
+            or authority.get('campaign_id') != profiles.current().campaign_id
+            or authority.get('failed_admission', {}).get('predecessor_sha256') != TWENTY_HOUR_FAILED_ADMISSION_SHA256
+            or profiles.current().whole_seconds > authority['limits']['maximum_campaign_seconds']):
+        raise ValueError('repaired continuation standing authority differs')
+    return authority
+
+
+def _twenty_hour_continuation_predecessor(root):
+    """Host-only physical history, exact337 checkpoint, cleanup and authority."""
+    root = Path(root).resolve(strict=True)
+    document = _twenty_hour_continuation_document(root)
+    expected_settled = document['settled_effects']
+    expected_charged = document['charged_or_reserved']
+    for name, expected_path in TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS.items():
+        if package_api.sha256(package_api.relative_file(root, expected_path)) != document['artifacts'][name]['sha256']:
+            raise ValueError('twenty-hour predecessor raw artifact changed: '+name)
+
+    claim = package_api.read_json(root/TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS['campaign_claim'])
+    prior_release = package_api.read_json(root/TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS['campaign_release_approved'])
+    result = package_api.read_json(root/TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS['campaign_result'])
+    failure = package_api.read_json(root/TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS['seal_failure'])
+    launcher = package_api.read_json(root/TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS['launcher_result'])
+    supervision = package_api.read_json(root/TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS['launcher_supervision'])
+    owner_exit = package_api.read_json(root/TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS['owner_exit'])
+    progress = package_api.read_json(root/TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS['progress_0084'])
+    parent_attempt = package_api.read_json(root/TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS['shard_337_attempt'])
+    attempt = package_api.read_json(root/TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS['shard_338_attempt'])
+    job_claim = package_api.read_json(root/TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS['shard_338_claim'])
+    receipt = package_api.read_json(root/TWENTY_HOUR_CONTINUATION_ARTIFACT_PATHS['shard_337_receipt'],
+        maximum=32*1024**2)
+    authority = package_api.read_json(root/TWENTY_HOUR_RESTART_AUTHORITY)
+    healthy, failed = document['healthy_parent'], document['failed_shard']
+    lease = dict(environment_attempts=4096, sample_rows=4096,
+        optimizer_attempts=256, reset_slots=4112, fixed_random_choices=0)
+    if (claim.get('campaign_id') != document['campaign_id']
+            or claim.get('source_sha256') != document['source_sha256']
+            or claim.get('package_sha256') != document['package_sha256']
+            or claim.get('release_sha256') != document['release_sha256']
+            or prior_release.get('schema') != RELEASE_SCHEMA
+            or prior_release.get('state') != 'approved'
+            or prior_release.get('campaign_id') != document['campaign_id']
+            or prior_release.get('source_snapshot_sha256') != document['source_sha256']
+            or prior_release.get('package_sha256') != document['package_sha256']
+            or prior_release.get('runtime_pins') != {
+                **runtime_pins(root), 'profile': profiles.TWENTY_HOUR.name}
+            or result.get('status') != 'failed' or result.get('whole_run_claim') is not False
+            or result.get('campaign_id') != document['campaign_id']
+            or result.get('source_sha256') != document['source_sha256']
+            or result.get('effects') != expected_settled
+            or result.get('charged_or_reserved') != expected_charged
+            or len(result.get('jobs', [])) != 85
+            or result['jobs'][-1].get('job_id') != 'curriculum-mixed-338'
+            or result['jobs'][-1].get('receipt_reconciled') is not False
+            or failure.get('status') != 'failed' or failure.get('whole_run_claim') is not False
+            or launcher.get('watchdog_exit_status') != 1 or launcher.get('whole_run_complete') is not False
+            or launcher.get('elapsed_seconds') != document['actual_launcher_elapsed_seconds']
+            or launcher.get('controller_logical_result', {}).get('finalization_veto') is not True
+            or launcher.get('controller_logical_result', {}).get('sha256')
+                != document['artifacts']['campaign_result']['sha256']
+            or supervision.get('parent_start') != claim.get('parent_start')
+            or supervision.get('whole_deadline') != claim.get('whole_deadline')
+            or owner_exit.get('campaign_id') != document['campaign_id']
+            or owner_exit.get('owner_exec_session_id') != 91592
+            or owner_exit.get('write_stdin_exit_code') != 1
+            or attempt.get('job_id') != 'curriculum-mixed-338'
+            or attempt.get('status') != 'failed'
+            or attempt.get('reservation') != {'state': 'reserved', 'lease': lease}
+            or attempt.get('actual') is not None or attempt.get('receipt_binding') is not None
+            or job_claim.get('campaign_id') != document['campaign_id']
+            or job_claim.get('job_id') != 'curriculum-mixed-338'
+            or job_claim.get('reservation') != lease
+            or failed != {'job_id': 'curriculum-mixed-338', 'index': 338,
+                'actual': None, 'receipt_binding': None, 'lease': lease}
+            or authority.get('failed_predecessor') != document['campaign_id']
+            or authority.get('healthy_parent_shard') != 337
+            or authority.get('unreconciled_shard_skipped') != 338
+            or authority.get('first_new_shard_minimum') != 339
+            or authority.get('new_whole_seconds_upper_bound') != 65998
+            or authority.get('failed_effect_lease_retained') != lease):
+        raise ValueError('twenty-hour predecessor terminal/unknown-effect evidence differs')
+    receipt_binding = document['artifacts']['shard_337_receipt']
+    _verify_retained_container_cleanup(parent_attempt, 'curriculum-mixed-337',
+        expected_status='complete', expected_receipt={'path': str(root/receipt_binding['path']),
+            'sha256': receipt_binding['sha256']})
+    _verify_retained_container_cleanup(attempt, 'curriculum-mixed-338',
+        expected_status='failed', expected_receipt=None)
+    if (receipt.get('status') != 'complete' or receipt.get('campaign_id') != document['campaign_id']
+            or receipt.get('source_sha256') != document['source_sha256']
+            or receipt.get('package_sha256') != document['package_sha256']
+            or receipt.get('job_id') != 'curriculum-mixed-337'
+            or receipt.get('shard_index') != 337
+            or receipt.get('next_shard') != {'shard_index': 338,
+                'manifest_sha256': healthy.get('next_manifest_sha256')}
+            or receipt.get('report', {}).get('status') != 'complete'
+            or receipt.get('report', {}).get('fault') is not None
+            or receipt.get('checkpoint', {}).get('counters') != healthy.get('checkpoint_counters')
+            or receipt.get('checkpoint', {}).get('inventory') != healthy.get('checkpoint_inventory')):
+        raise ValueError('healthy shard337 retained receipt differs')
+    tail = progress.get('jobs')
+    if (not isinstance(tail, list) or len(tail) != 84
+            or tail[-1].get('job_id') != 'curriculum-mixed-337'
+            or tail[-1].get('receipt', {}).get('sha256')
+                != document['artifacts']['shard_337_receipt']['sha256']
+            or tail[-1].get('checkpoint', {}).get('inventory') != healthy.get('checkpoint_inventory')):
+        raise ValueError('healthy shard337 completed progress binding differs')
+    checkpoint_path = package_api.relative_file(root, healthy['checkpoint_path'])
+    from scripts.neural.sustained_runtime import checkpoint_inventory
+    if checkpoint_inventory(checkpoint_path) != healthy.get('checkpoint_inventory'):
+        raise ValueError('healthy shard337 checkpoint inventory changed')
+    metadata = package_api.read_json(checkpoint_path/'metadata.json', maximum=2*1024**2)
+    stream = metadata.get('run_metadata', {}).get('scenario_stream', {})
+    training_state = metadata.get('training_state', {})
+    if (metadata.get('schema_id') != 'spire-learn-neural-checkpoint-v1'
+            or stream.get('current', {}).get('shard_index') != 337
+            or stream.get('next', {}).get('shard_index') != 338
+            or training_state.get('counters') != healthy.get('checkpoint_counters')
+            or training_state.get('optimizer_step') != 20992
+            or training_state.get('rng_domains') != ['policy', 'minibatch', 'curriculum', 'controller']):
+        raise ValueError('healthy shard337 exact resume metadata differs')
+    return document
+
+
+def _verify_retained_container_cleanup(attempt, job_id, *, expected_status, expected_receipt):
+    """Verify the recorded full-ID cleanup/absence proof without runtime queries."""
+    commands = attempt.get('commands') if isinstance(attempt, Mapping) else None
+    if (attempt.get('job_id') != job_id or attempt.get('status') != expected_status
+            or not isinstance(commands, list) or not commands):
+        raise ValueError('retained predecessor container attempt identity differs')
+    if expected_receipt is not None:
+        binding = attempt.get('receipt_binding')
+        if not isinstance(binding, Mapping) or dict(binding) != expected_receipt:
+            raise ValueError('retained healthy-parent attempt receipt differs')
+    elif attempt.get('receipt_binding') is not None:
+        raise ValueError('unreconciled predecessor attempt unexpectedly has a receipt')
+    removals = []
+    for position, row in enumerate(commands):
+        argv = row.get('argv') if isinstance(row, Mapping) else None
+        if (isinstance(argv, list) and len(argv) >= 3
+                and argv[-3:-1] == ['rm', '--force']):
+            removals.append((position, row, argv[-1]))
+    if (len(removals) != 1 or not isinstance(removals[0][2], str)
+            or re.fullmatch('[0-9a-f]{64}', removals[0][2]) is None):
+        raise ValueError('retained predecessor must remove one exact full container ID')
+    position, removal, container_id = removals[0]
+    if (removal.get('status') != 'returned' or removal.get('exit_code') != 0
+            or removal.get('timed_out') is not False or removal.get('stdout', '').strip() != container_id):
+        raise ValueError('retained predecessor full-ID removal did not succeed')
+    checks = []
+    for row in commands[position+1:]:
+        argv = row.get('argv') if isinstance(row, Mapping) else None
+        if isinstance(argv, list) and 'ps' in argv and '--filter' in argv:
+            filter_index = argv.index('--filter')
+            if filter_index+1 < len(argv) and argv[filter_index+1] == 'id='+container_id:
+                checks.append(row)
+    if (len(checks) != 1 or checks[0].get('status') != 'returned'
+            or checks[0].get('exit_code') != 0 or checks[0].get('timed_out') is not False
+            or checks[0].get('stdout', '').strip()):
+        raise ValueError('retained predecessor exact container absence proof differs')
+
+
+def _effective_global_effect_caps(root, campaign):
+    if profiles.is_twenty_hour_continuation():
+        predecessor = _twenty_hour_continuation_document(root)
+        training = _counts(campaign.get('training_caps'))
+        qualification_raw = campaign.get('qualification', {})
+        qualification = _counts({key: qualification_raw.get(key) for key in CAPS})
+        evaluation = campaign.get('evaluation', {})
+        slots = campaign.get('evaluation_slots')
+        milestones = [7200 * index for index in range(1, 9)]
+        expected_slots = ['continuation-parent-shard337'] + [
+            f'mixed-time-{value}' for value in milestones] + ['final-mixed']
+        segment = campaign.get('segment', {})
+        lease = predecessor['failed_shard']['lease']
+        lifetime = {key: TWENTY_HOUR_LIFETIME_CAPS[key]
+            - predecessor['charged_or_reserved'][key] for key in CAPS}
+        if profiles.is_repaired_twenty_hour_continuation():
+            additional = _twenty_hour_failed_admission_document(root)
+            lifetime = {key: lifetime[key]-additional['charged_or_reserved'][key] for key in CAPS}
+        expected_training = dict(environment_attempts=335872+1068*4096,
+            sample_rows=335872+1068*4096, optimizer_attempts=20992+1068*256,
+            reset_slots=15356+1068*4112, fixed_random_choices=0)
+        training_delta = dict(environment_attempts=training['environment_attempts']-335872,
+            sample_rows=training['sample_rows']-335872,
+            optimizer_attempts=training['optimizer_attempts']-20992,
+            reset_slots=training['reset_slots']-15356, fixed_random_choices=0)
+        qualification_contract = dict(environment_attempts=512, sample_rows=512,
+            optimizer_attempts=8, reset_slots=256, fixed_random_choices=0,
+            soft_seconds=120, whole_seconds=600, output_bytes=GIB,
+            stream_start_index=1410, seeds=dict(policy=20261201, optimizer=20261207,
+                curriculum=20261211, noncombat=20261213))
+        if profiles.is_repaired_twenty_hour_continuation():
+            qualification_contract.update(stream_start_index=1412,
+                seeds=dict(policy=20261217, optimizer=20261219, curriculum=20261223, noncombat=20261229))
+        storage_contract = dict(package_bytes=512*1024**2,
+            new_output_bytes=12*GIB, aggregate_bytes=40*GIB,
+            free_bytes=30*GIB, vram_free_bytes=12*GIB)
+        panel_count = campaign.get('development_panel', {}).get('case_count')
+        if (campaign.get('campaign_id') != profiles.current().campaign_id
+                or campaign.get('whole_seconds') != 65998
+                or campaign.get('training_stop_second') != 64198
+                or campaign.get('training_budgets') != dict(max_training_decisions=4718592,
+                    max_environment_actions=4718592, max_optimizer_steps=294912,
+                    max_wall_seconds=72000.0)
+                or campaign.get('training_start_indices') != {'mixed': 339}
+                or campaign.get('training_shards') != {'mixed': 1068}
+                or campaign.get('mixture') != dict(arm='mixed', run_like_percent=70,
+                    targeted_lesson_percent=20, unusual_percent=10)
+                or segment != dict(updates=8, environment_attempts=4096, sample_rows=4096,
+                    optimizer_attempts=256, reset_slots=4112, soft_seconds=480, whole_seconds=600)
+                or campaign.get('qualification') != qualification_contract
+                or evaluation.get('total_seconds') != 6600
+                or evaluation.get('case_actions') != 256
+                or evaluation.get('case_seconds') != 30
+                or evaluation.get('job_soft_seconds') != 480
+                or evaluation.get('job_whole_seconds') != 600
+                or evaluation.get('milestone_training_seconds') != milestones
+                or evaluation.get('final_panel_reserve_seconds') != 600
+                or evaluation.get('pre_final_panel_reserve_seconds') != 6000
+                or slots != expected_slots or panel_count != 64
+                or campaign.get('development_panel', {}).get('repeated_exposure') is not True
+                or campaign.get('development_panel', {}).get('protected_final_split') != 'untouched'
+                or campaign.get('runtime', {}).get('gpu_uuid') != low.GPU_UUID
+                or campaign.get('runtime', {}).get('threads') != 4
+                or campaign.get('runtime', {}).get('interop_threads') != 1
+                or campaign.get('storage') != storage_contract
+                or training != expected_training
+                or any(training_delta[key] > lifetime[key] for key in CAPS)
+                or 64198*62 + 394252 != training_delta['environment_attempts']
+                or 64198 + 600 + 600 + 600 != 65998
+                or lifetime['environment_attempts'] < 4538880
+                or lifetime['sample_rows'] < 4375040
+                or lifetime['optimizer_attempts'] < 273416
+                or lifetime['reset_slots'] < 4392512
+                or lease != dict(environment_attempts=4096, sample_rows=4096,
+                    optimizer_attempts=256, reset_slots=4112, fixed_random_choices=0)):
+            raise ValueError('twenty-hour continuation time/effect contract differs')
+        expected = dict(environment_attempts=4538880, sample_rows=4375040,
+            optimizer_attempts=273416, reset_slots=4392512, fixed_random_choices=0)
+        caps = _counts(campaign.get('global_effect_caps'))
+        if caps != expected or any(caps[key] > lifetime[key] for key in CAPS):
+            raise ValueError('continuation effect caps exceed lifetime residual after full lease debit')
+        return caps
+    if profiles.is_twenty_hour_campaign():
+        training = _counts(campaign.get('training_caps'))
+        qualification_raw = campaign.get('qualification', {})
+        qualification = _counts({key: qualification_raw.get(key) for key in CAPS})
+        slots = campaign.get('evaluation_slots')
+        evaluation = campaign.get('evaluation', {})
+        panel_count = campaign.get('development_panel', {}).get('case_count')
+        milestones = [7200 * index for index in range(1, 10)]
+        expected_slots = ['warm-start-baseline'] + [f'mixed-time-{value}' for value in milestones] + ['final-mixed']
+        segment = campaign.get('segment', {})
+        qualification_contract = dict(environment_attempts=512, sample_rows=512,
+            optimizer_attempts=8, reset_slots=256, fixed_random_choices=0,
+            soft_seconds=120, whole_seconds=600, output_bytes=GIB,
+            stream_start_index=1408)
+        storage_contract = dict(package_bytes=512*1024**2,
+            new_output_bytes=12*GIB, aggregate_bytes=40*GIB,
+            free_bytes=30*GIB, vram_free_bytes=12*GIB)
+        if (not isinstance(slots, list) or not slots
+                or slots != expected_slots
+                or campaign.get('whole_seconds') != profiles.current().whole_seconds
+                or campaign.get('training_stop_second') != profiles.current().training_stop_second
+                or campaign.get('training_budgets', {}).get('max_training_decisions') != training['sample_rows']
+                or campaign.get('training_budgets', {}).get('max_environment_actions') != training['environment_attempts']
+                or campaign.get('training_budgets', {}).get('max_optimizer_steps') != training['optimizer_attempts']
+                or campaign.get('training_budgets', {}).get('max_wall_seconds') != profiles.current().whole_seconds
+                or campaign.get('training_start_indices') != {'mixed': 256}
+                or campaign.get('training_shards') != {'mixed': 1152}
+                or campaign.get('mixture') != dict(arm='mixed', run_like_percent=70,
+                    targeted_lesson_percent=20, unusual_percent=10)
+                or segment != dict(updates=8, environment_attempts=4096, sample_rows=4096,
+                    optimizer_attempts=256, reset_slots=4112, soft_seconds=480, whole_seconds=600)
+                or campaign.get('qualification') != qualification_contract
+                or evaluation.get('total_seconds') != 7200
+                or evaluation.get('case_actions') != 256
+                or evaluation.get('case_seconds') != 30
+                or evaluation.get('job_soft_seconds') != 480
+                or evaluation.get('job_whole_seconds') != 600
+                or evaluation.get('milestone_training_seconds') != milestones
+                or panel_count != 64
+                or campaign.get('development_panel', {}).get('repeated_exposure') is not True
+                or campaign.get('development_panel', {}).get('protected_final_split') != 'untouched'
+                or evaluation.get('final_panel_reserve_seconds') != 600
+                or evaluation.get('pre_final_panel_reserve_seconds') != 6000):
+            raise ValueError('twenty-hour campaign time/effect contract differs')
+        if (campaign.get('storage') != storage_contract
+                or campaign.get('runtime', {}).get('gpu_uuid') != low.GPU_UUID
+                or campaign.get('runtime', {}).get('threads') != 4
+                or campaign.get('runtime', {}).get('interop_threads') != 1):
+            raise ValueError('twenty-hour storage/runtime pin projection differs')
+        expected_decisions = profiles.current().training_stop_second * 62
+        if (training['environment_attempts']-expected_decisions != 366192
+                or profiles.current().training_stop_second + 600 + 600 + 600 != profiles.current().whole_seconds):
+            raise ValueError('twenty-hour throughput margin or reserved-tail arithmetic differs')
+        expected_training = dict(environment_attempts=1152*segment.get('environment_attempts', 0),
+            sample_rows=1152*segment.get('sample_rows', 0),
+            optimizer_attempts=1152*segment.get('optimizer_attempts', 0),
+            reset_slots=1152*segment.get('reset_slots', 0), fixed_random_choices=0)
+        if training != expected_training:
+            raise ValueError('twenty-hour finite training effect projection differs')
+        panel_cases = len(slots) * panel_count
+        expected = dict(
+            environment_attempts=training['environment_attempts'] + qualification['environment_attempts'] + panel_cases * evaluation['case_actions'],
+            sample_rows=training['sample_rows'] + qualification['sample_rows'],
+            optimizer_attempts=training['optimizer_attempts'] + qualification['optimizer_attempts'],
+            reset_slots=training['reset_slots'] + qualification['reset_slots'] + len(slots) * 64,
+            fixed_random_choices=0)
+        caps = _counts(campaign.get('global_effect_caps'))
+        if caps != expected:
+            raise ValueError('twenty-hour global effect cap projection differs')
+        return caps
+    predecessor = _predecessor_document(root)
+    additional = _additional_predecessor_document(root)
+    if predecessor is None and additional is None:
+        return dict(CAPS)
+    debits = []
+    if predecessor is not None:
+        debits.append(predecessor['retained_lease'])
+    if additional is not None:
+        debits.append(additional['charged_or_reserved'])
+    remaining = {key: CAPS[key] - sum(debit[key] for debit in debits) for key in CAPS}
+    selected = profiles.current()
+    if additional is not None:
+        base_campaign = _read(Path(root)/profiles.FRESH_GYM.campaign_path)
+        b_campaign = _read(Path(root)/profiles.FRESH_GYM_B.campaign_path)
+        base_qualification = base_campaign.get('qualification', {}).get('whole_seconds')
+        b_qualification = b_campaign.get('qualification', {}).get('whole_seconds')
+        b_panel = b_campaign.get('evaluation', {}).get('job_whole_seconds')
+        if (base_campaign.get('campaign_id') != profiles.FRESH_GYM.campaign_id
+                or b_campaign.get('campaign_id') != profiles.FRESH_GYM_B.campaign_id
+                or base_campaign.get('whole_seconds') != profiles.FRESH_GYM.whole_seconds
+                or b_campaign.get('whole_seconds') != profiles.FRESH_GYM_B.whole_seconds
+                or any(type(value) is not int or value <= 0
+                       for value in (base_qualification, b_qualification, b_panel))):
+            raise ValueError('continuation campaign time debit differs')
+        b_time = additional['reserved_time_seconds']
+        if b_qualification != b_time['qualification'] or b_panel != b_time['panel']:
+            raise ValueError('continuation campaign time debit differs')
+        b_prior_time = base_qualification + sum(b_time.values())
+        original_whole = base_campaign['whole_seconds']
+        expected_whole = original_whole - b_prior_time
+        if (expected_whole != selected.whole_seconds
+                or campaign.get('whole_seconds') != expected_whole
+                or selected.training_stop_second + campaign.get('evaluation', {}).get('total_seconds', -1) + 600
+                    != expected_whole
+                or base_campaign.get('training_stop_second')
+                    + base_campaign.get('evaluation', {}).get('total_seconds', -1) + 600
+                    != base_campaign.get('whole_seconds')
+                or b_campaign.get('training_stop_second')
+                    + b_campaign.get('evaluation', {}).get('total_seconds', -1) + 600
+                    != b_campaign.get('whole_seconds')):
+            raise ValueError('continuation campaign time debit differs')
+    if (any(value < 0 for value in remaining.values())
+            or _counts(campaign.get('global_effect_caps')) != remaining
+            or campaign.get('whole_seconds') != selected.whole_seconds
+            or campaign.get('training_stop_second') != selected.training_stop_second):
+        raise ValueError('continuation campaign budget differs from retained predecessor debit')
+    return remaining
+
+
+def _validate_initial_predecessor(root):
+    """Host-only validation of the retained terminal preflight and full lease debit."""
+    document = _predecessor_document(root)
+    if document is None:
+        return None
+    root = Path(root).resolve(strict=True)
+    actual_hashes, evidence = {}, {}
+    for name, relative in PREDECESSOR_ARTIFACT_PATHS.items():
+        path = package_api.relative_file(root, relative)
+        actual_hashes[name] = package_api.sha256(path)
+        if actual_hashes[name] != document['artifacts'][name]['sha256']:
+            raise ValueError('campaign predecessor raw artifact changed: '+name)
+        evidence[name] = _read(path)
+    audit = evidence['audit']
+    expected_audit_hashes = {
+        PREDECESSOR_AUDIT_HASH_PATHS[name]: actual_hashes[name]
+        for name in PREDECESSOR_AUDIT_HASH_PATHS
+    }
+    if audit.get('hashes') != expected_audit_hashes:
+        raise ValueError('predecessor audit raw hashes differ')
+    if (audit.get('status') != 'failed_guest_preflight'
+            or audit.get('actual_launcher_os_exit') != 1
+            or audit.get('watchdog_exit_status') != 1
+            or audit.get('whole_run_complete') is not False
+            or audit.get('stage') != FAILED_PRECHECK_STAGE
+            or audit.get('root_cause') != FAILED_PRECHECK_CAUSE
+            or audit.get('native_gameplay_calls') != 0
+            or audit.get('tensor_training_calls') != 0
+            or audit.get('optimizer_steps') != 0
+            or audit.get('full_failed_lease_retained') != FAILED_QUALIFICATION_LEASE
+            or audit.get('source_postcheck') is not True
+            or audit.get('protected_postcheck') is not True
+            or audit.get('absence_lookup_exit') != 0
+            or not isinstance(audit.get('removed_container'), str)
+            or not audit['removed_container']):
+        raise ValueError('predecessor audit does not describe the accepted preflight failure')
+
+    attempt = evidence['attempt']
+    if (attempt.get('status') != 'failed'
+            or attempt.get('job_id') != 'curriculum-qualification'
+            or attempt.get('receipt_binding') is not None
+            or attempt.get('reservation') != {'state': 'reserved', 'lease': FAILED_QUALIFICATION_LEASE}
+            or not isinstance(attempt.get('error'), Mapping)
+            or attempt['error'].get('type') != 'StudyControlError'
+            or attempt['error'].get('message') != 'command failed exit 1: /usr/bin/docker'):
+        raise ValueError('predecessor failed qualification or receipt evidence differs')
+    commands = attempt.get('commands')
+    if not isinstance(commands, list):
+        raise ValueError('predecessor command audit is malformed')
+    def docker_commands(name):
+        return [row for row in commands if isinstance(row, Mapping)
+                and isinstance(row.get('argv'), list) and len(row['argv']) > 5
+                and row['argv'][0] == '/usr/bin/docker' and row['argv'][5] == name]
+    created = docker_commands('create')
+    started = docker_commands('start')
+    removed = docker_commands('rm')
+    absent = [row for row in docker_commands('ps')
+        if row['argv'][5:] == ['ps', '-a', '--filter', 'id='+audit['removed_container'],
+                               '--format', '{{.ID}}']]
+    container = created[0].get('stdout', '').strip() if len(created) == 1 else None
+    if (container != audit['removed_container'] or created[0].get('exit_code') != 0
+            or created[0].get('status') != 'returned' or len(started) != 1
+            or started[0].get('argv', [])[-1] != container or started[0].get('exit_code') != 1
+            or started[0].get('status') != 'returned' or len(removed) != 1
+            or removed[0].get('argv', [])[-2:] != ['--force', container]
+            or removed[0].get('exit_code') != 0 or removed[0].get('status') != 'returned'
+            or len(absent) != 1 or absent[0].get('exit_code') != 0
+            or absent[0].get('status') != 'returned' or absent[0].get('stdout', '').strip()):
+        raise ValueError('predecessor container cleanup evidence differs')
+
+    result = evidence['result']
+    zero_effects = dict.fromkeys(CAPS, 0)
+    jobs = result.get('jobs')
+    if (result.get('campaign_id') != profiles.FRESH_GYM.campaign_id
+            or result.get('status') != 'failed' or result.get('whole_run_claim') is not False
+            or result.get('effects') != zero_effects
+            or result.get('charged_or_reserved') != FAILED_QUALIFICATION_LEASE
+            or not isinstance(jobs, list) or len(jobs) != 1
+            or jobs[0].get('job_id') != 'curriculum-qualification'
+            or jobs[0].get('status') != 'failed' or jobs[0].get('receipt_reconciled') is not False
+            or jobs[0].get('references', {}).get('receipt', {}).get('availability') != 'unavailable'
+            or jobs[0].get('references', {}).get('receipt', {}).get('raw') is not None
+            or jobs[0].get('references', {}).get('guest_failure', {}).get('availability') != 'unavailable'
+            or jobs[0].get('references', {}).get('guest_failure', {}).get('raw') is not None
+            or jobs[0].get('references', {}).get('attempt', {}).get('sha256') != actual_hashes['attempt']):
+        raise ValueError('predecessor campaign result or no-receipt evidence differs')
+    if (evidence['launcher_result'].get('watchdog_exit_status') != 1
+            or evidence['launcher_result'].get('whole_run_complete') is not False
+            or evidence['launcher_result'].get('controller_logical_result', {}).get('status') != 'failed'
+            or evidence['launcher_result'].get('controller_logical_result', {}).get('finalization_veto') is not True
+            or evidence['launcher_os_exit'].get('exit_code') != 1):
+        raise ValueError('predecessor launcher exit evidence differs')
+    return document
+
+
+def _receipt_effect_rows(receipt, expected, *, name):
+    rows = receipt.get('effects')
+    if not isinstance(rows, Mapping) or set(rows) != set(CAPS):
+        raise ValueError('additional predecessor '+name+' effect rows differ')
+    for key, count in expected.items():
+        if rows.get(key) != dict(reserved=count, attempted=count, delivered=count, uncertain=0):
+            raise ValueError('additional predecessor '+name+' effect counts differ')
+
+
+def _validate_b_container_attempt(attempt, *, job_id, container_id, start_exit):
+    commands = attempt.get('commands')
+    if not isinstance(commands, list):
+        raise ValueError('additional predecessor container command audit is malformed')
+    def docker_commands(name):
+        return [row for row in commands if isinstance(row, Mapping)
+                and isinstance(row.get('argv'), list) and len(row['argv']) > 5
+                and row['argv'][0] == '/usr/bin/docker' and row['argv'][5] == name]
+    created, started = docker_commands('create'), docker_commands('start')
+    removed = docker_commands('rm')
+    absent = [row for row in docker_commands('ps')
+        if row['argv'][5:] == ['ps', '-a', '--filter', 'id='+container_id,
+                               '--format', '{{.ID}}']]
+    actual_id = created[0].get('stdout', '').strip() if len(created) == 1 else None
+    if (actual_id != container_id or created[0].get('status') != 'returned'
+            or created[0].get('exit_code') != 0
+            or created[0].get('argv', [])[5:8] != ['create', '--name', job_id]
+            or len(started) != 1 or started[0].get('status') != 'returned'
+            or started[0].get('exit_code') != start_exit
+            or started[0].get('argv', [])[-1] != container_id
+            or len(removed) != 1 or removed[0].get('status') != 'returned'
+            or removed[0].get('exit_code') != 0
+            or removed[0].get('argv', [])[-2:] != ['--force', container_id]
+            or len(absent) != 1 or absent[0].get('status') != 'returned'
+            or absent[0].get('exit_code') != 0 or absent[0].get('stdout', '').strip()):
+        raise ValueError('additional predecessor container cleanup differs')
+
+
+def _validate_additional_predecessor(root, document):
+    root = Path(root).resolve(strict=True)
+    actual_hashes, evidence = {}, {}
+    for name, relative in ADDITIONAL_PREDECESSOR_B_ARTIFACT_PATHS.items():
+        path = package_api.relative_file(root, relative)
+        actual_hashes[name] = package_api.sha256(path)
+        if actual_hashes[name] != document['artifacts'][name]['sha256']:
+            raise ValueError('campaign predecessor raw artifact changed: '+name)
+        evidence[name] = _read(path)
+
+    audit = evidence['audit']
+    expected_audit_hashes = {
+        relative: actual_hashes[name]
+        for relative, name in ADDITIONAL_PREDECESSOR_B_AUDIT_HASH_PATHS.items()
+    }
+    if audit.get('hashes') != expected_audit_hashes:
+        raise ValueError('additional predecessor audit raw hashes differ')
+    if (audit.get('schema') != 'spire-learn-curriculum-zero-version-failure-audit-v1'
+            or audit.get('status') != 'failed_evaluation_contract'
+            or audit.get('cause') != FAILED_B_CAUSE
+            or audit.get('actual_launcher_os_exit') != 1
+            or audit.get('watchdog_exit_status') != 1
+            or audit.get('whole_run_complete') is not False
+            or audit.get('training_arms_started') is not False
+            or audit.get('qualification_healthy') is not True
+            or audit.get('qualification_attempts') != {'actions': 128, 'adam': 8, 'resets': 10, 'samples': 128}
+            or audit.get('qualified_effects') != FAILED_B_QUALIFICATION_EFFECTS
+            or audit.get('full_charged_or_reserved') != FAILED_B_CHARGED_OR_RESERVED
+            or audit.get('panel_partial') != 'one accepted reset; zero env actions/samples/Adam; zero uncertainty; panel receipt unreconciled'
+            or audit.get('failing_case') != FAILED_B_PANEL_CASE
+            or audit.get('source_postcheck') is not True
+            or audit.get('protected_postcheck') is not True):
+        raise ValueError('additional predecessor audit does not describe the accepted B failure')
+
+    qualification_attempt = evidence['qualification_attempt']
+    qualification_actual = FAILED_B_QUALIFICATION_EFFECTS
+    qualification_reservation = {
+        'state': 'settled', 'lease': FAILED_B_QUALIFICATION_LEASE,
+        'actual': qualification_actual,
+    }
+    qualification_receipt_binding = qualification_attempt.get('receipt_binding')
+    if (qualification_attempt.get('job_id') != 'curriculum-qualification'
+            or qualification_attempt.get('status') != 'complete'
+            or qualification_attempt.get('error') is not None
+            or qualification_attempt.get('reservation') != qualification_reservation
+            or not isinstance(qualification_receipt_binding, Mapping)
+            or qualification_receipt_binding.get('sha256') != actual_hashes['qualification_receipt']
+            or not qualification_receipt_binding.get('path', '').endswith(
+                '/runtime/jobs/curriculum-qualification/output/job-receipt.json')):
+        raise ValueError('additional predecessor healthy qualification attempt differs')
+    qualification_receipt = evidence['qualification_receipt']
+    if (qualification_receipt.get('campaign_id') != profiles.FRESH_GYM_B.campaign_id
+            or qualification_receipt.get('job_id') != 'curriculum-qualification'
+            or qualification_receipt.get('kind') != 'qualification'
+            or qualification_receipt.get('status') != 'complete'
+            or qualification_receipt.get('healthy_harness') is not True
+            or qualification_receipt.get('qualification_method') != 'tests.neural.test_curriculum.CurriculumIntegrationTests.test_public_catalog_tensor_resume_and_tiny_healthy_segments'
+            or qualification_receipt.get('qualification_attempts') != {'actions': 128, 'adam': 8, 'resets': 10, 'samples': 128}
+            or qualification_receipt.get('effect_delivery_basis') != 'successful exact held harness'):
+        raise ValueError('additional predecessor healthy qualification receipt differs')
+    _receipt_effect_rows(qualification_receipt, qualification_actual, name='qualification')
+
+    panel_attempt = evidence['panel_attempt']
+    if (panel_attempt.get('job_id') != 'curriculum-panel-fresh-initial'
+            or panel_attempt.get('status') != 'failed'
+            or panel_attempt.get('receipt_binding') is not None
+            or panel_attempt.get('reservation') != {'state': 'reserved', 'lease': FAILED_B_PANEL_LEASE}
+            or panel_attempt.get('error') != {
+                'type': 'StudyControlError', 'message': 'command failed exit 1: /usr/bin/docker', 'notes': []}):
+        raise ValueError('additional predecessor panel attempt differs')
+    panel_receipt = evidence['panel_receipt']
+    if (panel_receipt.get('campaign_id') != profiles.FRESH_GYM_B.campaign_id
+            or panel_receipt.get('job_id') != 'curriculum-panel-fresh-initial'
+            or panel_receipt.get('kind') != 'panel'
+            or panel_receipt.get('slot') != 'fresh-initial'
+            or panel_receipt.get('status') != 'operational_failure'):
+        raise ValueError('additional predecessor panel receipt identity differs')
+    _receipt_effect_rows(panel_receipt, dict.fromkeys(CAPS, 0) | {'reset_slots': 1}, name='panel')
+    summary = panel_receipt.get('summary')
+    reports = panel_receipt.get('reports')
+    if (not isinstance(summary, Mapping) or summary.get('status') != 'operational_failure'
+            or not isinstance(summary.get('failures'), list) or len(summary['failures']) != 1
+            or not isinstance(reports, list) or len(reports) != 1):
+        raise ValueError('additional predecessor panel failure summary differs')
+    summary_failure = summary['failures'][0]
+    panel_row = reports[0] if isinstance(reports[0], Mapping) else {}
+    panel_report = panel_row.get('report')
+    if (summary_failure.get('case_id') != FAILED_B_PANEL_CASE
+            or summary_failure.get('status') != 'operational_failure'
+            or summary_failure.get('reason') != 'collection_fault'
+            or summary_failure.get('exit_code') != 1
+            or summary_failure.get('fault') != {
+                'exception_type': 'ContractError', 'message': FAILED_B_CONTRACT_MESSAGE}
+            or panel_row.get('case_id') != FAILED_B_PANEL_CASE
+            or panel_row.get('exit_code') != 1
+            or not isinstance(panel_report, Mapping)
+            or panel_report.get('status') != 'operational_failure'
+            or panel_report.get('operation') != 'evaluate'
+            or panel_report.get('mode') != 'standalone'
+            or panel_report.get('exit_code') != 1
+            or panel_report.get('fault') != {
+                'exception_type': 'ContractError', 'message': FAILED_B_CONTRACT_MESSAGE}
+            or panel_report.get('optimizer') != {
+                'accepted_steps': 0, 'attempted_steps': 0,
+                'policy_version': 0, 'uncertain_steps': 0, 'updates': 0}):
+        raise ValueError('additional predecessor panel failure evidence differs')
+    collection = panel_report.get('collection')
+    expected_collection = {
+        'attempted_environment_slots': 0, 'attempted_reset_slots': 1,
+        'delivered_environment_slots': 0, 'delivered_reset_slots': 1,
+        'forwarded_environment_slots': 0, 'forwarded_reset_slots': 1,
+        'known_accepted_environment_slots': 0, 'known_accepted_reset_slots': 1,
+        'uncertain_environment_slots': 0, 'uncertain_reset_slots': 0,
+        'reset_operations': 1, 'reset_slots': 1,
+    }
+    if (not isinstance(collection, Mapping)
+            or any(collection.get(key) != value for key, value in expected_collection.items())
+            or collection.get('fault') != {
+                'exception_type': 'ContractError', 'known_accepted_slots': 0,
+                'message': FAILED_B_CONTRACT_MESSAGE, 'operation_slots': 0,
+                'phase': 'ready', 'uncertain_slots': 0}
+            or panel_report.get('fights', {}).get('environment_actions') != 0
+            or panel_report.get('lifecycle', {}).get('operation_error') != {
+                'exception_type': 'ContractError', 'message': FAILED_B_CONTRACT_MESSAGE}):
+        raise ValueError('additional predecessor panel contract counters differ')
+
+    result = evidence['result']
+    result_attempts = result.get('attempts')
+    jobs = result.get('jobs')
+    if (result.get('campaign_id') != profiles.FRESH_GYM_B.campaign_id
+            or result.get('status') != 'failed' or result.get('whole_run_claim') is not False
+            or result.get('charged_or_reserved') != FAILED_B_CHARGED_OR_RESERVED
+            or result.get('effects') != qualification_actual
+            or not isinstance(result_attempts, Mapping)
+            or set(result_attempts) != {'curriculum-qualification', 'curriculum-panel-fresh-initial'}
+            or result_attempts.get('curriculum-qualification', {}).get('actual') != qualification_actual
+            or result_attempts.get('curriculum-qualification', {}).get('lease') != FAILED_B_QUALIFICATION_LEASE
+            or result_attempts.get('curriculum-qualification', {}).get('state') != 'settled'
+            or result_attempts.get('curriculum-panel-fresh-initial', {}).get('lease') != FAILED_B_PANEL_LEASE
+            or result_attempts.get('curriculum-panel-fresh-initial', {}).get('state') != 'reserved'
+            or result.get('training_seconds') != dict.fromkeys(('fixed', 'randomized', 'mixed'), 0.)
+            or result.get('prefixes') != dict.fromkeys(('fixed', 'randomized', 'mixed'), {})
+            or result.get('stopped_arms') != {}
+            or not isinstance(jobs, list) or len(jobs) != 2):
+        raise ValueError('additional predecessor B campaign accounting differs')
+    qualification_job, panel_job = jobs
+    panel_refs = panel_job.get('references', {}) if isinstance(panel_job, Mapping) else {}
+    if (qualification_job.get('job_id') != 'curriculum-qualification'
+            or qualification_job.get('receipt', {}).get('sha256') != actual_hashes['qualification_receipt']
+            or panel_job.get('job_id') != 'curriculum-panel-fresh-initial'
+            or panel_job.get('status') != 'failed' or panel_job.get('receipt_reconciled') is not False
+            or panel_job.get('error', {}).get('type') != 'StudyControlError'
+            or panel_refs.get('attempt', {}).get('sha256') != actual_hashes['panel_attempt']
+            or panel_refs.get('receipt', {}).get('sha256') != actual_hashes['panel_receipt']):
+        raise ValueError('additional predecessor campaign receipt accounting differs')
+
+    cleanup = audit.get('cleanup')
+    if not isinstance(cleanup, list) or len(cleanup) != 2:
+        raise ValueError('additional predecessor cleanup audit differs')
+    cleanup_by_job = {row.get('job'): row for row in cleanup if isinstance(row, Mapping)}
+    expected_jobs = {
+        'curriculum-qualification': (qualification_attempt, 0),
+        'curriculum-panel-fresh-initial': (panel_attempt, 1),
+    }
+    if set(cleanup_by_job) != set(expected_jobs):
+        raise ValueError('additional predecessor cleanup job set differs')
+    for job_id, (attempt, start_exit) in expected_jobs.items():
+        cleanup_row = cleanup_by_job[job_id]
+        container_id = cleanup_row.get('removed')
+        if (cleanup_row.get('absent') is not True
+                or not isinstance(container_id, str)
+                or re.fullmatch('[0-9a-f]{64}', container_id) is None):
+            raise ValueError('additional predecessor container cleanup differs')
+        _validate_b_container_attempt(attempt, job_id=job_id,
+                                      container_id=container_id, start_exit=start_exit)
+
+    launcher_result = evidence['launcher_result']
+    logical = launcher_result.get('controller_logical_result')
+    if (launcher_result.get('watchdog_exit_status') != 1
+            or launcher_result.get('whole_run_complete') is not False
+            or not isinstance(logical, Mapping) or logical.get('status') != 'failed'
+            or logical.get('finalization_veto') is not True
+            or evidence['launcher_os_exit'].get('exit_code') != 1
+            or evidence['launcher_os_exit'].get('session_id') != audit.get('session_id')):
+        raise ValueError('additional predecessor launcher seal or exit differs')
+
+
+def validate_predecessor(root):
+    """Host-only validation of all source-bound predecessor debits."""
+    if profiles.is_twenty_hour_continuation():
+        document = _twenty_hour_continuation_predecessor(root)
+        if profiles.is_repaired_twenty_hour_continuation():
+            _validate_twenty_hour_failed_admission(root)
+        return document
+    initial = _validate_initial_predecessor(root)
+    additional = _additional_predecessor_document(root)
+    if additional is not None:
+        _validate_additional_predecessor(root, additional)
+    if additional is not None:
+        return dict(initial=initial, additional=additional)
+    return initial
+
+
 def release_caps(root):
     campaign = _read(Path(root)/profiles.current().campaign_path)
-    return dict(global_effect_caps=CAPS, whole_seconds=36000, training_stop_second=33600,
-        evaluation_seconds=1800, storage=campaign['storage'], matched_arm=campaign['matched_arm'],
+    return dict(global_effect_caps=_effective_global_effect_caps(root, campaign),
+        whole_seconds=profiles.current().whole_seconds,
+        training_stop_second=profiles.current().training_stop_second,
+        evaluation_seconds=campaign.get('evaluation', {}).get('total_seconds', 1800),
+        storage=campaign['storage'], matched_arm=campaign.get('matched_arm'),
         qualification=campaign['qualification'], segment=campaign['segment'])
 
 
@@ -263,7 +1330,7 @@ def qualification_inventory(root):
         raise ValueError('held qualification inputs are not closed regular files')
     result = package_api.inventory(directory, names)
     if profiles.current().fixed:
-        authored = Path(root)/'configs/neural/experiments/curriculum-v2/qualification'
+        authored = profiles.qualification_source(root)
         expected = package_api.inventory(authored, sorted(p.name for p in authored.iterdir()))
         if result != expected:
             raise ValueError('fixed qualification differs from source-bound authored inputs')
@@ -273,6 +1340,22 @@ def qualification_inventory(root):
 def release_template(root, *, package_path, source_snapshot, user_approval):
     root = Path(root).resolve(strict=True)
     approval = low._safe(root, user_approval, exists=True)
+    if profiles.is_repaired_twenty_hour_continuation():
+        validate_predecessor(root)
+        _validate_repaired_continuation_authority(root)
+        if str(approval.relative_to(root)) != profiles.current().user_approval_path:
+            raise ValueError('repaired continuation authority path differs')
+    elif profiles.is_corrected_twenty_hour_continuation():
+        predecessor = _twenty_hour_continuation_predecessor(root)
+        _validate_corrected_continuation_authority(root, predecessor)
+        if str(approval.relative_to(root)) != profiles.current().user_approval_path:
+            raise ValueError('corrected continuation authority path differs')
+    elif profiles.is_twenty_hour_continuation():
+        predecessor = _twenty_hour_continuation_predecessor(root)
+        binding = predecessor['artifacts']['restart_authority']
+        if (str(approval.relative_to(root)) != TWENTY_HOUR_RESTART_AUTHORITY
+                or package_api.sha256(approval) != binding['sha256']):
+            raise ValueError('continuation restart authority binding differs')
     return dict(schema=RELEASE_SCHEMA, state='pending_review', campaign_id=profiles.current().campaign_id,
         single_use=True, source_snapshot_sha256=package_api.sha256(source_snapshot),
         package_sha256=package_api.sha256(package_path),
@@ -286,6 +1369,9 @@ def validate_release(root, *, package_path, source_snapshot, release_path):
     root = Path(root).resolve(strict=True)
     release, snapshot = _read(release_path), _read(source_snapshot)
     _snapshot_schema(snapshot)
+    if (profiles.current().predecessor_path is not None
+            or profiles.current().additional_predecessor_path is not None):
+        validate_predecessor(root)
     if (set(release) != RELEASE_KEYS or release['schema'] != RELEASE_SCHEMA
             or release['state'] != 'approved' or release['campaign_id'] != profiles.current().campaign_id
             or release['single_use'] is not True or not isinstance(release['review'], dict)
@@ -301,8 +1387,34 @@ def validate_release(root, *, package_path, source_snapshot, release_path):
     if any(not _same(release[k], expected[k]) for k in RELEASE_KEYS - {'state', 'review'}):
         raise ValueError('release source/package/approval/runtime/cap binding differs')
     authority = _read(low._safe(root, approval['path'], exists=True))
-    if (authority.get('campaign_id') != profiles.current().campaign_id or authority.get('new_runtime_authorized') is not True
-            or authority.get('whole_runtime_wall_seconds') != 36000 or authority.get('standalone_only') is not True):
+    if profiles.is_repaired_twenty_hour_continuation():
+        expected_authority = _validate_repaired_continuation_authority(root)
+        if (approval['path'] != profiles.current().user_approval_path
+                or approval['sha256'] != producer.REPAIRED_CONTINUATION_AUTHORITY_SHA256
+                or authority != expected_authority):
+            raise ValueError('repaired continuation launch authority binding differs')
+    elif profiles.is_corrected_twenty_hour_continuation():
+        predecessor = _twenty_hour_continuation_predecessor(root)
+        corrected_authority = _validate_corrected_continuation_authority(root, predecessor)
+        if (approval['path'] != profiles.current().user_approval_path
+                or approval['sha256'] != package_api.sha256(root/approval['path'])
+                or authority != corrected_authority):
+            raise ValueError('corrected continuation launch authority binding differs')
+    elif profiles.is_twenty_hour_continuation():
+        predecessor = _twenty_hour_continuation_predecessor(root)
+        expected_authority = predecessor['artifacts']['restart_authority']
+        if (approval['path'] != TWENTY_HOUR_RESTART_AUTHORITY
+                or approval['sha256'] != expected_authority['sha256']
+                or authority.get('failed_predecessor') != profiles.TWENTY_HOUR.campaign_id
+                or authority.get('healthy_parent_shard') != 337
+                or authority.get('unreconciled_shard_skipped') != 338
+                or authority.get('first_new_shard_minimum') != 339
+                or authority.get('new_whole_seconds_upper_bound') != 65998
+                or authority.get('failed_effect_lease_retained') != predecessor['failed_shard']['lease']):
+            raise ValueError('continuation restart authority scope differs')
+    elif (authority.get('campaign_id') != profiles.current().campaign_id or authority.get('new_runtime_authorized') is not True
+            or authority.get('whole_runtime_wall_seconds') != profiles.current().whole_seconds
+            or authority.get('standalone_only') is not True):
         raise ValueError('user authority scope differs')
     package_api.verify_inventory(root, snapshot['files'])
     if set(snapshot['files']) != set(producer.source_paths(root)) | set(_extra_source(root)):
@@ -330,6 +1442,15 @@ def _counts(value):
     if any(type(v) is not int or v < 0 for v in value.values()):
         raise ValueError('effect values must be nonnegative primitive integers')
     return dict(value)
+
+
+def _training_binding(package, arm, index):
+    """Resolve an absolute scenario shard index into its closed package row."""
+    rows = package['training'][arm]
+    start = package.get('campaign', {}).get('training_start_indices', {}).get(arm, 0)
+    if type(index) is not int or index < start or index >= start + len(rows):
+        raise ValueError('training shard index outside the finite prepared stream')
+    return rows[index - start]
 
 
 def _proc_identity(pid):
@@ -374,7 +1495,8 @@ def _verify_supervision(root, *, package_path, source_snapshot, release_path, cl
             raise ValueError('supervision binding schema differs')
         start = _number(binding['parent_start'], 'supervisor start')
         deadline = _number(binding['whole_deadline'], 'supervisor deadline')
-        if (deadline != start+36000. or not start <= clock() < deadline-110.
+        whole_seconds = profiles.current().whole_seconds
+        if (deadline != start+whole_seconds or not start <= clock() < deadline-110.
                 or float(os.environ['SPIRE_LEARN_CURRICULUM_PARENT_START']) != start
                 or float(os.environ['SPIRE_LEARN_CURRICULUM_PARENT_DEADLINE']) != deadline
                 or binding['controller_source_sha256'] != package_api.sha256(Path(__file__))):
@@ -392,7 +1514,7 @@ def _verify_supervision(root, *, package_path, source_snapshot, release_path, cl
         if (not isinstance(command, list) or len(command) != 4+len(expected_child)
                 or command[:3] != ['/usr/bin/timeout', '--signal=TERM', '--kill-after=90s']
                 or re.fullmatch(r'[1-9][0-9]*s', command[3]) is None
-                or not 1 <= int(command[3][:-1]) <= 35900 or command[4:] != expected_child
+                or not 1 <= int(command[3][:-1]) <= whole_seconds-100 or command[4:] != expected_child
                 or child['argv'] != expected_child or watchdog['argv'] != command
                 or watchdog['executable'] != str(Path('/usr/bin/timeout').resolve())
                 or launcher['pid'] != binding['launcher_pid'] or launcher['start_ticks'] != binding['launcher_start_ticks']
@@ -407,7 +1529,7 @@ def _verify_supervision(root, *, package_path, source_snapshot, release_path, cl
             raise ValueError('actual owned supervision process chain differs')
         ticks = os.sysconf('SC_CLK_TCK')
         if (not -.1 <= start-launcher['start_ticks']/ticks <= 30.
-                or watchdog['start_ticks']/ticks+int(command[3][:-1])+90. > start+35990.1):
+                or watchdog['start_ticks']/ticks+int(command[3][:-1])+90. > deadline-9.9):
             raise ValueError('actual watchdog hard-stop limit differs')
         result_path = low._safe(root, binding['result_path'], exists=True)
         info = result_path.lstat()
@@ -428,12 +1550,20 @@ def _verify_supervision(root, *, package_path, source_snapshot, release_path, cl
 
 class CampaignBudget:
     """Shared deadline and effect leases; unknown dispatches retain their full lease."""
-    def __init__(self, caps, *, start, deadline, clock=time.monotonic):
+    def __init__(self, caps, *, start, deadline, clock=time.monotonic,
+                 evaluation_cap=1800, final_panel_reserve=0):
         self.caps = _counts(caps)
         self.start, self.deadline = _number(start, 'start'), _number(deadline, 'deadline')
-        if not 0 < self.deadline - self.start <= 36000:
+        if not 0 < self.deadline - self.start <= profiles.current().whole_seconds:
             raise ValueError('whole campaign deadline differs')
+        if (type(evaluation_cap) is not int or evaluation_cap <= 0
+                or type(final_panel_reserve) is not int or final_panel_reserve < 0
+                or final_panel_reserve > evaluation_cap):
+            raise ValueError('evaluation lease bounds differ')
         self.clock = clock
+        self.evaluation_cap = evaluation_cap
+        self.final_panel_reserve = final_panel_reserve
+        self.training_stop_second = profiles.current().training_stop_second
         self.reserved = dict.fromkeys(CAPS, 0)
         self.attempted = dict.fromkeys(CAPS, 0)
         self.jobs = {}
@@ -465,19 +1595,37 @@ class CampaignBudget:
         self.attempted = {k: self.attempted[k] + actual[k] for k in CAPS}
         item.update(state='settled', actual=actual)
 
-    def job_deadlines(self, kind, *, arm_deadline=None):
+    def job_deadlines(self, kind, *, arm_deadline=None, final_panel=False):
         now = _number(self.clock(), 'clock')
         if now < self.start:
             raise ValueError('monotonic clock moved backwards')
         whole = min(now + 600., self.deadline - 110.)
         if kind == 'segment':
-            whole = min(whole, self.start + 33600., arm_deadline or self.deadline)
+            whole = min(whole, self.start + self.training_stop_second, arm_deadline or self.deadline)
         elif kind == 'panel':
-            whole = min(whole, now + 1800. - self.evaluation_seconds)
+            if profiles.is_twenty_hour_campaign() or profiles.is_twenty_hour_continuation():
+                reserve = 0 if final_panel else self.final_panel_reserve
+                available = self.evaluation_cap - self.evaluation_seconds - reserve
+                whole = min(whole, now + min(600., available))
+                if not final_panel:
+                    whole = min(whole, self.start + self.training_stop_second)
+                elif profiles.is_twenty_hour_continuation():
+                    whole = min(whole, self.start + self.training_stop_second + self.final_panel_reserve)
+            else:
+                whole = min(whole, now + 1800. - self.evaluation_seconds)
         soft = min(now + (120. if kind == 'qualification' else 480.), whole - 100.)
         if soft <= now:
             raise TimeoutError('shared job/cleanup/training/evaluation time exhausted')
         return soft, whole
+
+
+def _campaign_budget(root, *, start, deadline, clock=time.monotonic):
+    """Construct the live lease ledger from the same release caps guests verify."""
+    caps = release_caps(root)
+    evaluation = _read(Path(root)/profiles.current().campaign_path).get('evaluation', {})
+    return CampaignBudget(caps['global_effect_caps'], start=start, deadline=deadline, clock=clock,
+        evaluation_cap=caps['evaluation_seconds'],
+        final_panel_reserve=evaluation.get('final_panel_reserve_seconds', 0))
 
 
 def initialize_stage(root, host, verified):
@@ -538,16 +1686,24 @@ def _spec(context, context_path, layout):
 
 
 def prepare_job(root, host, verified, budget, *, kind, job_id, parent, arm=None, index=0,
-                prefix=None, predecessor=None, slot=None, arm_deadline=None, max_updates=None):
+                prefix=None, predecessor=None, slot=None, arm_deadline=None, max_updates=None,
+                source_transition=None):
     """Create a new immutable lease/context and selected RO input projection."""
     root, host = Path(root), Path(host)
     package = verified['package']
+    if source_transition is not None:
+        producer.validate_source_transition(dict(source_transition=source_transition, kind=kind,
+            campaign_id=package['campaign_id'], arm=arm, shard_index=index,
+            source_sha256=package_api.sha256(verified['source_snapshot']),
+            predecessor=predecessor, parent=parent),
+            authority=verified['release']['user_approval']['sha256'])
     if re.fullmatch(r'curriculum-[a-z0-9-]{1,100}', job_id) is None or kind not in producer.KIND_KEYS:
         raise ValueError('new job identity/kind differs')
     verify_source(host/'source', verified['snapshot'])
     if package_api.sha256(verified['package_path']) != verified['release']['package_sha256']:
         raise ValueError('immutable package changed')
-    soft, whole = budget.job_deadlines(kind, arm_deadline=arm_deadline)
+    soft, whole = budget.job_deadlines(kind, arm_deadline=arm_deadline,
+        final_panel=kind == 'panel' and slot == 'final-mixed')
     job = host/'jobs'/job_id
     if job.exists() or job_id in budget.jobs:
         raise ValueError('job identity already consumed')
@@ -567,19 +1723,30 @@ def prepare_job(root, host, verified, budget, *, kind, job_id, parent, arm=None,
         raise ValueError('parent bytes differ before dispatch')
     prefix = dict(prefix or {})
     if kind == 'segment':
-        if arm not in package['training'] or type(index) is not int or not 0 <= index < len(package['training'][arm]):
+        if arm not in package['training']:
             raise ValueError('training arm/index differs')
-        names = package['training'][arm][index]['inputs']
+        binding = _training_binding(package, arm, index)
+        names = binding['inputs']
         bindings = {name: package['inventory'][name] for name in names}
         input_relative = (profiles.current().domain / 'inputs')
         output_relative = Path('training')/arm/'runs'
-        reservation = dict(environment_attempts=4096, sample_rows=4096, optimizer_attempts=256,
-                           reset_slots=4112, fixed_random_choices=0)
-        ceiling = 1000000 if arm == 'mixed' else 16384
-        adam_ceiling = 65536 if arm == 'mixed' else 1024
+        if profiles.is_twenty_hour_campaign() or profiles.is_twenty_hour_continuation():
+            segment_caps = package['campaign']['segment']
+            reservation = dict(environment_attempts=segment_caps['environment_attempts'],
+                sample_rows=segment_caps['sample_rows'], optimizer_attempts=segment_caps['optimizer_attempts'],
+                reset_slots=segment_caps['reset_slots'], fixed_random_choices=0)
+            ceiling = package['campaign']['training_caps']['environment_attempts']
+            adam_ceiling = package['campaign']['training_caps']['optimizer_attempts']
+            maximum_updates = segment_caps['updates']
+        else:
+            reservation = dict(environment_attempts=4096, sample_rows=4096, optimizer_attempts=256,
+                               reset_slots=4112, fixed_random_choices=0)
+            ceiling = 1000000 if arm == 'mixed' else 16384
+            adam_ceiling = 65536 if arm == 'mixed' else 1024
+            maximum_updates = 8
         remaining_actions = ceiling-prefix.get('attempted_environment_slots', 0)
         remaining_adam = adam_ceiling-prefix.get('optimizer_attempted_steps', 0)
-        updates = min(8, remaining_adam//32)
+        updates = min(maximum_updates, remaining_adam//32)
         if remaining_actions <= 0 or updates <= 0:
             raise TimeoutError('arm cumulative effect ceiling exhausted')
         reservation['environment_attempts'] = min(4096, remaining_actions)
@@ -644,6 +1811,9 @@ def prepare_job(root, host, verified, budget, *, kind, job_id, parent, arm=None,
         package_sha256=package_api.sha256(verified['package_path']),
         campaign_claim_sha256=package_api.sha256(verified['claim_path']), reservation=reservation,
         predecessor=extra.get('predecessor'))
+    if source_transition is not None:
+        claim['source_transition'] = dict(source_transition)
+        extra['source_transition'] = dict(source_transition)
     claim_path = host/'job-claims'/(job_id+'.json')
     _write(claim_path, claim)
     for name, path in (('snapshot.json', verified['source_snapshot']), ('release.json', verified['release_path']),
@@ -663,6 +1833,16 @@ def prepare_job(root, host, verified, budget, *, kind, job_id, parent, arm=None,
     _write(control/'layout.json', layout)
     return dict(context=context, context_path=context_path, spec=_spec(context, context_path, layout),
                 output=output, parent_host=parent_host, input_stage=input_stage)
+
+
+def _verify_guest_runtime_pins(runtime_pins, *, expected_native_sha256):
+    """Check runtime pins against the native admitted from the selected overlay."""
+    if (runtime_pins['profile_sha256'] != cdi.PROFILE_SHA256
+            or runtime_pins['native_sha256'] != expected_native_sha256
+            or runtime_pins['lock_sha256'] != low.LOCK_SHA256
+            or runtime_pins['versions'] != PIN_VERSIONS
+            or runtime_pins['python_sha256'] != PYTHON_SHA256):
+        raise ValueError('guest runtime pins differ')
 
 
 def verify_guest_context(root, context_path, *, clock=time.monotonic):
@@ -693,6 +1873,10 @@ def verify_guest_context(root, context_path, *, clock=time.monotonic):
             or campaign_claim.get('schema') != CLAIM_SCHEMA
             or any(campaign_claim.get(k) != context[k] for k in ('campaign_id', 'source_sha256', 'release_sha256', 'package_sha256'))):
         raise ValueError('guest acyclic authority chain differs')
+    if (('source_transition' in claim) != ('source_transition' in context)
+            or claim.get('source_transition') != context.get('source_transition')):
+        raise ValueError('guest source transition claim differs')
+    producer.validate_source_transition(context, authority=release['user_approval']['sha256'])
     if snapshot['files'] != context['source_inventory']:
         raise ValueError('guest source inventory differs')
     verify_source(root, snapshot)
@@ -740,10 +1924,12 @@ def verify_guest_context(root, context_path, *, clock=time.monotonic):
         if not automatic or destination.startswith(('/learner', '/inputs', '/control', '/runtime')):
             raise ValueError('unexpected guest mount '+destination)
     imported_gym = None
+    expected_native_sha256 = low.NATIVE_SHA256
     if profiles.current().fixed:
         overlay = profiles.overlay_pins(root)
         if any(not _same(release['runtime_pins'].get(key), value) for key, value in overlay.items()):
             raise ValueError('guest released package overlay differs')
+        expected_native_sha256 = overlay['native_sha256']
         directory = low._guest_path(profiles.OVERLAY_DESTINATION)
         profiles.verify_overlay(directory, overlay['package_overlay']['inventory'])
         if package_api.sha256(low._guest_path('/runtime/requirements-cuda.lock')) != low.LOCK_SHA256:
@@ -757,12 +1943,7 @@ def verify_guest_context(root, context_path, *, clock=time.monotonic):
     versions = low._runtime_metadata(low._guest_path('/runtime/venv-cuda/lib/python3.12/site-packages'))
     if any(versions.get(k) != v for k, v in PIN_VERSIONS.items()):
         raise ValueError('executing installed versions differ')
-    if (release['runtime_pins']['profile_sha256'] != cdi.PROFILE_SHA256
-            or release['runtime_pins']['native_sha256'] != (profiles.NATIVE_SHA256 if profiles.current().fixed else low.NATIVE_SHA256)
-            or release['runtime_pins']['lock_sha256'] != low.LOCK_SHA256
-            or release['runtime_pins']['versions'] != PIN_VERSIONS
-            or release['runtime_pins']['python_sha256'] != PYTHON_SHA256):
-        raise ValueError('guest runtime pins differ')
+    _verify_guest_runtime_pins(release['runtime_pins'], expected_native_sha256=expected_native_sha256)
     record = dict(schema='spire-learn-curriculum-admission-v1', job_id=context['job_id'],
         context_sha256=digest, runtime_class=context['runtime_class'],
         process={k: facts[k] for k in ('uid', 'gid', 'python', 'supplementary_group_ids')},
@@ -778,11 +1959,11 @@ def verify_guest_context(root, context_path, *, clock=time.monotonic):
     return context
 
 
-def storage_admission(root, host, deps, *, reservation=0):
+def storage_admission(root, host, deps, *, reservation=0, live=False):
     if type(reservation) is not int or reservation < 0:
         raise ValueError('invalid storage reservation')
-    new = low.tree_bytes(Path(host), strict=True)
-    aggregate = low.tree_bytes(Path(root)/'artifacts/development/neural-combat', strict=False)
+    new = low.tree_bytes(Path(host), strict=True, live=live)
+    aggregate = low.tree_bytes(Path(root)/'artifacts/development/neural-combat', strict=False, live=True)
     free = deps.disk_usage(root).free
     if new+reservation > 12*GIB or aggregate+reservation > 40*GIB or free-reservation < 30*GIB:
         raise RuntimeError('storage admission ceiling/floor exhausted')
@@ -871,6 +2052,8 @@ def reconcile_job(root, verified, context, output, *, lifecycle, budget, clock=t
         'release_sha256', 'claim_sha256', 'parent', 'input_inventory', 'deadline', 'whole_deadline')
     if (receipt.get('schema') != producer.RECEIPT_SCHEMA or receipt.get('status') != 'complete'
             or any(receipt.get(k) != context[k] for k in keys)
+            or ('source_transition' in receipt) != ('source_transition' in context)
+            or receipt.get('source_transition') != context.get('source_transition')
             or clock() >= context['whole_deadline'] or _number(receipt['elapsed_seconds'], 'elapsed') > 600):
         raise ValueError('job receipt authority/status/deadline differs')
     profiles.validate_process_evidence(root, receipt, runtime_pins=verified['release']['runtime_pins'])
@@ -878,7 +2061,7 @@ def reconcile_job(root, verified, context, output, *, lifecycle, budget, clock=t
     checkpoint = None
     package, kind = verified['package'], context['kind']
     if kind == 'segment':
-        binding = package['training'][context['arm']][context['shard_index']]
+        binding = _training_binding(package, context['arm'], context['shard_index'])
         if any(receipt.get(k) != context[k] for k in ('arm', 'shard_index', 'prefix', 'predecessor')) or any(
                 receipt.get(k) != binding[k] for k in ('config_sha256', 'manifest_sha256')):
             raise ValueError('segment config/stream/predecessor differs')
@@ -919,6 +2102,7 @@ def reconcile_job(root, verified, context, output, *, lifecycle, budget, clock=t
                 raise ValueError('qualification saved checkpoint changed')
             report = segment['report']
             config = load_neural_config(Path(root)/profiles.current().qualification_input/f'qualification-{index}.toml')
+            shard_index = config.scenario_stream['shard_index']
             saved = preflight_checkpoint(checkpoint_path, config.accepted_identities[0], purpose='resume')
             saved_prefix = _checkpoint_recovery(saved, config)[1]
             # The unchanged held method passes its frozen root-relative pilot
@@ -926,8 +2110,8 @@ def reconcile_job(root, verified, context, output, *, lifecycle, budget, clock=t
             expected_parent = (package['original_parent']['checkpoint_directory'] if index == 0 else
                 receipt['qualification_segments'][index-1]['checkpoint']['path'])
             if (saved_prefix != segment['saved_prefix'] or saved_prefix['update_count'] != index+1
-                    or segment['next_shard'].get('shard_index') != index+1
-                    or saved.metadata['run_metadata']['scenario_stream']['current']['shard_index'] != index
+                    or segment['next_shard'].get('shard_index') != shard_index+1
+                    or saved.metadata['run_metadata']['scenario_stream']['current']['shard_index'] != shard_index
                     or saved.metadata.get('parent_checkpoint') != {'path': expected_parent}
                     or any(saved_prefix[k] for k in ('uncertain_environment_slots', 'uncertain_reset_slots', 'optimizer_uncertain_steps'))):
                 raise ValueError('held saved prefix/parent/successor differs')
@@ -995,6 +2179,7 @@ class CampaignSchedule:
     """Preregistered order. No metric or score is an input to this state machine."""
     def __init__(self, package, *, start, training_seconds=None):
         self.package, self.start = package, start
+        self.training_stop_second = profiles.current().training_stop_second
         self.qualified = False
         self.arm_index = 0
         self.indices = dict.fromkeys(('fixed', 'randomized', 'mixed'), 0)
@@ -1047,10 +2232,11 @@ class CampaignSchedule:
             if arm not in self.arm_started:
                 self.arm_started[arm] = now
             exhausted = (arm in self.stopped or self.indices[arm] >= 4
-                or now >= self.arm_started[arm]+3000. or now >= self.start+33600.)
+                or now >= self.arm_started[arm]+3000.
+                or now >= self.start+self.training_stop_second)
             if not exhausted:
                 return dict(kind='segment', arm=arm, index=self.indices[arm],
-                    arm_deadline=min(self.arm_started[arm]+3000., self.start+33600.))
+                    arm_deadline=min(self.arm_started[arm]+3000., self.start+self.training_stop_second))
             slot = 'matched-'+arm
             if slot not in self.panels_done:
                 return dict(kind='panel', slot=slot, arm=arm)
@@ -1066,12 +2252,108 @@ class CampaignSchedule:
             if slot not in self.panels_done and _number(self.training_seconds['mixed'], 'mixed charged seconds') >= seconds:
                 return dict(kind='panel', slot=slot, arm='mixed')
         prefix = self.prefixes['mixed']
-        if ('mixed' not in self.stopped and self.indices['mixed'] < 256 and now < self.start+33600.
+        if ('mixed' not in self.stopped and self.indices['mixed'] < 256
+                and now < self.start+self.training_stop_second
                 and prefix.get('attempted_environment_slots', 0) < 1000000
                 and prefix.get('optimizer_attempted_steps', 0) < 65536):
-            return dict(kind='segment', arm='mixed', index=self.indices['mixed'], arm_deadline=self.start+33600.)
+            return dict(kind='segment', arm='mixed', index=self.indices['mixed'],
+                        arm_deadline=self.start+self.training_stop_second)
         if 'final-mixed' not in self.panels_done:
             return dict(kind='panel', slot='final-mixed', arm='mixed')
+        return None
+
+
+class TwentyHourSchedule:
+    """One preregistered B16 mixed stream with time-triggered frozen panels."""
+    def __init__(self, package, *, start, training_seconds=None,
+                 continuation_parent_receipt=None):
+        self.package, self.start = package, start
+        self.training_stop_second = profiles.current().training_stop_second
+        self.training_caps = package['campaign']['training_caps']
+        self.stream_start = package['campaign']['training_start_indices']['mixed']
+        self.stream_count = package['campaign']['training_shards']['mixed']
+        self.qualified = False
+        self.indices = {'mixed': self.stream_start}
+        self.prefixes = {'mixed': {}}
+        self.checkpoints = {'mixed': None}
+        self.predecessors = {'mixed': None}
+        if profiles.is_twenty_hour_continuation():
+            continuation = package.get('campaign', {}).get('continuation', {})
+            if (not isinstance(continuation_parent_receipt, Mapping)
+                    or continuation_parent_receipt.get('sha256') != continuation.get('parent_receipt_sha256')
+                    or not continuation.get('parent_prefix')):
+                raise ValueError('continuation schedule needs its bound healthy shard337 parent')
+            self.prefixes['mixed'] = dict(continuation['parent_prefix'])
+            self.indices['mixed'] = continuation['first_new_shard_index']
+            self.predecessors['mixed'] = dict(continuation_parent_receipt)
+        self.stopped = {}
+        self.training_seconds = (training_seconds if training_seconds is not None else
+                                 dict.fromkeys(('fixed', 'randomized', 'mixed'), 0.))
+        self.slots = package['evaluation_slots']
+        self.milestones = package['campaign']['evaluation']['milestone_training_seconds']
+        if len(self.slots) != len(self.milestones) + 2:
+            raise ValueError('twenty-hour milestone/panel schedule differs')
+        self.availability = {slot: dict(status='not_started', reason='not reached') for slot in self.slots}
+        self.panels_done = set()
+
+    def accept_qualification(self):
+        if self.qualified:
+            raise ValueError('qualification cannot run twice')
+        self.qualified = True
+
+    def finish_panel(self, slot, *, status, reason, result=None):
+        if slot not in self.availability or slot in self.panels_done:
+            raise ValueError('panel slot missing or consumed')
+        self.availability[slot] = dict(status=status, reason=reason, result=result)
+        self.panels_done.add(slot)
+
+    def stop_arm(self, arm, *, reason):
+        if arm != 'mixed':
+            raise ValueError('twenty-hour training arm differs')
+        self.stopped[arm] = reason
+
+    def accept_segment(self, arm, result):
+        if arm != 'mixed':
+            raise ValueError('twenty-hour training arm differs')
+        before = self.prefixes['mixed']
+        after = result['checkpoint']['counters']
+        if after['attempted_environment_slots'] <= before.get('attempted_environment_slots', 0):
+            self.stopped['mixed'] = 'zero_progress'
+        self.prefixes['mixed'] = after
+        self.checkpoints['mixed'] = result['checkpoint']
+        self.predecessors['mixed'] = result['receipt_binding']
+        self.indices['mixed'] += 1
+
+    def next(self, now):
+        if not self.qualified:
+            return dict(kind='qualification')
+        initial = self.slots[0]
+        if initial not in self.panels_done:
+            return dict(kind='panel', slot=initial,
+                arm='mixed' if profiles.is_twenty_hour_continuation() else None)
+        charged = _number(self.training_seconds['mixed'], 'mixed charged seconds')
+        cutoff = self.start + self.training_stop_second
+        if now < cutoff:
+            for threshold, slot in zip(self.milestones, self.slots[1:-1]):
+                if slot not in self.panels_done and charged >= threshold:
+                    return dict(kind='panel', slot=slot, arm='mixed')
+        else:
+            for slot in self.slots[1:-1]:
+                if slot not in self.panels_done:
+                    self.finish_panel(slot, status='not_started',
+                        reason='training cutoff reached before milestone panel')
+        prefix = self.prefixes['mixed']
+        exhausted = (bool(self.stopped)
+            or self.indices['mixed'] >= self.stream_start + self.stream_count
+            or now >= cutoff
+            or prefix.get('attempted_environment_slots', 0) >= self.training_caps['environment_attempts']
+            or prefix.get('optimizer_attempted_steps', 0) >= self.training_caps['optimizer_attempts'])
+        if not exhausted:
+            return dict(kind='segment', arm='mixed', index=self.indices['mixed'],
+                arm_deadline=self.start + self.training_stop_second)
+        final = self.slots[-1]
+        if final not in self.panels_done:
+            return dict(kind='panel', slot=final, arm='mixed')
         return None
 
 
@@ -1092,11 +2374,11 @@ def dispatch_job(root, host, verified, budget, *, deps, docker, client, **reques
                 return  # The transaction already reserved its owned cleanup tail.
             if deps.clock() >= spec.whole_deadline-35.:
                 raise TimeoutError('job whole deadline cleanup reserve exhausted')
-            size = low.tree_bytes(output, strict=True)
+            size = low.tree_bytes(output, strict=True, live=True)
             if size > limit:
                 raise RuntimeError('job output storage lease exceeded')
             if deps.clock() >= next_storage_check:
-                storage_admission(root, host, deps, reservation=limit-size)
+                storage_admission(root, host, deps, reservation=limit-size, live=True)
                 next_storage_check = deps.clock()+5.
         verify_source(Path(host)/'source', verified['snapshot'])
         package_api.verify_inventory(prepared['input_stage'], context['input_inventory'])
@@ -1155,7 +2437,7 @@ def dispatch_job(root, host, verified, budget, *, deps, docker, client, **reques
                 result['host_elapsed_seconds'] = elapsed
             if prepared is not None and finished >= prepared['context']['whole_deadline']:
                 raise TimeoutError('host attempt publication/closure exhausted job whole lease')
-            if budget.evaluation_seconds > 1800.:
+            if budget.evaluation_seconds > budget.evaluation_cap:
                 raise TimeoutError('actual enclosing CPU evaluation lease exhausted')
         except BaseException as closure:
             final = low._promote(final, closure)
@@ -1218,7 +2500,7 @@ def _run_campaign(root: Path, *, package_path: Path, source_snapshot: Path, rele
     supervision = _verify_supervision(root, package_path=package_path, source_snapshot=source_snapshot,
                                      release_path=release_path, clock=deps.clock)
     start, deadline = supervision['parent_start'], supervision['whole_deadline']
-    budget = CampaignBudget(CAPS, start=start, deadline=deadline, clock=deps.clock)
+    budget = _campaign_budget(root, start=start, deadline=deadline, clock=deps.clock)
     verified = dict(validate_release(root, package_path=package_path, source_snapshot=source_snapshot, release_path=release_path),
         package_path=Path(package_path), source_snapshot=Path(source_snapshot), release_path=Path(release_path))
     if deps.uid() != 1000 or deps.gid() != 1000:
@@ -1234,7 +2516,26 @@ def _run_campaign(root: Path, *, package_path: Path, source_snapshot: Path, rele
         source_sha256=package_api.sha256(source_snapshot), release_sha256=package_api.sha256(release_path),
         package_sha256=package_api.sha256(package_path), parent_start=start, whole_deadline=deadline,
         supervision=supervision)
-    plan = CampaignSchedule(verified['package'], start=start, training_seconds=budget.training_seconds)
+    continuation_parent_receipt = None
+    if profiles.is_twenty_hour_continuation():
+        lineage = verified['package']['campaign']['continuation']
+        source_receipt = package_api.relative_file(root, lineage['parent_receipt_path'])
+        if package_api.sha256(source_receipt) != lineage['parent_receipt_sha256']:
+            raise ValueError('continuation shard337 parent receipt changed before launch')
+        lineage_dir = host/'lineage'
+        lineage_dir.mkdir()
+        owned_receipt = lineage_dir/'shard337-receipt.json'
+        shutil.copyfile(source_receipt, owned_receipt)
+        if package_api.sha256(owned_receipt) != lineage['parent_receipt_sha256']:
+            raise ValueError('owned continuation parent receipt copy differs')
+        continuation_parent_receipt = dict(path=str(owned_receipt),
+            sha256=lineage['parent_receipt_sha256'])
+    plan_type = (TwentyHourSchedule if profiles.is_twenty_hour_campaign()
+        or profiles.is_twenty_hour_continuation() else CampaignSchedule)
+    plan = (plan_type(verified['package'], start=start, training_seconds=budget.training_seconds,
+            continuation_parent_receipt=continuation_parent_receipt)
+        if profiles.is_twenty_hour_continuation()
+        else plan_type(verified['package'], start=start, training_seconds=budget.training_seconds))
     original = verified['package']['original_parent']
     original_parent = dict(path=str(root/original['checkpoint_directory']), inventory=original['inventory'])
     results, primary, status = [], None, 'running'
@@ -1253,12 +2554,12 @@ def _run_campaign(root: Path, *, package_path: Path, source_snapshot: Path, rele
             arm = request.get('arm')
             if kind == 'panel':
                 slot = request['slot']
-                parent = original_parent if arm is None else plan.checkpoints[arm]
+                parent = original_parent if arm is None else plan.checkpoints.get(arm) or original_parent
                 if parent is None:
                     plan.finish_panel(slot, status='unavailable', reason='no healthy arm checkpoint')
                     continue
                 try:
-                    budget.job_deadlines('panel')
+                    budget.job_deadlines('panel', final_panel=slot == 'final-mixed')
                 except TimeoutError as error:
                     plan.finish_panel(slot, status='not_started', reason=str(error))
                     continue
@@ -1273,6 +2574,17 @@ def _run_campaign(root: Path, *, package_path: Path, source_snapshot: Path, rele
                 job_id = f"curriculum-{arm}-{request['index']:03d}"
                 parameters = dict(request, parent=plan.checkpoints[arm] or original_parent,
                     prefix=plan.prefixes[arm], predecessor=plan.predecessors[arm])
+                if (profiles.is_twenty_hour_continuation()
+                        and request['index'] == verified['package']['campaign']['continuation']['first_new_shard_index']):
+                    continuation = verified['package']['campaign']['continuation']
+                    parameters['source_transition'] = dict(
+                        schema=producer.SOURCE_TRANSITION_SCHEMA,
+                        purpose='authorized-checkpoint-continuation',
+                        from_source_sha256=continuation['parent_source_sha256'],
+                        to_source_sha256=claim['source_sha256'],
+                        predecessor_sha256=continuation_parent_receipt['sha256'],
+                        checkpoint_inventory_sha256=continuation['parent_checkpoint_inventory_sha256'],
+                        user_approval_sha256=verified['release']['user_approval']['sha256'])
             else:
                 job_id = 'curriculum-qualification'
                 parameters = dict(kind=kind, parent=original_parent)
@@ -1466,12 +2778,13 @@ def _launch_guard(arguments, *, result_path, clock, run, parent_start, state):
     start = _number(clock() if parent_start is None else parent_start, 'launcher start')
     if start > clock():
         raise ValueError('launcher start cannot renew time in the future')
-    deadline = start+36000.
+    whole_seconds = profiles.current().whole_seconds
+    deadline = start+whole_seconds
     env = {k: v for k, v in os.environ.items() if not k.startswith('SPIRE_LEARN_RUN_')}
     env.update(SPIRE_LEARN_CURRICULUM_PARENT_START=str(start), SPIRE_LEARN_CURRICULUM_PARENT_DEADLINE=str(deadline))
     if not Path('/usr/bin/timeout').is_file():
         raise ValueError('GNU timeout is required')
-    term_seconds = max(1, math.floor(start+35900.-clock()))
+    term_seconds = max(1, math.floor(start+whole_seconds-100.-clock()))
     command = ['/usr/bin/timeout', '--signal=TERM', '--kill-after=90s', str(term_seconds)+'s', sys.executable,
         '-B', str(Path(__file__).resolve()), *arguments]
     # Reserve the outer record pathname before dispatch; never overwrite evidence.
@@ -1488,7 +2801,7 @@ def _launch_guard(arguments, *, result_path, clock, run, parent_start, state):
                 primary = state['first']
         try:
             # Sidecar failure is a recorded zero-child launch failure.
-            term_seconds = max(1, math.floor(start+35900.-clock()-1.))
+            term_seconds = max(1, math.floor(start+whole_seconds-100.-clock()-1.))
             command[3] = str(term_seconds)+'s'
             launcher = _proc_identity(os.getpid())
             result_info = os.fstat(stream.fileno())
@@ -1606,7 +2919,8 @@ def _main(args, parser):
             release_path=path(args.release))
         value = dict(status='validated', campaign_id=profiles.current().campaign_id,
             source_sha256=package_api.sha256(path(args.source)), package_sha256=package_api.sha256(path(args.package)),
-            release_sha256=package_api.sha256(path(args.release)), full_package_shards=264)
+            release_sha256=package_api.sha256(path(args.release)),
+            full_package_shards=sum(len(rows) for rows in verified['package']['training'].values()))
     elif args.command == 'run':
         required('package', 'source', 'release')
         value = run_campaign(root, package_path=path(args.package), source_snapshot=path(args.source), release_path=path(args.release))

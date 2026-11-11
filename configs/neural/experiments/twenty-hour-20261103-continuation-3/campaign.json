@@ -1,0 +1,230 @@
+{
+  "baseline": {
+    "inherited_exposure": {
+      "accepted_adam_steps": 46336,
+      "mixed_decisions": 741376,
+      "ppo_updates": 1448
+    },
+    "initialization": "exact resume model, Adam, RNG domains, sampler state, and operation counters; shard338 is skipped and its full lease remains charged",
+    "label": "continuation-parent-shard337",
+    "parent_campaign_id": "curriculum-20261103-twenty-hour",
+    "parent_package_sha256": "72dfb1fda0233de0fb867ab5b9dc0c869f6ebf6166b0585b43126fd0a17600d4",
+    "parent_receipt_sha256": "b2afb649a3887bbcc101c397831cbe6b5c0e639476c377cbace20f4f1e333fd0",
+    "parent_source_sha256": "d363f588bdafb4f2013828c149edeaff819eb422f6f48a6ff34493a257f7eb3a",
+    "selection": "last fully reconciled optimized mixed checkpoint before the unreconciled shard338 lease"
+  },
+  "campaign_id": "curriculum-20261103-twenty-hour-continuation-3",
+  "continuation": {
+    "first_new_shard_index": 339,
+    "inherited_exposure": {
+      "accepted_adam_steps": 46336,
+      "mixed_decisions": 741376,
+      "ppo_updates": 1448
+    },
+    "parent_campaign_id": "curriculum-20261103-twenty-hour",
+    "parent_checkpoint_inventory_sha256": "071a05b8bdec51f38b9f7591dec553a0d7f5547cc2dd2131094d678fe617054e",
+    "parent_checkpoint_path": "artifacts/development/neural-combat/twenty-hour-20261103/runtime/jobs/curriculum-mixed-337/output/20261103T061627Z-c3c9a1f87bc548a98c6c368999b29c91/checkpoint-final",
+    "parent_next_manifest_sha256": "5018d2c798a8d6a294eb9b3c62de79d54cf3e30676fead04a51d859441c23352",
+    "parent_next_shard_index": 338,
+    "parent_package_sha256": "72dfb1fda0233de0fb867ab5b9dc0c869f6ebf6166b0585b43126fd0a17600d4",
+    "parent_prefix": {
+      "attempted_environment_slots": 335872,
+      "attempted_reset_slots": 15356,
+      "delivered_environment_slots": 335872,
+      "delivered_reset_slots": 15356,
+      "elapsed_seconds": 4006.1897676149383,
+      "fixed_decisions": 0,
+      "forwarded_environment_slots": 335872,
+      "forwarded_reset_slots": 15356,
+      "incomplete_decisions": 19309,
+      "known_accepted_environment_slots": 335872,
+      "known_accepted_reset_slots": 15356,
+      "learned_decisions": 335872,
+      "optimizer_accepted_steps": 20992,
+      "optimizer_attempted_steps": 20992,
+      "optimizer_uncertain_steps": 0,
+      "uncertain_environment_slots": 0,
+      "uncertain_reset_slots": 0,
+      "update_count": 656
+    },
+    "parent_receipt_path": "artifacts/development/neural-combat/twenty-hour-20261103/runtime/jobs/curriculum-mixed-337/output/job-receipt.json",
+    "parent_receipt_sha256": "b2afb649a3887bbcc101c397831cbe6b5c0e639476c377cbace20f4f1e333fd0",
+    "parent_shard_index": 337,
+    "parent_source_sha256": "d363f588bdafb4f2013828c149edeaff819eb422f6f48a6ff34493a257f7eb3a",
+    "resume_skip_authorization": {
+      "actual": null,
+      "campaign_id": "curriculum-20261103-twenty-hour-continuation-3",
+      "expected_next_shard_index": 338,
+      "from_shard_index": 337,
+      "parent_checkpoint_inventory_sha256": "071a05b8bdec51f38b9f7591dec553a0d7f5547cc2dd2131094d678fe617054e",
+      "parent_receipt_sha256": "b2afb649a3887bbcc101c397831cbe6b5c0e639476c377cbace20f4f1e333fd0",
+      "receipt_binding": null,
+      "schema": "spire-learn-scenario-stream-gap-v1",
+      "skipped_attempt_sha256": "67b1adf91b865246f34d43ad30a1724b804aacccb8db6daa8e2fa55e7e0beea8",
+      "skipped_claim_sha256": "37ad8526dce9e4431d6a0b0c43ee3f5a51bb7ac4ee530d11a186bef18de110f9",
+      "skipped_lease": {
+        "environment_attempts": 4096,
+        "fixed_random_choices": 0,
+        "optimizer_attempts": 256,
+        "reset_slots": 4112,
+        "sample_rows": 4096
+      },
+      "skipped_shard_index": 338,
+      "to_shard_index": 339,
+      "user_authority_sha256": "5f86c21f1d1321287f09a2307dcf16d5ebb16656984e038355264bb40da1d2bf"
+    },
+    "schema": "spire-learn-curriculum-twenty-hour-resume-v1",
+    "skipped_actual": null,
+    "skipped_attempt_path": "artifacts/development/neural-combat/twenty-hour-20261103/runtime/attempts/curriculum-mixed-338.json",
+    "skipped_attempt_sha256": "67b1adf91b865246f34d43ad30a1724b804aacccb8db6daa8e2fa55e7e0beea8",
+    "skipped_claim_path": "artifacts/development/neural-combat/twenty-hour-20261103/runtime/job-claims/curriculum-mixed-338.json",
+    "skipped_claim_sha256": "37ad8526dce9e4431d6a0b0c43ee3f5a51bb7ac4ee530d11a186bef18de110f9",
+    "skipped_lease": {
+      "environment_attempts": 4096,
+      "fixed_random_choices": 0,
+      "optimizer_attempts": 256,
+      "reset_slots": 4112,
+      "sample_rows": 4096
+    },
+    "skipped_receipt_binding": null,
+    "skipped_shard": {
+      "actual": null,
+      "attempt_sha256": "67b1adf91b865246f34d43ad30a1724b804aacccb8db6daa8e2fa55e7e0beea8",
+      "claim_sha256": "37ad8526dce9e4431d6a0b0c43ee3f5a51bb7ac4ee530d11a186bef18de110f9",
+      "index": 338,
+      "lease": {
+        "environment_attempts": 4096,
+        "fixed_random_choices": 0,
+        "optimizer_attempts": 256,
+        "reset_slots": 4112,
+        "sample_rows": 4096
+      },
+      "receipt_binding": null
+    },
+    "skipped_shard_index": 338
+  },
+  "development_panel": {
+    "case_count": 64,
+    "manifest_path": "panel/development-panel.json",
+    "manifest_sha256": "2cbba1c946520b1fd9500f71b1865b994c17a17c56d86899a7861a181e5c87d0",
+    "protected_final_split": "untouched",
+    "repeated_exposure": true,
+    "source_package_path": "artifacts/development/neural-combat/curriculum-campaign-v6/preparation/package-a/package.json",
+    "source_package_sha256": "13a8377efa88f4850e1697450dc6a0b38949d7466487709929d76749beb1aa83"
+  },
+  "evaluation": {
+    "case_actions": 256,
+    "case_seconds": 30,
+    "final_panel_reserve_seconds": 600,
+    "job_soft_seconds": 480,
+    "job_whole_seconds": 600,
+    "milestone_training_seconds": [
+      7200,
+      14400,
+      21600,
+      28800,
+      36000,
+      43200,
+      50400,
+      57600
+    ],
+    "pre_final_panel_reserve_seconds": 6000,
+    "repeated_development_exposure": true,
+    "total_seconds": 6600
+  },
+  "evaluation_slots": [
+    "continuation-parent-shard337",
+    "mixed-time-7200",
+    "mixed-time-14400",
+    "mixed-time-21600",
+    "mixed-time-28800",
+    "mixed-time-36000",
+    "mixed-time-43200",
+    "mixed-time-50400",
+    "mixed-time-57600",
+    "final-mixed"
+  ],
+  "global_effect_caps": {
+    "environment_attempts": 4538880,
+    "fixed_random_choices": 0,
+    "optimizer_attempts": 273416,
+    "reset_slots": 4392512,
+    "sample_rows": 4375040
+  },
+  "mixture": {
+    "arm": "mixed",
+    "run_like_percent": 70,
+    "targeted_lesson_percent": 20,
+    "unusual_percent": 10
+  },
+  "qualification": {
+    "environment_attempts": 512,
+    "fixed_random_choices": 0,
+    "optimizer_attempts": 8,
+    "output_bytes": 1073741824,
+    "reset_slots": 256,
+    "sample_rows": 512,
+    "seeds": {
+      "curriculum": 20261223,
+      "noncombat": 20261229,
+      "optimizer": 20261219,
+      "policy": 20261217
+    },
+    "soft_seconds": 120,
+    "stream_start_index": 1412,
+    "whole_seconds": 600
+  },
+  "qualifications": [
+    "RNG-001",
+    "TIME-001",
+    "standalone Ironclad A0 only",
+    "exact continuation of the shard337 model, Adam, RNG, sampler, and operation counters",
+    "unreconciled shard338 skipped with its full lease charged",
+    "repeated 64-case development panel",
+    "no protected final-split run",
+    "no original-game transfer claim",
+    "continuation-2 unreconciled qualification full lease additionally charged; disjoint qualification1412/1413"
+  ],
+  "runtime": {
+    "gpu_uuid": "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d",
+    "interop_threads": 1,
+    "threads": 4
+  },
+  "segment": {
+    "environment_attempts": 4096,
+    "optimizer_attempts": 256,
+    "reset_slots": 4112,
+    "sample_rows": 4096,
+    "soft_seconds": 480,
+    "updates": 8,
+    "whole_seconds": 600
+  },
+  "storage": {
+    "aggregate_bytes": 42949672960,
+    "free_bytes": 32212254720,
+    "new_output_bytes": 12884901888,
+    "package_bytes": 536870912,
+    "vram_free_bytes": 12884901888
+  },
+  "training_budgets": {
+    "max_environment_actions": 4718592,
+    "max_optimizer_steps": 294912,
+    "max_training_decisions": 4718592,
+    "max_wall_seconds": 72000.0
+  },
+  "training_caps": {
+    "environment_attempts": 4710400,
+    "fixed_random_choices": 0,
+    "optimizer_attempts": 294400,
+    "reset_slots": 4406972,
+    "sample_rows": 4710400
+  },
+  "training_shards": {
+    "mixed": 1068
+  },
+  "training_start_indices": {
+    "mixed": 339
+  },
+  "training_stop_second": 64198,
+  "whole_seconds": 65998
+}

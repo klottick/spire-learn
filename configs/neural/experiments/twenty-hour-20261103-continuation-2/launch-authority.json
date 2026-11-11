@@ -1,0 +1,69 @@
+{
+  "schema": "spire-learn-curriculum-corrected-continuation-authority-v1",
+  "campaign_id": "curriculum-20261103-twenty-hour-continuation-2",
+  "failed_predecessor": "curriculum-20261103-twenty-hour",
+  "prior_zero_job_attempt": {
+    "campaign_id": "curriculum-20261103-twenty-hour-continuation-1",
+    "owner_exec_session_id": 19939,
+    "write_stdin_exit_code": 1,
+    "launcher_elapsed_seconds": 304.97056149004493,
+    "watchdog_exit_status": 1,
+    "campaign_claim_published": false,
+    "job_dispatched": false,
+    "artifact_bindings": {
+      "launch_session": {
+        "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-1/launch-session.json",
+        "sha256": "76b78bafadae568863fdf33bf2d2fb3563f27ef3041e6cc793907289aa598372"
+      },
+      "launcher_result": {
+        "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-1/launcher-result.json",
+        "sha256": "602438da6caaba6ad49084fedc8da862d20ecad726e1e55b7bdc3c2c04ddb19a"
+      },
+      "launcher_supervision": {
+        "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-1/launcher-result.json.supervision.json",
+        "sha256": "6b5e457fe4cac7d645c116ce35d18c9c9845de146482778dc1414bd2dcfef557"
+      },
+      "owner_exit": {
+        "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-1/launcher-os-exit-observed.json",
+        "sha256": "df14ffa075552d4ae0e73c4effb260c9687e97eda12474fbcb24b59f3bb99314"
+      }
+    }
+  },
+  "parent": {
+    "campaign_id": "curriculum-20261103-twenty-hour",
+    "healthy_shard": 337,
+    "receipt_sha256": "b2afb649a3887bbcc101c397831cbe6b5c0e639476c377cbace20f4f1e333fd0",
+    "checkpoint_inventory_sha256": "071a05b8bdec51f38b9f7591dec553a0d7f5547cc2dd2131094d678fe617054e"
+  },
+  "skip": {
+    "shard_index": 338,
+    "actual": null,
+    "receipt_binding": null,
+    "lease": {
+      "environment_attempts": 4096,
+      "sample_rows": 4096,
+      "optimizer_attempts": 256,
+      "reset_slots": 4112,
+      "fixed_random_choices": 0
+    },
+    "first_new_shard_index": 339
+  },
+  "limits": {
+    "maximum_corrected_campaign_seconds": 86400,
+    "selected_whole_seconds": 65998,
+    "training_stop_second": 64198,
+    "no_new_effect_lease_for_zero_job_attempt": true
+  },
+  "user_authority": {
+    "instruction": "Fix that, then start more training",
+    "timing_steering": "it can take 24 hours for all I care, timing is loose and the gpu is free",
+    "one_corrected_launch": true,
+    "preserve_all_failed_history": true,
+    "no_accepted_effect_retry": true,
+    "source_message_ids": [
+      "8a408503-5700-4bf2-aa90-15f613e34ec9",
+      "ccacdc24-cc28-4e29-ac2d-b6028049a4e8",
+      "7215e592-d6dc-40ee-a3a3-ac159d8566a4"
+    ]
+  }
+}

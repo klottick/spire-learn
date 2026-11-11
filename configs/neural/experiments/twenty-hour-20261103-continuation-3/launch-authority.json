@@ -1,0 +1,56 @@
+{
+  "campaign_id": "curriculum-20261103-twenty-hour-continuation-3",
+  "execution_assignment": {
+    "message_id": "9ccfc446-e876-47c9-9f04-6d00af055b13",
+    "scope": "Implement the minimal coherent repair, preserve failed history, debit the failed qualification full lease, and prepare one fresh campaign under standing user authority; no new user consent is claimed.",
+    "source_agent_id": "0db1cb9a-ad7c-445b-91ae-0dd451322364"
+  },
+  "failed_admission": {
+    "campaign_id": "curriculum-20261103-twenty-hour-continuation-2",
+    "predecessor_path": "configs/neural/experiments/twenty-hour-20261103-continuation-3/predecessor-continuation-2.json",
+    "predecessor_sha256": "8aa8550d679c198b4a5dcb61badabf5cb75c21dc53e751884e5ad7d0c01fcc18"
+  },
+  "limits": {
+    "additional_reserved_lease": {
+      "environment_attempts": 512,
+      "fixed_random_choices": 0,
+      "optimizer_attempts": 8,
+      "reset_slots": 256,
+      "sample_rows": 512
+    },
+    "maximum_campaign_seconds": 86400,
+    "no_accepted_effect_retry": true,
+    "preserve_all_failed_history": true,
+    "selected_whole_seconds": 65998,
+    "training_stop_second": 64198
+  },
+  "parent": {
+    "campaign_id": "curriculum-20261103-twenty-hour",
+    "checkpoint_inventory_sha256": "071a05b8bdec51f38b9f7591dec553a0d7f5547cc2dd2131094d678fe617054e",
+    "healthy_shard": 337,
+    "receipt_sha256": "b2afb649a3887bbcc101c397831cbe6b5c0e639476c377cbace20f4f1e333fd0"
+  },
+  "schema": "spire-learn-curriculum-repaired-continuation-authority-v1",
+  "skip": {
+    "actual": null,
+    "first_new_shard_index": 339,
+    "lease": {
+      "environment_attempts": 4096,
+      "fixed_random_choices": 0,
+      "optimizer_attempts": 256,
+      "reset_slots": 4112,
+      "sample_rows": 4096
+    },
+    "receipt_binding": null,
+    "shard_index": 338
+  },
+  "standing_user_authority": {
+    "instruction": "Fix that, then start more training",
+    "source_message_ids": [
+      "8a408503-5700-4bf2-aa90-15f613e34ec9",
+      "ccacdc24-cc28-4e29-ac2d-b6028049a4e8",
+      "7215e592-d6dc-40ee-a3a3-ac159d8566a4"
+    ],
+    "timing_steering": "it can take 24 hours for all I care, timing is loose and the gpu is free"
+  }
+}

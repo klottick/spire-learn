@@ -1,0 +1,51 @@
+{
+  "schema": "spire-learn-curriculum-additional-predecessor-v1",
+  "campaign_id": "curriculum-20261102-b",
+  "profile": "fresh-gym-afb51f5f-b",
+  "artifacts": {
+    "audit": {
+      "path": "artifacts/development/neural-combat/curriculum-campaign-v5/evaluation-failure-audit.json",
+      "sha256": "9e23c5981d7003b655c9f8ec41b53268260402bb1525d53a68d3e4067305d30a"
+    },
+    "result": {
+      "path": "artifacts/development/neural-combat/curriculum-campaign-v5/runtime/campaign-result.json",
+      "sha256": "dbf8cf011f3bd9b7a0e4b9e011407d0e220809aba67e30a23132ef200f105e22"
+    },
+    "qualification_attempt": {
+      "path": "artifacts/development/neural-combat/curriculum-campaign-v5/runtime/attempts/curriculum-qualification.json",
+      "sha256": "48c0e94a7ce25a93e1ffdf1e21247bbfb91d22ea0ec46463d12e7e5fffe90c42"
+    },
+    "qualification_receipt": {
+      "path": "artifacts/development/neural-combat/curriculum-campaign-v5/runtime/jobs/curriculum-qualification/output/job-receipt.json",
+      "sha256": "1a09c6e8f50efc886aa22cd965840f5d3d9362788d873843ebcd5d9cd4e55ff9"
+    },
+    "panel_attempt": {
+      "path": "artifacts/development/neural-combat/curriculum-campaign-v5/runtime/attempts/curriculum-panel-fresh-initial.json",
+      "sha256": "7b668fcb3996a9290f54a7a24ab472363aef92575e31fc9c68f13cee6b207df6"
+    },
+    "panel_receipt": {
+      "path": "artifacts/development/neural-combat/curriculum-campaign-v5/runtime/jobs/curriculum-panel-fresh-initial/output/job-receipt.json",
+      "sha256": "c6d2ca05cb687a6b05458f25fbf3bebe244be24e610b5119f4dc8438532bd32f"
+    },
+    "launcher_result": {
+      "path": "artifacts/development/neural-combat/curriculum-campaign-v5/launcher-result.json",
+      "sha256": "039ace672f9495c6823e2969522f839f7d6ebca2af5988f307e5f0bcfc3ef035"
+    },
+    "launcher_os_exit": {
+      "path": "artifacts/development/neural-combat/curriculum-campaign-v5/launcher-os-exit-observed.json",
+      "sha256": "356f7cddffcca6e4d8d877fc7a70ff13a6875cc00cf0b564f588689162bd5ab7"
+    }
+  },
+  "charged_or_reserved": {
+    "environment_attempts": 16512,
+    "sample_rows": 128,
+    "optimizer_attempts": 8,
+    "reset_slots": 74,
+    "fixed_random_choices": 0
+  },
+  "debit_reason": "Retain B campaign resources and the full 600-second qualification and 600-second initial-panel time leases after qualification success and panel failure; charge all reserved effects without refund.",
+  "reserved_time_seconds": {
+    "qualification": 600,
+    "panel": 600
+  }
+}

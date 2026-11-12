@@ -256,7 +256,10 @@ def overlay_pins(root):
     if (set(manifest) != {'schema', 'runtime_profile_sha256', 'inventory', 'reusable_package_sha256'}
             or manifest['schema'] != 'spire-learn-curriculum-overlay-v1'
             or sha256(root/selected.runtime_profile) != manifest['runtime_profile_sha256']
-            or runtime['schema'] != 'spire-learn-gym-runtime-profile-v1'
+            or runtime['schema'] not in {
+                'spire-learn-gym-runtime-profile-v1',
+                'spire-learn-gym-runtime-profile-v2',
+            }
             or runtime['gym_revision'] != selected.revision or runtime['native_sha256'] != native_sha256
             or runtime['dependency_venv'] != str(low.VENV)
             or runtime['dependency_lock_sha256'] != low.LOCK_SHA256

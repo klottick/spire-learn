@@ -1,32 +1,42 @@
-"""Strict, dependency-free parsing and validation for the accepted common view."""
+"""Strict, dependency-free parsing and validation for the accepted combat views."""
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import InitVar, dataclass
 import hashlib
 import json
 import re
 import struct
+import threading
 from types import MappingProxyType
+import weakref
 
 from spire_learn.contracts import ContractError
-from spire_learn.neural.config import (
-    ACCEPTED_GYM_REVISION,
-    COMMON_VIEW_FINGERPRINT,
-    COMMON_VIEW_ID,
-)
+from spire_learn.neural.config import COMMON_VIEW_FINGERPRINT
 from spire_learn.neural.contracts import BufferArray, CombatFrame, Lifecycle
+from spire_learn.neural.gym_contracts import LEGACY_CONTRACT, contract_for_schema
+from spire_learn.neural.views import COMMON_V1, ViewSpec, view_for_id
 
 
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}\Z")
-_COMBAT_VIEW_ID = "spire-gym-combat-policy-view-v1"
-_PROFILE_ID = "IroncladCombatPolicy"
 _ARRAY_LAYOUT = "owned_c_contiguous_native_endian_row_major"
-_FINGERPRINT_PREFIX = b"spire-gym/combat-policy-view/v1\0"
 _PARSER_AUTHORITY = object()
 _CHOICE_VERBS = frozenset({"choose"})
 _POTION_VERBS = frozenset({"use_potion", "discard_potion"})
+
+
+def _schema_contract(fingerprint: str, revision: str | None = None, view: ViewSpec = COMMON_V1):
+    # Keep the established legacy alias for synthetic structural fixtures;
+    # deployed descriptors must still match their complete native body hash.
+    if view is COMMON_V1 and fingerprint == COMMON_VIEW_FINGERPRINT:
+        return LEGACY_CONTRACT
+    field = "common_fingerprint" if view is COMMON_V1 else "standard_combat_fingerprint"
+    try:
+        return contract_for_schema(fingerprint, revision, field=field)
+    except ValueError as error:
+        raise ContractError(str(error)) from error
 
 
 def _integer(value: object, name: str) -> int:
@@ -161,17 +171,19 @@ class CombatSchema:
     tensors: Mapping[str, TensorSpec]
     _parser_authority: InitVar[object]
 
+    @property
+    def view(self) -> ViewSpec:
+        return view_for_id(self.schema_id)
+
     def __post_init__(self, _parser_authority: object) -> None:
         if _parser_authority is not _PARSER_AUTHORITY:
             raise ContractError("CombatSchema instances must come from the authenticated parser")
-        if self.gym_revision != ACCEPTED_GYM_REVISION:
+        view = view_for_id(self.schema_id)
+        contract = _schema_contract(self.schema_fingerprint, self.gym_revision, view)
+        if self.gym_revision != contract.source_revision:
             raise ContractError("CombatSchema Gym revision is not accepted")
-        if self.schema_id != COMMON_VIEW_ID:
-            raise ContractError("CombatSchema common-view ID is not accepted")
-        if self.profile_id != _PROFILE_ID:
+        if self.profile_id != view.profile_id:
             raise ContractError("CombatSchema profile ID is not accepted")
-        if self.schema_fingerprint != COMMON_VIEW_FINGERPRINT:
-            raise ContractError("CombatSchema common-view fingerprint is not accepted")
         if not isinstance(self.descriptor_digest, str) or _FINGERPRINT.fullmatch(
             self.descriptor_digest
         ) is None:
@@ -406,8 +418,24 @@ def _parse_descriptor_columns(
     return tuple(columns), reference_columns
 
 
-def parse_common_descriptor(raw: Mapping[str, object]) -> CombatSchema:
+def parse_common_descriptor(
+    raw: Mapping[str, object], *, revision: str | None = None,
+) -> CombatSchema:
     """Parse and authenticate the accepted Gym common combat descriptor."""
+    schema = parse_combat_descriptor(raw, revision=revision)
+    if schema.view is not COMMON_V1:
+        raise ContractError("descriptor is not the accepted common view")
+    return schema
+
+
+def parse_combat_descriptor(
+    raw: Mapping[str, object], *, revision: str | None = None,
+) -> CombatSchema:
+    """Parse and authenticate an accepted Gym combat view descriptor.
+
+    Pass the configured Gym revision: several releases share one fingerprint,
+    and without a revision only an unambiguous fingerprint is accepted.
+    """
     descriptor = _required_mapping(raw, "descriptor")
     normalized = _canonical_value(descriptor)
     if not isinstance(normalized, dict):
@@ -417,14 +445,14 @@ def parse_common_descriptor(raw: Mapping[str, object]) -> CombatSchema:
         raise ContractError("descriptor fingerprint must be lowercase SHA-256 hex")
     body = dict(normalized)
     del body["fingerprint"]
+    view = view_for_id(body.get("schema_id"))
     encoded = _canonical_json(body)
-    native_fingerprint = hashlib.sha256(_FINGERPRINT_PREFIX + encoded).hexdigest()
-    if supplied != native_fingerprint or supplied != COMMON_VIEW_FINGERPRINT:
+    native_fingerprint = hashlib.sha256(view.fingerprint_domain + encoded).hexdigest()
+    if supplied != native_fingerprint:
         raise ContractError("descriptor body does not match the supplied and accepted fingerprint")
+    contract = _schema_contract(supplied, revision, view)
 
-    if body.get("schema_id") != COMMON_VIEW_ID:
-        raise ContractError("descriptor common-view ID is not accepted")
-    if body.get("profile_id") != _PROFILE_ID:
+    if body.get("profile_id") != view.profile_id:
         raise ContractError("descriptor profile ID is not accepted")
     if body.get("array_layout") != _ARRAY_LAYOUT:
         raise ContractError("descriptor array layout is not accepted")
@@ -522,9 +550,9 @@ def parse_common_descriptor(raw: Mapping[str, object]) -> CombatSchema:
         raise ContractError("action_mask must be int8 with the exact discrete action shape")
 
     return CombatSchema(
-        gym_revision=ACCEPTED_GYM_REVISION,
-        schema_id=COMMON_VIEW_ID,
-        profile_id=_PROFILE_ID,
+        gym_revision=contract.source_revision,
+        schema_id=view.view_id,
+        profile_id=view.profile_id,
         schema_fingerprint=supplied,
         descriptor_digest=hashlib.sha256(encoded).hexdigest(),
         array_layout=_ARRAY_LAYOUT,
@@ -589,14 +617,201 @@ def _resolve_reference(
         raise ContractError(f"known reference points to an unoccupied {group} row")
 
 
+_VALIDATION_MEMO_CAPACITY = 4096
+_VALIDATION_MEMO: OrderedDict[
+    tuple[int, int],
+    tuple[weakref.ReferenceType[CombatFrame], weakref.ReferenceType[CombatSchema]],
+] = OrderedDict()
+_VALIDATION_MEMO_LOCK = threading.RLock()
+_SCHEMA_IMMUTABILITY_MEMO: OrderedDict[
+    int, tuple[weakref.ReferenceType[CombatSchema], bool]
+] = OrderedDict()
+
+
+def _optional_exact_string(value: object) -> bool:
+    return value is None or type(value) is str
+
+
+def _exact_column_spec(column: object) -> bool:
+    return (
+        type(column) is ColumnSpec
+        and type(column.field) is str
+        and type(column.unit) is str
+        and type(column.low) is int
+        and type(column.high) is int
+        and _optional_exact_string(column.vocabulary)
+        and _optional_exact_string(column.reference)
+        and (column.unavailable is None or type(column.unavailable) is int)
+    )
+
+
+def _exact_tensor_spec(spec: object) -> bool:
+    return (
+        type(spec) is TensorSpec
+        and type(spec.key) is str
+        and type(spec.dtype) is str
+        and type(spec.shape) is tuple
+        and all(type(dimension) is int for dimension in spec.shape)
+        and type(spec.padding) is int
+        and type(spec.columns) is tuple
+        and all(_exact_column_spec(column) for column in spec.columns)
+        and _optional_exact_string(spec.known_key)
+        and _optional_exact_string(spec.occupied_key)
+        and type(spec.reference_columns) is tuple
+        and all(type(index) is int for index in spec.reference_columns)
+    )
+
+
+def _schema_has_exact_immutable_fields(schema: CombatSchema) -> bool:
+    if any(type(getattr(schema, name)) is not str for name in (
+        "gym_revision", "schema_id", "profile_id", "schema_fingerprint",
+        "descriptor_digest", "array_layout",
+    )):
+        return False
+    action_space = schema.action_space
+    if (type(action_space) is not ActionSpace or type(action_space.kind) is not str
+            or type(action_space.n) is not int or type(action_space.start) is not int):
+        return False
+    if (type(schema.capacities) is not MappingProxyType
+            or any(type(key) is not str or type(value) is not int
+                   for key, value in schema.capacities.items())):
+        return False
+    if (type(schema.vocabularies) is not MappingProxyType
+            or any(type(key) is not str or type(values) is not tuple
+                   or any(type(value) is not str for value in values)
+                   for key, values in schema.vocabularies.items())):
+        return False
+    return (
+        type(schema.tensors) is MappingProxyType
+        and all(type(key) is str and _exact_tensor_spec(spec)
+                and key == spec.key for key, spec in schema.tensors.items())
+    )
+
+
+def _forget_schema_immutability_entry(
+    key: int, dead_reference: weakref.ReferenceType[CombatSchema]
+) -> None:
+    with _VALIDATION_MEMO_LOCK:
+        entry = _SCHEMA_IMMUTABILITY_MEMO.get(key)
+        if entry is not None and entry[0] is dead_reference:
+            del _SCHEMA_IMMUTABILITY_MEMO[key]
+
+
+def _schema_is_immutable_for_memo(schema: CombatSchema) -> bool:
+    if type(schema) is not CombatSchema:
+        return False
+    key = id(schema)
+    with _VALIDATION_MEMO_LOCK:
+        entry = _SCHEMA_IMMUTABILITY_MEMO.get(key)
+        if entry is not None:
+            if entry[0]() is schema:
+                _SCHEMA_IMMUTABILITY_MEMO.move_to_end(key)
+                return entry[1]
+            if _SCHEMA_IMMUTABILITY_MEMO.get(key) is entry:
+                del _SCHEMA_IMMUTABILITY_MEMO[key]
+
+    immutable = _schema_has_exact_immutable_fields(schema)
+    reference = weakref.ref(
+        schema,
+        lambda dead_reference, key=key: _forget_schema_immutability_entry(
+            key, dead_reference
+        ),
+    )
+    with _VALIDATION_MEMO_LOCK:
+        current = _SCHEMA_IMMUTABILITY_MEMO.get(key)
+        if current is not None and current[0]() is schema:
+            _SCHEMA_IMMUTABILITY_MEMO.move_to_end(key)
+            return current[1]
+        _SCHEMA_IMMUTABILITY_MEMO[key] = (reference, immutable)
+        _SCHEMA_IMMUTABILITY_MEMO.move_to_end(key)
+        while len(_SCHEMA_IMMUTABILITY_MEMO) > _VALIDATION_MEMO_CAPACITY:
+            _SCHEMA_IMMUTABILITY_MEMO.popitem(last=False)
+    return immutable
+
+
+def _frame_has_exact_immutable_fields(frame: CombatFrame) -> bool:
+    if (type(frame.schema_fingerprint) is not str
+            or type(frame.tensors) is not MappingProxyType):
+        return False
+    return all(
+        type(key) is str
+        and type(array) is BufferArray
+        and type(array.dtype) is str
+        and type(array.shape) is tuple
+        and all(type(dimension) is int for dimension in array.shape)
+        and type(array.data) is bytes
+        for key, array in frame.tensors.items()
+    )
+
+
+def _forget_validation_memo_entry(
+    key: tuple[int, int], dead_reference: weakref.ReferenceType[object]
+) -> None:
+    """Drop an entry only when the callback belongs to its current identity pair."""
+    with _VALIDATION_MEMO_LOCK:
+        entry = _VALIDATION_MEMO.get(key)
+        if entry is not None and (entry[0] is dead_reference or entry[1] is dead_reference):
+            del _VALIDATION_MEMO[key]
+
+
+def _has_validation_memo_entry(frame: CombatFrame, schema: CombatSchema) -> bool:
+    if type(frame) is not CombatFrame or type(schema) is not CombatSchema:
+        return False
+    key = (id(frame), id(schema))
+    with _VALIDATION_MEMO_LOCK:
+        entry = _VALIDATION_MEMO.get(key)
+        if entry is None:
+            return False
+        frame_reference, schema_reference = entry
+        if frame_reference() is frame and schema_reference() is schema:
+            _VALIDATION_MEMO.move_to_end(key)
+            return True
+        if _VALIDATION_MEMO.get(key) is entry:
+            del _VALIDATION_MEMO[key]
+        return False
+
+
+def _remember_validation_success(frame: CombatFrame, schema: CombatSchema) -> None:
+    if (type(frame) is not CombatFrame or type(schema) is not CombatSchema
+            or not _frame_has_exact_immutable_fields(frame)
+            or not _schema_is_immutable_for_memo(schema)):
+        return
+
+    key = (id(frame), id(schema))
+    frame_reference = weakref.ref(
+        frame, lambda reference, key=key: _forget_validation_memo_entry(key, reference)
+    )
+    schema_reference = weakref.ref(
+        schema, lambda reference, key=key: _forget_validation_memo_entry(key, reference)
+    )
+    entry = (frame_reference, schema_reference)
+    with _VALIDATION_MEMO_LOCK:
+        current = _VALIDATION_MEMO.get(key)
+        if (current is not None and current[0]() is frame and current[1]() is schema):
+            _VALIDATION_MEMO.move_to_end(key)
+            return
+        _VALIDATION_MEMO[key] = entry
+        _VALIDATION_MEMO.move_to_end(key)
+        while len(_VALIDATION_MEMO) > _VALIDATION_MEMO_CAPACITY:
+            _VALIDATION_MEMO.popitem(last=False)
+
+
 def validate_frame(frame: CombatFrame, schema: CombatSchema) -> None:
     """Validate every actor tensor against its exact accepted descriptor contract."""
     if not isinstance(schema, CombatSchema):
         raise ContractError("schema must be a CombatSchema")
     if not isinstance(frame, CombatFrame):
         raise ContractError("frame must be a CombatFrame")
+    if _has_validation_memo_entry(frame, schema):
+        return
+    _validate_frame_contents(frame, schema)
+    _remember_validation_success(frame, schema)
+
+
+def _validate_frame_contents(frame: CombatFrame, schema: CombatSchema) -> None:
     if frame.schema_fingerprint != schema.schema_fingerprint:
         raise ContractError("frame schema fingerprint does not match CombatSchema")
+    view = schema.view
     if set(frame.tensors) != set(schema.tensors):
         missing = set(schema.tensors) - set(frame.tensors)
         unexpected = set(frame.tensors) - set(schema.tensors)
@@ -647,9 +862,12 @@ def validate_frame(frame: CombatFrame, schema: CombatSchema) -> None:
                 value = values[flat_index]
                 is_known = bool(known[flat_index])
                 if not row_occupied:
-                    if key == "potions":
+                    if key in view.required_known_empty_groups:
                         if value != 0 or not is_known:
-                            raise ContractError("empty potion slots must be known zeroes with occupied=0")
+                            raise ContractError(f"empty {key} slots must be known zeroes with occupied=0")
+                    elif key in view.optional_known_empty_groups:
+                        if value != 0:
+                            raise ContractError(f"empty {key} slots must hold zero values with occupied=0")
                     elif value != spec.padding or is_known:
                         raise ContractError(f"unoccupied {key} rows must use zero/known0 padding")
                     continue
@@ -657,8 +875,11 @@ def validate_frame(frame: CombatFrame, schema: CombatSchema) -> None:
                 if value < column.low or value > column.high:
                     raise ContractError(f"{key}.{column.field} is outside its registered domain")
                 if not is_known:
-                    expected = column.unavailable if column.reference is not None else spec.padding
-                    if value != expected:
+                    if column.reference is not None:
+                        accepted = value == column.unavailable
+                    else:
+                        accepted = view.accepts_unknown(key, column.field, value, spec.padding)
+                    if not accepted:
                         raise ContractError(f"unknown {key}.{column.field} has the wrong typed padding")
                     continue
                 if column.vocabulary is not None:
@@ -798,11 +1019,11 @@ def candidates(frame: CombatFrame, schema: CombatSchema) -> tuple[CombatCandidat
     return tuple(result)
 
 
-def parse_lifecycle(info: Mapping[str, object]) -> Lifecycle:
+def parse_lifecycle(info: Mapping[str, object], view: ViewSpec = COMMON_V1) -> Lifecycle:
     """Copy only the documented lifecycle fields from boundary metadata."""
     metadata = _required_mapping(info, "lifecycle info")
-    if metadata.get("combat_view_id") != _COMBAT_VIEW_ID:
-        raise ContractError("lifecycle combat_view_id is not the accepted common view")
+    if metadata.get("combat_view_id") != view.lifecycle_view_id:
+        raise ContractError("lifecycle combat_view_id is not the accepted combat view")
     required = (
         "active", "routing", "selection_owner", "active_visit", "combats_entered",
         "combats_settled", "last_exit",
@@ -810,6 +1031,14 @@ def parse_lifecycle(info: Mapping[str, object]) -> Lifecycle:
     missing = tuple(key for key in required if key not in metadata)
     if missing:
         raise ContractError(f"lifecycle info is missing fields: {', '.join(missing)}")
+    routing = metadata["routing"]
+    if not isinstance(routing, str) or routing not in view.routings:
+        raise ContractError("lifecycle routing is not accepted for this combat view")
+    last_exit = metadata["last_exit"]
+    if isinstance(last_exit, Mapping):
+        outcome = last_exit.get("outcome")
+        if not isinstance(outcome, str) or outcome not in view.outcomes:
+            raise ContractError("lifecycle last_exit outcome is not accepted for this combat view")
     return Lifecycle(
         active=metadata["active"],
         routing=metadata["routing"],
@@ -818,6 +1047,8 @@ def parse_lifecycle(info: Mapping[str, object]) -> Lifecycle:
         combats_entered=metadata["combats_entered"],
         combats_settled=metadata["combats_settled"],
         last_exit=metadata["last_exit"],
+        phase=metadata.get("phase"),
+        selection_resume_phase=metadata.get("selection_resume_phase"),
     )
 
 
@@ -830,6 +1061,7 @@ __all__ = [
     "ContractError",
     "TensorSpec",
     "candidates",
+    "parse_combat_descriptor",
     "parse_common_descriptor",
     "parse_lifecycle",
     "validate_frame",

@@ -150,7 +150,7 @@ class CurriculumSampler:
             recent = item["recent"]
             count = _count(item["completed"])
             if (count > completed or not _sequence(recent) or len(recent) != min(128, count)
-                    or any(not isinstance(outcome, str) or outcome not in ("victory", "death")
+                    or any(not isinstance(outcome, str) or outcome not in ("victory", "death", "escaped")
                            for outcome in recent)):
                 raise ValueError("invalid bounded natural outcome window")
             copied_stats[key] = {"allocated": _count(item["allocated"]), "completed": count,
@@ -220,8 +220,8 @@ class CurriculumSampler:
     def observe(self, case_id: str, outcome: str) -> None:
         if not isinstance(case_id, str) or case_id not in self._annotations:
             raise ValueError("natural outcome must belong to the current catalog")
-        if not isinstance(outcome, str) or outcome not in ("victory", "death"):
-            raise ValueError("only natural victory/death outcomes may update curriculum")
+        if not isinstance(outcome, str) or outcome not in ("victory", "death", "escaped"):
+            raise ValueError("only natural settlement outcomes may update curriculum")
         self._completed = _increment(self._completed)
         category = self._annotations[case_id]["category"]
         if category is not None:

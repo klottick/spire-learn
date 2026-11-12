@@ -9,25 +9,14 @@ import re
 from types import MappingProxyType
 
 from spire_learn.contracts import ContractError
+from spire_learn.neural.views import COMMON_V1, VIEWS, view_for_fingerprint
+from spire_learn.neural.modes import NEURAL_MODES
 
 
 _FINGERPRINT = re.compile(r"[0-9a-fA-F]{64}\Z")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/@+-]*\Z")
 _COMMON_VIEW_FINGERPRINT = "02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78"
-_COMMON_VALUE_GROUPS = {
-    "player", "permanent_cards", "combat_cards", "enemies", "powers", "relics",
-    "potions", "selection", "selection_counts", "actions", "combat_state", "known_draw",
-}
-_COMMON_OCCUPIED_GROUPS = {
-    "permanent_cards", "combat_cards", "enemies", "powers", "relics", "potions",
-    "selection", "actions", "known_draw",
-}
-_COMMON_ACTOR_TENSOR_NAMES = frozenset(
-    _COMMON_VALUE_GROUPS
-    | {f"{name}_known" for name in _COMMON_VALUE_GROUPS}
-    | {f"{name}_occupied" for name in _COMMON_OCCUPIED_GROUPS}
-    | {"action_mask"}
-)
+_ALL_VIEW_OUTCOMES = frozenset(outcome for view in VIEWS for outcome in view.outcomes)
 
 
 def _finite_number(value: object, name: str) -> float:
@@ -100,10 +89,16 @@ class CombatFrame:
         copied = dict(self.tensors)
         if not isinstance(self.schema_fingerprint, str) or _FINGERPRINT.fullmatch(self.schema_fingerprint) is None:
             raise ContractError("schema_fingerprint must be 64 hexadecimal characters")
-        if self.schema_fingerprint != _COMMON_VIEW_FINGERPRINT:
-            raise ContractError("CombatFrame schema_fingerprint is not the accepted common view")
-        if any(not isinstance(name, str) or name not in _COMMON_ACTOR_TENSOR_NAMES
-               for name in copied):
+        # Synthetic fixtures may patch the module-level common fingerprint.
+        if self.schema_fingerprint == _COMMON_VIEW_FINGERPRINT:
+            view = COMMON_V1
+        else:
+            try:
+                view = view_for_fingerprint(self.schema_fingerprint)
+            except ContractError:
+                raise ContractError("CombatFrame schema_fingerprint is not an accepted combat view") from None
+        allowed = view.tensor_names
+        if any(not isinstance(name, str) or name not in allowed for name in copied):
             raise ContractError("CombatFrame contains a tensor outside the public actor-input descriptor")
         if any(not isinstance(value, BufferArray) for value in copied.values()):
             raise ContractError("CombatFrame tensors must be BufferArray records")
@@ -121,6 +116,8 @@ class Lifecycle:
     combats_entered: int
     combats_settled: int
     last_exit: Mapping[str, object] | None
+    phase: str | None = None
+    selection_resume_phase: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.active) is not bool:
@@ -131,10 +128,16 @@ class Lifecycle:
             raise ContractError("Lifecycle routing must be noncombat, combat, or combat_selection")
         if self.routing == "combat_selection":
             if (not isinstance(self.selection_owner, str)
-                    or self.selection_owner not in {"card", "potion", "end_turn"}):
+                    or self.selection_owner not in {"card", "potion", "end_turn", "relic", "power"}):
                 raise ContractError("combat_selection requires a recognized selection_owner")
         elif self.selection_owner is not None:
             raise ContractError("selection_owner must be None when routing has no selector")
+        phases = {"decision", "selection", "player_action", "enemy_turn", "round_end",
+                  "player_start", "terminal"}
+        for name in ("phase", "selection_resume_phase"):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not str or value not in phases):
+                raise ContractError(f"Lifecycle {name} must be a public combat phase or None")
         if self.active_visit is not None and (type(self.active_visit) is not int or self.active_visit < 0):
             raise ContractError("Lifecycle active_visit must be a non-negative integer or None")
         for name, value in (("combats_entered", self.combats_entered),
@@ -170,8 +173,8 @@ class Lifecycle:
             if not isinstance(encounter, str) or not encounter:
                 raise ContractError("Lifecycle last_exit.encounter must be a non-empty string")
             outcome = frozen.get("outcome")
-            if not isinstance(outcome, str) or outcome not in {"victory", "death"}:
-                raise ContractError("Lifecycle last_exit.outcome must be victory or death")
+            if not isinstance(outcome, str) or outcome not in _ALL_VIEW_OUTCOMES:
+                raise ContractError("Lifecycle last_exit.outcome is not accepted by a combat view")
             for name in ("hp_before_healing", "hp_after_cleanup"):
                 hp = frozen[name]
                 if type(hp) is not int or hp < 0:
@@ -377,8 +380,8 @@ class NeuralIdentity:
         if not isinstance(self.accepted_raw_mode_mappings, Mapping):
             raise ContractError("NeuralIdentity accepted_raw_mode_mappings must be a mapping")
         mappings = dict(self.accepted_raw_mode_mappings)
-        if not mappings or any(mode not in {"standalone", "run"} for mode in mappings):
-            raise ContractError("NeuralIdentity must declare accepted standalone/run mappings")
+        if not mappings or any(mode not in NEURAL_MODES for mode in mappings):
+            raise ContractError("NeuralIdentity declares an unsupported raw-mode mapping")
         for mode, mapping_id in mappings.items():
             _identifier(mapping_id, f"NeuralIdentity {mode} mapping")
         if not isinstance(self.config_hashes, Mapping):
@@ -473,10 +476,10 @@ class ResourceCheckpoint:
         _identifier(self.task_id, "ResourceCheckpoint task_id")
         if type(self.visit) is not int or self.visit < 0:
             raise ContractError("ResourceCheckpoint visit must be a non-negative integer")
-        if self.outcome not in {"victory", "death"}:
-            raise ContractError("ResourceCheckpoint outcome must be victory or death")
         if not isinstance(self.frame, CombatFrame):
             raise ContractError("ResourceCheckpoint frame must be a public CombatFrame")
+        if not isinstance(self.outcome, str) or self.outcome not in _ALL_VIEW_OUTCOMES:
+            raise ContractError("ResourceCheckpoint outcome is not accepted by a combat view")
         if not isinstance(self.encounter, str) or not self.encounter:
             raise ContractError("ResourceCheckpoint encounter must be a non-empty string")
         for name in ("hp_before_healing", "hp_after_cleanup"):
@@ -549,6 +552,7 @@ class CollectionDiagnostics:
     tasks_completed: int = 0
     victories: int = 0
     deaths: int = 0
+    escaped: int = 0
     faults: int = 0
     elapsed_seconds: float = 0.0
     wall_overshoot_seconds: float = 0.0
@@ -573,7 +577,7 @@ class CollectionDiagnostics:
             "known_accepted_reset_slots", "delivered_reset_slots",
             "uncertain_reset_slots", "learned_decisions", "fixed_decisions",
             "tasks_started", "task_terminals", "tasks_completed", "victories",
-            "deaths", "faults", "incomplete_decisions",
+            "deaths", "escaped", "faults", "incomplete_decisions",
             "incomplete_environment_slots", "next_seed_ordinal",
             "undispatched_actor_decisions", "undispatched_fixed_decisions",
         )
@@ -604,7 +608,7 @@ class CollectionDiagnostics:
             raise ContractError("uncertain reset slots exceed forwarded slots")
         if self.tasks_completed > self.task_terminals:
             raise ContractError("completed tasks cannot exceed task terminals")
-        if self.victories + self.deaths > self.tasks_completed:
+        if self.victories + self.deaths + self.escaped > self.tasks_completed:
             raise ContractError("natural outcomes cannot exceed completed tasks")
         if any(not isinstance(values, tuple) for values in (
             self.seed_allocations, self.resource_checkpoints, self.incomplete_tasks,
@@ -636,7 +640,8 @@ class Rollout:
     collection: CollectionDiagnostics | None = None
 
     def __post_init__(self) -> None:
-        if (not isinstance(self.mode, str) or self.mode not in {"standalone", "run"}
+        if (not isinstance(self.mode, str)
+                or self.mode not in NEURAL_MODES
                 or not isinstance(self.split, str) or self.split not in {"train", "selection", "final"}):
             raise ContractError("Rollout mode or split is unsupported")
         if not isinstance(self.identity, NeuralIdentity):

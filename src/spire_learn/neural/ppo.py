@@ -194,19 +194,17 @@ def _validate_admission(policy: Any, rollout: Rollout, config: PPOConfig) -> tup
     accepted_mappings = identity.accepted_raw_mode_mappings
     if rollout.mode not in accepted_mappings:
         raise ContractError("rollout mode is not accepted by its immutable identity")
-    from spire_learn.neural.config import (
-        COMMON_VIEW_FINGERPRINT,
-        RUN_RAW_MAPPING_ID,
-        STANDALONE_RAW_MAPPING_ID,
-    )
+    from spire_learn.neural.gym_contracts import contract_for_revision
+    from spire_learn.neural.schema import CombatSchema
 
     schema = getattr(policy, "_schema", None)
-    if schema is None or schema.schema_fingerprint != COMMON_VIEW_FINGERPRINT:
+    if not isinstance(schema, CombatSchema):
         raise ContractError("policy schema is not the authenticated common public view")
-    expected_mapping = {
-        "standalone": STANDALONE_RAW_MAPPING_ID,
-        "run": RUN_RAW_MAPPING_ID,
-    }[rollout.mode]
+    try:
+        contract = contract_for_revision(schema.gym_revision)
+    except ValueError as error:
+        raise ContractError("policy schema is not the authenticated common public view") from error
+    expected_mapping = contract.raw_mode_mappings[rollout.mode]
     if accepted_mappings[rollout.mode] != expected_mapping:
         raise ContractError("rollout raw-mode mapping is not authenticated by the accepted config")
     version = getattr(policy, "_behavior_policy_version", None)
@@ -414,8 +412,6 @@ def ppo_update(
                 selected_cpu = permutation[start : start + config.minibatch_rows]
                 if selected_cpu.numel() == 0:
                     continue
-                selected = selected_cpu.tolist()
-                batch_frames = tuple(frames[index] for index in selected)
                 action_batch = action_values[selected_cpu].to(device=policy_device)
                 old_logp_batch = old_log_probabilities[selected_cpu].to(device=policy_device)
                 advantage_batch = normalized_advantages_cpu[selected_cpu].to(device=policy_device)
@@ -424,7 +420,7 @@ def ppo_update(
                 phase = "forward-loss"
                 with span("ppo_forward_loss"):
                     optimizer.zero_grad(set_to_none=True)
-                    batch = encode_frames(batch_frames, schema, device=str(policy_device))
+                    batch = source_batch.select_rows(selected_cpu)
                     output = policy(batch)
                     distribution = masked_categorical(output.logits, batch.action_mask)
                     new_logp = distribution.log_prob(action_batch)

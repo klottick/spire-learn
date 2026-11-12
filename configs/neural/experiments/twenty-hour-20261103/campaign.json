@@ -1,0 +1,126 @@
+{
+  "schema": "spire-learn-curriculum-campaign-v1",
+  "campaign_id": "curriculum-20261103-twenty-hour",
+  "whole_seconds": 72000,
+  "training_stop_second": 70200,
+  "training_start_indices": {
+    "mixed": 256
+  },
+  "training_shards": {
+    "mixed": 1152
+  },
+  "mixture": {
+    "arm": "mixed",
+    "run_like_percent": 70,
+    "targeted_lesson_percent": 20,
+    "unusual_percent": 10
+  },
+  "training_caps": {
+    "environment_attempts": 4718592,
+    "sample_rows": 4718592,
+    "optimizer_attempts": 294912,
+    "reset_slots": 4737024,
+    "fixed_random_choices": 0
+  },
+  "global_effect_caps": {
+    "environment_attempts": 4899328,
+    "sample_rows": 4719104,
+    "optimizer_attempts": 294920,
+    "reset_slots": 4737984,
+    "fixed_random_choices": 0
+  },
+  "training_budgets": {
+    "max_training_decisions": 4718592,
+    "max_environment_actions": 4718592,
+    "max_optimizer_steps": 294912,
+    "max_wall_seconds": 72000.0
+  },
+  "segment": {
+    "updates": 8,
+    "environment_attempts": 4096,
+    "sample_rows": 4096,
+    "optimizer_attempts": 256,
+    "reset_slots": 4112,
+    "soft_seconds": 480,
+    "whole_seconds": 600
+  },
+  "qualification": {
+    "environment_attempts": 512,
+    "sample_rows": 512,
+    "optimizer_attempts": 8,
+    "reset_slots": 256,
+    "fixed_random_choices": 0,
+    "soft_seconds": 120,
+    "whole_seconds": 600,
+    "output_bytes": 1073741824,
+    "stream_start_index": 1408
+  },
+  "evaluation": {
+    "total_seconds": 7200,
+    "case_actions": 256,
+    "case_seconds": 30,
+    "job_soft_seconds": 480,
+    "job_whole_seconds": 600,
+    "final_panel_reserve_seconds": 600,
+    "pre_final_panel_reserve_seconds": 6000,
+    "milestone_training_seconds": [7200, 14400, 21600, 28800, 36000, 43200, 50400, 57600, 64800],
+    "repeated_development_exposure": true
+  },
+  "evaluation_slots": [
+    "warm-start-baseline",
+    "mixed-time-7200",
+    "mixed-time-14400",
+    "mixed-time-21600",
+    "mixed-time-28800",
+    "mixed-time-36000",
+    "mixed-time-43200",
+    "mixed-time-50400",
+    "mixed-time-57600",
+    "mixed-time-64800",
+    "final-mixed"
+  ],
+  "development_panel": {
+    "source_package_path": "artifacts/development/neural-combat/curriculum-campaign-v6/preparation/package-a/package.json",
+    "source_package_sha256": "13a8377efa88f4850e1697450dc6a0b38949d7466487709929d76749beb1aa83",
+    "manifest_path": "panel/development-panel.json",
+    "manifest_sha256": "2cbba1c946520b1fd9500f71b1865b994c17a17c56d86899a7861a181e5c87d0",
+    "case_count": 64,
+    "repeated_exposure": true,
+    "protected_final_split": "untouched"
+  },
+  "storage": {
+    "package_bytes": 536870912,
+    "new_output_bytes": 12884901888,
+    "aggregate_bytes": 42949672960,
+    "free_bytes": 32212254720,
+    "vram_free_bytes": 12884901888
+  },
+  "runtime": {
+    "gpu_uuid": "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d",
+    "interop_threads": 1,
+    "threads": 4
+  },
+  "qualifications": [
+    "RNG-001",
+    "TIME-001",
+    "standalone Ironclad A0 only",
+    "one continuing training lineage with weights-only warm start",
+    "fresh Adam, RNG streams, and operation counters",
+    "repeated 64-case development panel",
+    "no protected final-split run",
+    "no original-game transfer claim"
+  ],
+  "baseline": {
+    "label": "warm-start-mixed-099",
+    "selection": "completed optimized mixed checkpoint, selected in the prior campaign",
+    "initialization": "load parent weights only; create fresh Adam, behavior version, RNG domains, and zero operation counters; not exact resume",
+    "parent_campaign_id": "curriculum-20261102-c",
+    "parent_source_sha256": "a05d631fe84f9327ee90fd1c0a287dfdf538d81e63e035eb46321cd5759e4ef6",
+    "parent_package_sha256": "13a8377efa88f4850e1697450dc6a0b38949d7466487709929d76749beb1aa83",
+    "inherited_exposure": {
+      "mixed_decisions": 405504,
+      "accepted_adam_steps": 25344,
+      "ppo_updates": 792
+    }
+  }
+}

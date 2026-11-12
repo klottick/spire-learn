@@ -1,0 +1,128 @@
+{
+  "schema": "spire-learn-curriculum-twenty-hour-predecessor-v1",
+  "campaign_id": "curriculum-20261103-twenty-hour",
+  "profile": "ironclad-twenty-hour-20261103",
+  "source_sha256": "d363f588bdafb4f2013828c149edeaff819eb422f6f48a6ff34493a257f7eb3a",
+  "package_sha256": "72dfb1fda0233de0fb867ab5b9dc0c869f6ebf6166b0585b43126fd0a17600d4",
+  "release_sha256": "59e070ccf2b06bc7c9eed7520fe25830a3e3994134d505352e3a321f02ef6857",
+  "original_whole_seconds": 72000,
+  "actual_launcher_elapsed_seconds": 6001.25571680197,
+  "remaining_whole_seconds": 65998,
+  "settled_effects": {
+    "environment_attempts": 337471,
+    "sample_rows": 336000,
+    "optimizer_attempts": 21000,
+    "reset_slots": 15431,
+    "fixed_random_choices": 0
+  },
+  "charged_or_reserved": {
+    "environment_attempts": 341567,
+    "sample_rows": 340096,
+    "optimizer_attempts": 21256,
+    "reset_slots": 19543,
+    "fixed_random_choices": 0
+  },
+  "artifacts": {
+    "campaign_release_approved": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103/campaign-release-approved.json",
+      "sha256": "59e070ccf2b06bc7c9eed7520fe25830a3e3994134d505352e3a321f02ef6857"
+    },
+    "campaign_claim": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103/runtime/campaign-claim.json",
+      "sha256": "51486c3f5e0942a90c7834ae635da4fc157c05c3b87eddfe825c02ecc8fdc2d6"
+    },
+    "campaign_result": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103/runtime/campaign-result.json",
+      "sha256": "68e91739895586d8da84bebd6431292684c4c84ef8d3bb712193948ca210a47c"
+    },
+    "seal_failure": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103/runtime/campaign-seal-failure.json",
+      "sha256": "5806c0c0767ff120e84f48b238981a15fb9edfec4e2a75bb94c3a6a1bb017138"
+    },
+    "launcher_result": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103/launcher-result.json",
+      "sha256": "a289b2c33e63059c1336d3027822a7a3a50c326cde1d90e1095e63cc4c173259"
+    },
+    "launcher_supervision": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103/launcher-result.json.supervision.json",
+      "sha256": "842c3705e545490aa5c0a1f734e268b364fed4127571d0a40b2e21d1f7e69e86"
+    },
+    "owner_exit": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103/launcher-os-exit-observed.json",
+      "sha256": "884447f30c76759ae2d5579a3d4838cfee4fbc842e006822a8b132ef527a05a2"
+    },
+    "progress_0084": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103/runtime/progress/0084.json",
+      "sha256": "a2abff8d3039235f504b604c84974a472f4b33b665689053ec0054d918bdf713"
+    },
+    "shard_337_attempt": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103/runtime/attempts/curriculum-mixed-337.json",
+      "sha256": "d305bec4bc8bec300b8cbe8bf94fe24b29d0970a2f8bb7b7e99b48a7fa24709e"
+    },
+    "shard_338_attempt": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103/runtime/attempts/curriculum-mixed-338.json",
+      "sha256": "67b1adf91b865246f34d43ad30a1724b804aacccb8db6daa8e2fa55e7e0beea8"
+    },
+    "shard_338_claim": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103/runtime/job-claims/curriculum-mixed-338.json",
+      "sha256": "37ad8526dce9e4431d6a0b0c43ee3f5a51bb7ac4ee530d11a186bef18de110f9"
+    },
+    "shard_337_receipt": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103/runtime/jobs/curriculum-mixed-337/output/job-receipt.json",
+      "sha256": "b2afb649a3887bbcc101c397831cbe6b5c0e639476c377cbace20f4f1e333fd0"
+    },
+    "shard_337_checkpoint_metadata": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103/runtime/jobs/curriculum-mixed-337/output/20261103T061627Z-c3c9a1f87bc548a98c6c368999b29c91/checkpoint-final/metadata.json",
+      "sha256": "e6df4f34e32e09ad69929b15b0b39974efab9f4e01c16e551b6f8559f9224868"
+    },
+    "restart_authority": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103/race-fix/restart-authority.json",
+      "sha256": "1c1c1d85b858caf1900db84bfdec5ba9696cdd8d71823b9fbada0bebae2e35c4"
+    }
+  },
+  "failed_shard": {
+    "job_id": "curriculum-mixed-338",
+    "index": 338,
+    "actual": null,
+    "receipt_binding": null,
+    "lease": {
+      "environment_attempts": 4096,
+      "sample_rows": 4096,
+      "optimizer_attempts": 256,
+      "reset_slots": 4112,
+      "fixed_random_choices": 0
+    }
+  },
+  "healthy_parent": {
+    "job_id": "curriculum-mixed-337",
+    "index": 337,
+    "next_shard_index": 338,
+    "next_manifest_sha256": "5018d2c798a8d6a294eb9b3c62de79d54cf3e30676fead04a51d859441c23352",
+    "checkpoint_path": "artifacts/development/neural-combat/twenty-hour-20261103/runtime/jobs/curriculum-mixed-337/output/20261103T061627Z-c3c9a1f87bc548a98c6c368999b29c91/checkpoint-final",
+    "checkpoint_inventory": {
+      "metadata.json": {"sha256": "e6df4f34e32e09ad69929b15b0b39974efab9f4e01c16e551b6f8559f9224868", "size_bytes": 57848},
+      "model.pt": {"sha256": "2939dc09eab0d534dd1de3c5a9add49281513de8a213fc5020cfba480e9097d9", "size_bytes": 1094976},
+      "training.pt": {"sha256": "330a8dcee0f213474a98f2c367addfc4e0435c820cc973a7a7e961eb4d849988", "size_bytes": 2223285}
+    },
+    "checkpoint_counters": {
+      "attempted_environment_slots": 335872,
+      "attempted_reset_slots": 15356,
+      "delivered_environment_slots": 335872,
+      "delivered_reset_slots": 15356,
+      "elapsed_seconds": 4006.1897676149383,
+      "fixed_decisions": 0,
+      "forwarded_environment_slots": 335872,
+      "forwarded_reset_slots": 15356,
+      "incomplete_decisions": 19309,
+      "known_accepted_environment_slots": 335872,
+      "known_accepted_reset_slots": 15356,
+      "learned_decisions": 335872,
+      "optimizer_accepted_steps": 20992,
+      "optimizer_attempted_steps": 20992,
+      "optimizer_uncertain_steps": 0,
+      "uncertain_environment_slots": 0,
+      "uncertain_reset_slots": 0,
+      "update_count": 656
+    }
+  }
+}

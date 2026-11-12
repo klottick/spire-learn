@@ -1,0 +1,70 @@
+schema = "spire-learn-neural-config-v1"
+mode = "standalone"
+operation = "train"
+split = "train"
+partition = "train"
+manifest_path = "shard-1.json"
+output_root = "runs"
+device = "cuda:0"
+
+[environment]
+gym_revision = "afb51f5f222b4c4331ed34067c5eebeda606db91"
+common_view_id = "spire-gym-combat-policy-view-v1"
+common_view_fingerprint = "4c73f7de04d7b2875f473f8034c1cbacf984ea2d52d0a9428289c30cf1dff463"
+
+[seeds]
+policy = 1103
+optimizer = 2207
+curriculum = 3301
+noncombat = 4409
+
+[model]
+embedding_width = 16
+hidden_width = 64
+max_parameters = 10000000
+
+[ppo]
+learning_rate = 0.0003
+gamma = 0.99
+gae_lambda = 0.95
+clip_epsilon = 0.2
+value_coefficient = 0.5
+entropy_coefficient = 0.01
+max_grad_norm = 0.5
+epochs = 4
+minibatch_rows = 64
+adam_eps = 1e-05
+
+[rollout]
+rows = 4
+steps = 16
+
+[budgets]
+max_optimizer_steps = 8
+max_training_decisions = 512
+max_environment_actions = 512
+max_wall_seconds = 120.0
+
+[[accepted_identities]]
+model_id = "spire-learn-combat-ff-v1"
+features_id = "spire-learn-combat-features-v1"
+action_id = "spire-learn-combat-dispatch-v1"
+objective_id = "spire-learn-combat-winloss-v1"
+
+[accepted_identities.accepted_raw_mode_mappings]
+standalone = "spire-learn-standalone-common-v1@4c73f7de04d7b2875f473f8034c1cbacf984ea2d52d0a9428289c30cf1dff463"
+run = "spire-learn-run-policy-v3-common-v1@28d92d89c437eea7fdc260240585bca466dee1fd74b9b3eb38513d2b34b0be64:4c73f7de04d7b2875f473f8034c1cbacf984ea2d52d0a9428289c30cf1dff463"
+
+[accepted_identities.config_hashes]
+model = "4fb628e06bf4952847795ac5d8548d12dfeede4c97e874ab843857ae0f91cd2f"
+ppo = "f08075e0b01a15095b542fc20cba11c3258381bcb5721bb5066a4448e43c9e2a"
+
+[scenario_stream]
+schema = "spire-learn-scenario-stream-v1"
+recipe_path = "recipe.json"
+arm = "mixed"
+shard_index = 1
+distribution_sha256 = "ac8060dc58683ff48644981080858d51cf976baee435e3ef081bcc04220b3ea2"
+
+[runtime]
+gpu_uuid = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"

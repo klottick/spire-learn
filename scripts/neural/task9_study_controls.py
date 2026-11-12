@@ -181,17 +181,34 @@ def validate_approval(root: Path, snapshot_path: Path, approval_path: Path) -> d
             'approval_raw_sha256':sha256_file(approval_path)}
 
 
-def tree_bytes(root: Path, *, strict: bool) -> int:
+def tree_bytes(root: Path, *, strict: bool, live: bool = False) -> int:
+    """Measure storage without following links.
+
+    A live writer can unlink or rename a temporary entry after enumeration.
+    Only live observations tolerate that ENOENT; closed-output accounting keeps
+    rejecting disappearing entries. Other I/O and entry-type errors still fail.
+    """
     root=Path(root)
     if not root.exists():return 0
     if root.is_symlink():
         if strict:raise StudyControlError('linked accounting root')
         return root.lstat().st_size
     total=0
-    for directory,names,files in os.walk(root,followlinks=False):
+    def walk_error(error):
+        if live and isinstance(error,FileNotFoundError):
+            return
+        raise error
+    for directory,names,files in os.walk(root,followlinks=False,onerror=walk_error):
         for name in list(names)+files:
             path=Path(directory)/name
-            info=path.lstat()
+            try:
+                info=path.lstat()
+            except FileNotFoundError:
+                if not live:
+                    raise
+                if name in names:
+                    names.remove(name)
+                continue
             if stat.S_ISLNK(info.st_mode):
                 if strict:raise StudyControlError(f'linked phase output: {path}')
                 total+=info.st_size

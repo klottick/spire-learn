@@ -248,7 +248,7 @@ class NeuralContractsTests(unittest.TestCase):
             task_signal(previous, settled, terminated=False, truncated=False)
         with self.assertRaises(ContractError):
             lifecycle(active=False, routing="noncombat", combats_settled=1,
-                      active_visit=None, last_exit=exit_data(outcome="escaped"))
+                      active_visit=None, last_exit=exit_data(outcome="aborted"))
 
     def test_settled_lifecycle_requires_a_public_exit(self):
         with self.assertRaises(ContractError):

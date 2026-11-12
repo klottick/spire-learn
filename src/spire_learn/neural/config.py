@@ -19,13 +19,15 @@ from spire_learn.neural.cases import (
     validate_neural_case_lineage,
 )
 from spire_learn.neural.contracts import ModelConfig, NeuralIdentity, PPOConfig
+from spire_learn.neural.gym_contracts import GymContract, RUNTIME_REVISIONS, contract_for_revision
+from spire_learn.neural.modes import NEURAL_MODES
 
 
 ACCEPTED_GYM_REVISION = "533dad1c8aec86df624b3742b6b3ad1dbf1d0033"
 # The original descriptor/support provenance stays frozen. Runtime revisions
 # are explicit: schema compatibility does not imply arbitrary build acceptance.
 FIXED_GYM_REVISION = "a86df922a9dc598645820cc6544df36aefb3d2cc"
-ACCEPTED_RUNTIME_GYM_REVISIONS = frozenset({ACCEPTED_GYM_REVISION, FIXED_GYM_REVISION})
+ACCEPTED_RUNTIME_GYM_REVISIONS = RUNTIME_REVISIONS
 COMMON_VIEW_ID = "spire-gym-combat-policy-view-v1"
 COMMON_VIEW_FINGERPRINT = "02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78"
 RUN_PROFILE_ID = "m10-ironclad-policy"
@@ -128,6 +130,8 @@ class NeuralConfig:
     common_view_id: str
     common_view_fingerprint: str
     run_observation_fingerprint: str | None
+    standard_view_fingerprint: str | None
+    standard_run_fingerprint: str | None
     profile_id: str | None
     observation_version: int | None
     replay_version: int | None
@@ -143,6 +147,7 @@ class NeuralConfig:
     calibration_gpu_uuid: str | None = None
     runtime_gpu_uuid: str | None = None
     scenario_stream: Mapping[str, object] | None = None
+    workers: int = 1
 
 
 def _stream_runtime_projection(config: NeuralConfig) -> dict[str, object]:
@@ -164,7 +169,7 @@ def _stream_runtime_projection(config: NeuralConfig) -> dict[str, object]:
     return runtime
 
 
-def _identity(raw: object, *, model_hash: str, ppo_hash: str) -> NeuralIdentity:
+def _identity(raw: object, *, model_hash: str, ppo_hash: str, contract: GymContract) -> NeuralIdentity:
     required = {
         "model_id", "features_id", "action_id", "objective_id",
         "accepted_raw_mode_mappings", "config_hashes",
@@ -174,13 +179,10 @@ def _identity(raw: object, *, model_hash: str, ppo_hash: str) -> NeuralIdentity:
     hashes = item["config_hashes"]
     if not isinstance(mappings, dict) or not isinstance(hashes, dict):
         raise ValueError("identity mappings and hashes must be tables")
-    if set(mappings) - {"standalone", "run"}:
+    if set(mappings) - NEURAL_MODES:
         raise ValueError("identity declares an unsupported raw mode")
     for raw_mode, mapping_id in mappings.items():
-        expected_mapping = {
-            "standalone": STANDALONE_RAW_MAPPING_ID,
-            "run": RUN_RAW_MAPPING_ID,
-        }[raw_mode]
+        expected_mapping = contract.raw_mode_mappings[raw_mode]
         if not isinstance(mapping_id, str) or mapping_id != expected_mapping:
             raise ValueError(f"identity {raw_mode} mapping does not match the accepted raw-mode contract")
     if set(hashes) != {"model", "ppo"}:
@@ -199,6 +201,20 @@ def _identity(raw: object, *, model_hash: str, ppo_hash: str) -> NeuralIdentity:
             ) != LEARNER_IDENTITY_IDS:
         raise ValueError("identity must use the supported combat learner model/features/action/objective IDs")
     return identity
+
+
+_MODE_FAMILIES = {
+    "standalone": "standalone", "standard-standalone": "standalone",
+    "run": "run", "standard-run": "run",
+}
+
+
+def mode_family(mode: str) -> str:
+    """Driver family of a config mode: standalone combat or combat inside a Run."""
+    try:
+        return _MODE_FAMILIES[mode]
+    except (KeyError, TypeError):
+        raise ValueError("mode must be standalone, run, standard-standalone, or standard-run") from None
 
 
 def load_neural_config(path: Path) -> NeuralConfig:
@@ -227,8 +243,9 @@ def load_neural_config(path: Path) -> NeuralConfig:
     if raw["schema"] != "spire-learn-neural-config-v1":
         raise ValueError("unsupported neural config schema")
     mode, operation, split, partition = raw["mode"], raw["operation"], raw["split"], raw["partition"]
-    if not isinstance(mode, str) or mode not in {"standalone", "run"}:
-        raise ValueError("mode must be standalone or run")
+    if not isinstance(mode, str) or mode not in NEURAL_MODES:
+        raise ValueError("mode must be standalone, run, standard-standalone, or standard-run")
+    standard_mode = mode in {"standard-standalone", "standard-run"}
     if not isinstance(operation, str) or operation not in {"train", "evaluate", "calibrate"}:
         raise ValueError("operation must be train, evaluate, or calibrate")
     if not isinstance(split, str) or split not in {"train", "selection", "final"} or partition != split:
@@ -267,6 +284,12 @@ def load_neural_config(path: Path) -> NeuralConfig:
     expected_environment_keys = {
         "gym_revision", "common_view_id", "common_view_fingerprint",
     }
+    if standard_mode:
+        expected_environment_keys.add("standard_view_fingerprint")
+        if mode == "standard-run":
+            expected_environment_keys.add("standard_run_fingerprint")
+        if isinstance(environment, dict) and "workers" in environment:
+            expected_environment_keys.add("workers")
     if mode == "run":
         expected_environment_keys |= {
             "profile_id", "observation_version", "replay_version", "run_observation_fingerprint",
@@ -275,10 +298,30 @@ def load_neural_config(path: Path) -> NeuralConfig:
     if (not isinstance(environment["gym_revision"], str)
             or environment["gym_revision"] not in ACCEPTED_RUNTIME_GYM_REVISIONS):
         raise ValueError("unsupported Gym revision")
+    contract = contract_for_revision(environment["gym_revision"])
     if environment["common_view_id"] != COMMON_VIEW_ID:
         raise ValueError("unsupported common combat view")
-    if environment["common_view_fingerprint"] != COMMON_VIEW_FINGERPRINT:
+    if environment["common_view_fingerprint"] != contract.common_fingerprint:
         raise ValueError("unsupported common combat view fingerprint")
+    standard_view_fingerprint: str | None = None
+    standard_run_fingerprint: str | None = None
+    workers = 1
+    if standard_mode:
+        standard_view_fingerprint = environment["standard_view_fingerprint"]
+        if (contract.standard_combat_fingerprint is None
+                or standard_view_fingerprint != contract.standard_combat_fingerprint):
+            raise ValueError("Standard mode requires the accepted standard combat view fingerprint")
+        if "workers" in environment:
+            workers = environment["workers"]
+        if type(workers) is not int or not 1 <= workers <= 256:
+            raise ValueError("environment.workers must be an integer in [1, 256]")
+        if mode == "standard-run":
+            if workers != 1:
+                raise ValueError("standard-run requires workers = 1")
+            standard_run_fingerprint = environment["standard_run_fingerprint"]
+            if (contract.standard_run_fingerprint is None
+                    or standard_run_fingerprint != contract.standard_run_fingerprint):
+                raise ValueError("standard-run requires the accepted standard Run fingerprint")
     profile_id: str | None = None
     observation_version: int | None = None
     replay_version: int | None = None
@@ -290,13 +333,12 @@ def load_neural_config(path: Path) -> NeuralConfig:
             raise ValueError("Run mode requires observation schema v3")
         if type(environment["replay_version"]) is not int or environment["replay_version"] != RUN_REPLAY_VERSION:
             raise ValueError("Run mode requires replay schema v3")
-        if environment["run_observation_fingerprint"] != RUN_OBSERVATION_FINGERPRINT:
+        if environment["run_observation_fingerprint"] != contract.run_fingerprint:
             raise ValueError("Run mode requires the accepted Run observation fingerprint")
         profile_id = RUN_PROFILE_ID
         observation_version = RUN_OBSERVATION_VERSION
         replay_version = RUN_REPLAY_VERSION
-        run_observation_fingerprint = RUN_OBSERVATION_FINGERPRINT
-
+        run_observation_fingerprint = contract.run_fingerprint
     seed_values = _exact_keys(raw["seeds"], {"policy", "optimizer", "curriculum", "noncombat"}, "seeds")
     seeds = SeedStreams(**seed_values)
 
@@ -323,9 +365,9 @@ def load_neural_config(path: Path) -> NeuralConfig:
         "budgets",
     )
     budgets = NeuralBudget(**budget_raw)
-    if mode == "run" and rollout_rows != 1:
+    if mode in {"run", "standard-run"} and rollout_rows != 1:
         raise ValueError("Run mode requires exactly one native rollout slot")
-    if mode == "standalone" and rollout_rows > 256:
+    if mode in {"standalone", "standard-standalone"} and rollout_rows > 256:
         raise ValueError("standalone rollout rows must be between 1 and 256 native slots")
     rollout_batch = rollout_rows * rollout_steps
     if rollout_batch > budgets.max_training_decisions:
@@ -351,7 +393,7 @@ def load_neural_config(path: Path) -> NeuralConfig:
     identity_values = raw["accepted_identities"]
     if not isinstance(identity_values, list) or not identity_values:
         raise ValueError("accepted_identities must be a non-empty array of tables")
-    identities = tuple(_identity(item, model_hash=model_hash, ppo_hash=ppo_hash)
+    identities = tuple(_identity(item, model_hash=model_hash, ppo_hash=ppo_hash, contract=contract)
                        for item in identity_values)
     if any(mode not in identity.accepted_raw_mode_mappings for identity in identities):
         raise ValueError("every accepted identity must declare the selected raw mode")
@@ -415,6 +457,8 @@ def load_neural_config(path: Path) -> NeuralConfig:
         common_view_id=environment["common_view_id"],
         common_view_fingerprint=environment["common_view_fingerprint"],
         run_observation_fingerprint=run_observation_fingerprint,
+        standard_view_fingerprint=standard_view_fingerprint,
+        standard_run_fingerprint=standard_run_fingerprint,
         profile_id=profile_id,
         observation_version=observation_version,
         replay_version=replay_version,
@@ -430,6 +474,7 @@ def load_neural_config(path: Path) -> NeuralConfig:
         calibration_gpu_uuid=calibration_gpu_uuid,
         runtime_gpu_uuid=runtime_gpu_uuid,
         scenario_stream=scenario_stream,
+        workers=workers,
     )
     if scenario_stream is not None:
         # Bind only after this parser has accepted and normalized every setting.
@@ -448,10 +493,12 @@ __all__ = [
     "COMMON_VIEW_ID",
     "NeuralBudget",
     "NeuralConfig",
+    "NEURAL_MODES",
     "RUN_OBSERVATION_FINGERPRINT",
     "RUN_OBSERVATION_VERSION",
     "RUN_PROFILE_ID",
     "RUN_REPLAY_VERSION",
     "SeedStreams",
     "load_neural_config",
+    "mode_family",
 ]

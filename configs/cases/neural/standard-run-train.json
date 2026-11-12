@@ -1,0 +1,40 @@
+{
+  "schema": "spire-learn-neural-cases-v1",
+  "split": "train",
+  "partition": "train",
+  "cases": [
+    {
+      "case_id": "standard-train-run-ironclad-a0",
+      "lineage_id": "lineage:standard:train:run:ironclad:a0",
+      "mode": "standard-run",
+      "environment_seed": 0,
+      "cohort": "standard_run",
+      "character": "ironclad",
+      "ascension": 0,
+      "creation": {
+        "neow": "full",
+        "seen_bosses": [
+          [
+            "Guardian",
+            "Hexaghost",
+            "SlimeBoss"
+          ],
+          [
+            "Champ",
+            "BronzeAutomaton",
+            "Collector"
+          ],
+          [
+            "AwakenedOne",
+            "TimeEater",
+            "DonuAndDeca"
+          ]
+        ],
+        "note": {
+          "card": "iron_wave",
+          "upgrades": 0
+        }
+      }
+    }
+  ]
+}

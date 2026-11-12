@@ -1138,8 +1138,15 @@ class NeuralEnvTests(unittest.TestCase):
             },
         )
         runtime = envs._NativeRuntime(_NumpyStub(), native, FakeGym, object)
+        from spire_learn.neural.gym_contracts import LEGACY_CONTRACT
+        synthetic_contract = SimpleNamespace(
+            common_fingerprint=fingerprint,
+            run_fingerprint=LEGACY_CONTRACT.run_fingerprint,
+            raw_mode_mappings=LEGACY_CONTRACT.raw_mode_mappings,
+            build=None,
+        )
         with (
-            patch.object(envs, "COMMON_VIEW_FINGERPRINT", fingerprint),
+            patch.object(envs, "contract_for_revision", return_value=synthetic_contract),
             patch.object(envs, "_load_native_runtime", return_value=runtime),
             patch.object(self.api.schema, "COMMON_VIEW_FINGERPRINT", fingerprint),
             patch.object(self.api.neural_contracts, "_COMMON_VIEW_FINGERPRINT", fingerprint),
@@ -1221,8 +1228,15 @@ class NeuralEnvTests(unittest.TestCase):
             },
         )
         runtime = envs._NativeRuntime(_NumpyStub(), native, object, FakeRun)
+        from spire_learn.neural.gym_contracts import LEGACY_CONTRACT
+        synthetic_contract = SimpleNamespace(
+            common_fingerprint=fingerprint,
+            run_fingerprint=LEGACY_CONTRACT.run_fingerprint,
+            raw_mode_mappings=LEGACY_CONTRACT.raw_mode_mappings,
+            build=None,
+        )
         with (
-            patch.object(envs, "COMMON_VIEW_FINGERPRINT", fingerprint),
+            patch.object(envs, "contract_for_revision", return_value=synthetic_contract),
             patch.object(envs, "_load_native_runtime", return_value=runtime),
             patch.object(self.api.schema, "COMMON_VIEW_FINGERPRINT", fingerprint),
             patch.object(self.api.neural_contracts, "_COMMON_VIEW_FINGERPRINT", fingerprint),

@@ -8,6 +8,7 @@ import importlib.abc
 import io
 from contextlib import redirect_stdout, redirect_stderr
 import json
+import errno
 import os
 from pathlib import Path
 import shutil
@@ -25,6 +26,91 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def controls():
     return importlib.import_module('scripts.neural.task9_study_controls')
+
+
+class TreeAccountingTests(unittest.TestCase):
+    def test_live_scan_allows_a_file_unlinked_after_directory_enumeration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transient = root/'temporary-checkpoint'
+            transient.write_bytes(b'temporary')
+            (root/'stable').write_bytes(b'stable bytes')
+            original_lstat = Path.lstat
+
+            def lstat(path, *args, **kwargs):
+                if path == transient:
+                    transient.unlink()
+                return original_lstat(path, *args, **kwargs)
+
+            with patch.object(Path, 'lstat', lstat):
+                self.assertEqual(controls().tree_bytes(root, strict=True, live=True), 12)
+            self.assertFalse(transient.exists())
+
+    def test_closed_scan_still_rejects_a_disappearing_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transient = root/'temporary-checkpoint'
+            transient.write_bytes(b'temporary')
+            original_lstat = Path.lstat
+
+            def lstat(path, *args, **kwargs):
+                if path == transient:
+                    transient.unlink()
+                return original_lstat(path, *args, **kwargs)
+
+            with patch.object(Path, 'lstat', lstat), self.assertRaises(FileNotFoundError):
+                controls().tree_bytes(root, strict=True)
+
+    def test_live_scan_tolerates_only_missing_entries(self):
+        for error in (PermissionError(errno.EACCES, 'denied'),
+                      OSError(errno.EIO, 'io fault'), KeyboardInterrupt()):
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                target = root/'entry'
+                target.write_bytes(b'x')
+                original_lstat = Path.lstat
+
+                def lstat(path, *args, **kwargs):
+                    if path == target:
+                        raise error
+                    return original_lstat(path, *args, **kwargs)
+
+                with patch.object(Path, 'lstat', lstat), self.assertRaises(type(error)):
+                    controls().tree_bytes(root, strict=True, live=True)
+
+    def test_directory_walk_errors_are_checked_in_live_and_closed_scans(self):
+        for live in (False, True):
+            for error in (FileNotFoundError(errno.ENOENT, 'vanished'),
+                          PermissionError(errno.EACCES, 'denied'),
+                          OSError(errno.EIO, 'io fault')):
+                with self.subTest(live=live, error=type(error).__name__), tempfile.TemporaryDirectory() as directory:
+                    def walk(root, *, followlinks, onerror):
+                        self.assertFalse(followlinks)
+                        onerror(error)
+                        return iter(())
+
+                    with patch.object(controls().os, 'walk', walk):
+                        if live and isinstance(error, FileNotFoundError):
+                            self.assertEqual(controls().tree_bytes(Path(directory), strict=True, live=live), 0)
+                        else:
+                            with self.assertRaises(type(error)):
+                                controls().tree_bytes(Path(directory), strict=True, live=live)
+
+    def test_live_scan_keeps_link_and_nonregular_entry_rules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'stable').write_bytes(b'abc')
+            link = root/'link'
+            link.symlink_to('stable')
+            with self.assertRaisesRegex(ValueError, 'linked phase output'):
+                controls().tree_bytes(root, strict=True, live=True)
+            self.assertEqual(controls().tree_bytes(root, strict=False, live=True), 9)
+            with self.assertRaisesRegex(ValueError, 'linked accounting root'):
+                controls().tree_bytes(link, strict=True, live=True)
+            link.unlink()
+            os.mkfifo(root/'pipe')
+            with self.assertRaisesRegex(ValueError, 'nonregular output entry'):
+                controls().tree_bytes(root, strict=True, live=True)
 
 
 class ControlFixture:

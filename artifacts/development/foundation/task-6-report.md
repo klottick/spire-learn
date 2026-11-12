@@ -1,6 +1,6 @@
 # Task 6 implementation report — core only
 
-**Status:** fix round 2 core changes committed, awaiting review; actual runtime `BLOCKED`. Task 6 is **not complete**. Stopped at approved-plan Step 5 authority gate; Steps 6–7 were not run and no integration test file was added.
+**Status:** core implemented and reviewed; actual runtime `BLOCKED`. Task 6 is **not complete**. Stopped at approved-plan Step 5 authority gate; Steps 6–7 were not run and no integration test file was added.
 
 ## Scope delivered
 
@@ -28,3 +28,51 @@ Read-only evidence: `docs/combat-environments.md:131–139` documents `spire_lab
 ## Gate and concerns
 
 Actual runtime is blocked pending user-reviewed setup addendum and authorized isolated dependencies. Parent review is required before asking the user for that addendum. No native integration evidence, compatibility verdict, or Task 6 completion is claimed. Snapshot validation is deliberately pure stdlib and protocol-based; real ndarray conformance remains gated.
+
+## Fresh controller verification (2026-10-24)
+
+- Expected HEAD: `6561a57`; actual HEAD: `6561a57`.
+- Command: `PYTHONPATH=src python3.12 -B -m unittest discover -s tests -v` — exit 0; **116 tests passed** (`Ran 116 tests in 0.021s`, `OK`). This is actual fresh controller output, not reported prior evidence.
+- Import-isolation command: `PYTHONPATH=src python3.12 -B -c 'import sys, pkgutil, spire_learn; names=[m.name for m in pkgutil.walk_packages(spire_learn.__path__, spire_learn.__name__ + ".")]; [__import__(name) for name in names]; blocked={"numpy","gymnasium","torch","torchrl","spire_lab"}; loaded=sorted(blocked.intersection(sys.modules)); print("core modules imported:", names); print("blocked modules loaded:", loaded); assert not loaded'` — exit 0; all 18 discovered current core modules imported; `blocked modules loaded: []`.
+- `git diff --check` — exit 0, no output.
+- Git: HEAD `6561a57`; tracked changes none; untracked `task-6-core-review.diff` is preserved (SHA-256 `a52df58775d2c5fc0d8f1cbbe1946af787839e5d1379cd752e2663a4557edc29`). Not deleted, moved, staged, or overwritten. Canonical reviewer diff is `artifacts/development/foundation/task-6-core-fix-2-review.diff`.
+- Task 6 `spire_learn-d8l.7` is now **blocked**, not complete: pure core review PASS/quality APPROVED and fresh 116-test verification complete; Step 5 needs a user-reviewed isolated-setup addendum before any install/runtime integration. No native calls, dependencies, builds, training, services, or agents were run.
+- Tasks 1–5 remain closed per the canonical ledger entries above (Tasks 1–5 closeouts at lines 112, 117, 122–128). Tasks 7–10 remain pending; no dispatch or implementation began.
+- Next action is a human decision/review of the isolated-setup addendum before any dependency installation or native/runtime work. Resume continuity at `artifacts/development/foundation/progress.md`; do not treat Task 6 as complete or reimplement the accepted core.
+
+## Native completion and parent acceptance — 2026-10-25
+
+**Latest status: Task 6 COMPLETE; Beads `spire_learn-d8l.7` closed.** Earlier
+blocked/core-only status above is historical. Existing report content is
+preserved verbatim; only this closeout is appended, and this modified report
+is deliberately excluded from implementation/documentation commits.
+
+- User-approved builder repair completed and passed protected non-root/source
+  preflight. Derived builder Rust/Cargo1.98.0, Python3.12.14. Original builder
+  remains retained; Gym checkout/lock/fixtures remain unchanged.
+- One own Gym wheel built from exact read-only inputs; SHA256
+  `25cd26001e8cf3034da95434351ac71f92f676dbeeb15784682f809e82d4799a`.
+- Fifteen-wheel CPU closure audited/hash-locked and installed offline; pip check
+  passed. Lock SHA256
+  `d026856db845f105383c91d4901231fd016111f46257999456511e699475ee45`.
+  Runtime Python3.12.15/glibc2.36, NumPy2.5.4/Gymnasium1.4.0/Torch2.14.1+cpu,
+  torch.version.cuda=None. No host installs or Gym changes.
+- Fresh baseline116 core tests passed. Final default discovery119 tests:116
+  core pass and3 native-gated skips. Fresh import/discovery isolation loaded
+  no optional/native packages. This is separate from actual native evidence.
+- Exactly one offline native run executed3 tests,0 skipped, allpassed, exit0.
+  Cultist20/JawWorm29 submitted and delivered actions, both public victory/+1,
+  each one reset/close;49 total, within128 each/256 total. No faults or retries.
+  Actual build_info revision4874fb398128c142bd56f10a12e6fca939a88f93, Rust1.98.0;
+  schema fingerprint8fd66d212259d2bdd27139988a772e1a6c223f8d65524f38c74174a0d0843357.
+- Parent inspected actual source, artifacts and raw evidence. Independent
+  Luna/max review: spec PASS, code quality APPROVED, no actionable findings.
+  Source/test commit `f21d90b`. Every Luna worker used verified max reasoning.
+- Accepted data/runtime identities and reports are under this foundation
+  workspace: native-wheel-identity/native-runtime-identity JSON; native-wheel-
+  build/native-runtime/native-integration reports; native-integration-review.
+  All carry date2026-10-25. Images, wheels, cache, venv and logs remain ignored
+  and retained. Host Docker client config is outside the container DATA bind.
+- Single-environment conformance only; no native vector/TorchRL/training,
+  playing-strength or original-game transfer claim. RNG-001/TIME-001 retained.
+  Tasks7–10 and M1 completion remain pending. No own container remains.

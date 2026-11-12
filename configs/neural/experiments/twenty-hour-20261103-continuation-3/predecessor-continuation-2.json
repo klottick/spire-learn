@@ -1,0 +1,84 @@
+{
+  "artifacts": {
+    "attempt": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-2/runtime/attempts/curriculum-qualification.json",
+      "sha256": "ae802aedeb92282e61d60151cead6ddb609e8363d5b1702f2bacb2796abef4d6"
+    },
+    "campaign_claim": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-2/runtime/campaign-claim.json",
+      "sha256": "9f1ad73c2767bd26785dc01bd7e3a3bf664fba1017451170afb78c25d6e94de7"
+    },
+    "campaign_result": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-2/runtime/campaign-result.json",
+      "sha256": "66640c0772c965cb8575b6230a9db6f8070b69906f1560744c401d1a92201494"
+    },
+    "job_claim": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-2/runtime/job-claims/curriculum-qualification.json",
+      "sha256": "7957b4f4f724446cf71761f632dbe96ee7f28669b1405b2d6965b77899b7c317"
+    },
+    "launch_session": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-2/monitor/launch-session.json",
+      "sha256": "059f105f7c40e9c6cba3b2104c5bf9e7c6cb161f7812c2e5a225b6c49b99a3b9"
+    },
+    "launcher_result": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-2/launcher-result.json",
+      "sha256": "ce2dca4d5743cb65db71e0c988da47332075a4698315d96d2a62a749cf6a8e70"
+    },
+    "launcher_supervision": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-2/launcher-result.json.supervision.json",
+      "sha256": "4846c9dd8d36cd9b8d6c2c149aad41c2cbb1a6eb1f8c5289173ae377ba464959"
+    },
+    "owner_exit": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-2/monitor/launcher-os-exit-observed.json",
+      "sha256": "f2477d36073c03dae9213546dbaf8539b59a574ebe97ec976271ecb5fc694536"
+    },
+    "package": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-2/inputs/package-a/package.json",
+      "sha256": "4c2538e86c37bbc87bfc86ed634c8ed3db4277b0f2c8f50c7a7a3e113100c761"
+    },
+    "release": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-2/control/campaign-release.json",
+      "sha256": "903877ba1846bd3f4768352ec60c03f20e4c353e911dc868d247a44d365e737b"
+    },
+    "seal_failure": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-2/runtime/campaign-seal-failure.json",
+      "sha256": "30503b51094d7793c9c35f3ec79fe01d81167f0bb6a02b67d58a7dba84e27261"
+    },
+    "source": {
+      "path": "artifacts/development/neural-combat/twenty-hour-20261103-continuation-2/control/source-snapshot.json",
+      "sha256": "f2c36a38e0512d1475493f64580f32f2669348fcdf32bd8aceb4ee019520ef9c"
+    }
+  },
+  "campaign_id": "curriculum-20261103-twenty-hour-continuation-2",
+  "charged_or_reserved": {
+    "environment_attempts": 512,
+    "fixed_random_choices": 0,
+    "optimizer_attempts": 8,
+    "reset_slots": 256,
+    "sample_rows": 512
+  },
+  "failed_job": {
+    "actual": null,
+    "job_id": "curriculum-qualification",
+    "lease": {
+      "environment_attempts": 512,
+      "fixed_random_choices": 0,
+      "optimizer_attempts": 8,
+      "reset_slots": 256,
+      "sample_rows": 512
+    },
+    "receipt_binding": null
+  },
+  "package_sha256": "4c2538e86c37bbc87bfc86ed634c8ed3db4277b0f2c8f50c7a7a3e113100c761",
+  "profile": "ironclad-twenty-hour-continuation-20261103-corrected",
+  "release_sha256": "903877ba1846bd3f4768352ec60c03f20e4c353e911dc868d247a44d365e737b",
+  "schema": "spire-learn-curriculum-failed-admission-predecessor-v1",
+  "settled_effects": {
+    "environment_attempts": 0,
+    "fixed_random_choices": 0,
+    "optimizer_attempts": 0,
+    "reset_slots": 0,
+    "sample_rows": 0
+  },
+  "source_sha256": "f2c36a38e0512d1475493f64580f32f2669348fcdf32bd8aceb4ee019520ef9c"
+}

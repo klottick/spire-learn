@@ -89,6 +89,8 @@ class ProducerHarness:
                 else:
                     generator.draw()
                 self.behavior_version = self._behavior_policy_version
+                if purpose == 'evaluate' and owner.wrong == 'eval-policy-version':
+                    self.behavior_version = 'stale-policy-version'
                 return super().act(frames, generator=generator, deterministic=deterministic)
         class Adam:
             def __init__(self):

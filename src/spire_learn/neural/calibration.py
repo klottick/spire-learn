@@ -203,7 +203,7 @@ class _CalibrationLedger:
         "known_accepted_reset_slots", "delivered_reset_slots", "uncertain_reset_slots",
         "reset_operations", "reset_slots", "learned_decisions", "fixed_decisions",
         "undispatched_actor_decisions", "undispatched_fixed_decisions",
-        "tasks_started", "task_terminals", "tasks_completed", "victories", "deaths",
+        "tasks_started", "task_terminals", "tasks_completed", "victories", "deaths", "escaped",
         "faults", "incomplete_decisions", "incomplete_environment_slots",
     )
 
@@ -1039,7 +1039,7 @@ def _forward_backward_probe(
 def _collection_projection(diagnostics: object | None, counters: object | None = None) -> dict[str, object]:
     names = (
         *_CalibrationLedger._COLLECTION_FIELDS,
-        "tasks_started", "task_terminals", "tasks_completed", "victories", "deaths",
+        "tasks_started", "task_terminals", "tasks_completed", "victories", "deaths", "escaped",
         "faults", "incomplete_decisions", "incomplete_environment_slots",
         "elapsed_seconds", "wall_overshoot_seconds", "elapsed_seconds_is_fallback",
         "next_seed_ordinal", "stop_reason",

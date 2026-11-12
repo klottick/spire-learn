@@ -11,10 +11,13 @@ from pathlib import Path
 import re
 from types import MappingProxyType
 
+from spire_learn.neural.modes import NEURAL_MODES
+
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/@+-]*\Z")
 _ENTRY_ID = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 _SPLITS = {"train", "selection", "final"}
-_MODES = {"standalone", "run"}
+_MODES = NEURAL_MODES
+_STANDARD_CHARACTERS = {"ironclad", "silent", "defect", "watcher"}
 _RUN_PROFILE = "m10-ironclad-policy"
 
 _TRAIN_START = 0
@@ -84,15 +87,16 @@ class NeuralCase:
     profile_id: str | None
     character: str | None
     ascension: int | None
+    creation: object | None = None
 
     def __post_init__(self) -> None:
         for name in ("case_id", "lineage_id", "cohort"):
             _identifier(getattr(self, name), f"NeuralCase {name}")
         if not isinstance(self.mode, str) or self.mode not in _MODES:
-            raise ValueError("NeuralCase mode must be standalone or run")
+            raise ValueError("NeuralCase mode must be standalone, run, standard-standalone, or standard-run")
         if type(self.environment_seed) is not int or self.environment_seed < 0:
             raise ValueError("NeuralCase environment_seed must be a non-negative integer")
-        if self.mode == "standalone":
+        if self.mode in {"standalone", "standard-standalone"}:
             if self.entry_id is None or not isinstance(self.entry_id, str):
                 raise ValueError("standalone cases require entry_id")
             if _ENTRY_ID.fullmatch(self.entry_id) is None:
@@ -101,19 +105,53 @@ class NeuralCase:
                 raise ValueError("standalone cases require an entry mapping")
             if self.entry.get("id") != self.entry_id:
                 raise ValueError("entry_id must equal the native entry.id")
-            if any(value is not None for value in (self.profile_id, self.character, self.ascension)):
-                raise ValueError("standalone cases cannot declare Run profile/reset fields")
+            if self.mode == "standalone":
+                if any(value is not None for value in (self.profile_id, self.character, self.ascension)):
+                    raise ValueError("standalone cases cannot declare Run profile/reset fields")
+                if self.creation is not None:
+                    raise ValueError("standalone cases cannot declare Run creation fields")
+            else:
+                _validate_standard_identity(self.character, self.ascension)
+                if (self.entry.get("character") != self.character
+                        or self.entry.get("ascension") != self.ascension):
+                    raise ValueError("standard-standalone case identity must match its catalog entry")
+                if self.profile_id is not None or self.creation is not None:
+                    raise ValueError("standard-standalone cases cannot declare Run profile/creation fields")
+                _freeze_json(self.entry)
         else:
             if self.entry_id is not None or self.entry is not None:
                 raise ValueError("Run cases cannot declare catalog/resource reset entries")
-            if (self.profile_id != _RUN_PROFILE or self.character != "ironclad"
-                    or type(self.ascension) is not int or self.ascension != 0):
-                raise ValueError("Run cases require the explicit Ironclad A0 m10-ironclad-policy profile")
+            if self.mode == "run":
+                if (self.profile_id != _RUN_PROFILE or self.character != "ironclad"
+                        or type(self.ascension) is not int or self.ascension != 0):
+                    raise ValueError("Run cases require the explicit Ironclad A0 m10-ironclad-policy profile")
+                if self.creation is not None:
+                    raise ValueError("legacy Run cases cannot declare Standard creation fields")
+            else:
+                _validate_standard_identity(self.character, self.ascension)
+                if self.profile_id is not None:
+                    raise ValueError("standard-run cases cannot declare a legacy Run profile")
+                if self.creation is not None:
+                    if not isinstance(self.creation, Mapping) or set(self.creation) != {"neow", "seen_bosses", "note"}:
+                        raise ValueError("standard-run creation must contain exactly neow, seen_bosses, and note")
+                    note = self.creation["note"]
+                    if (not isinstance(note, Mapping) or set(note) != {"card", "upgrades"}
+                            or not isinstance(note["card"], str) or not note["card"]
+                            or type(note["upgrades"]) is not int or not 0 <= note["upgrades"] <= 73):
+                        raise ValueError("standard-run creation note must contain card and upgrades")
+                    object.__setattr__(self, "creation", _freeze_json(self.creation))
         if self.entry is not None:
             frozen = _freeze_json(self.entry)
             if not isinstance(frozen, MappingProxyType):
                 raise ValueError("standalone entry must be a JSON object")
             object.__setattr__(self, "entry", frozen)
+
+
+def _validate_standard_identity(character: object, ascension: object) -> None:
+    if not isinstance(character, str) or character not in _STANDARD_CHARACTERS:
+        raise ValueError("Standard cases require character ironclad, silent, defect, or watcher")
+    if type(ascension) is not int or not 0 <= ascension <= 20:
+        raise ValueError("Standard cases require ascension in [0, 20]")
 
 
 @dataclass(frozen=True)
@@ -229,6 +267,44 @@ def _validate_entry(value: object, *, entry_id: object) -> dict[str, object]:
     return value
 
 
+def _validate_standard_entry(value: object) -> dict[str, object]:
+    required = {"id", "character", "ascension", "encounter", "hp", "max_hp", "gold",
+                "deck", "relics", "potions"}
+    optional = {"relic_counters", "bottled_cards", "burning"}
+    if (not isinstance(value, dict) or not required <= value.keys()
+            or value.keys() - (required | optional)):
+        raise ValueError("Standard catalog entry has missing or unknown fields")
+    _validate_standard_identity(value["character"], value["ascension"])
+    if not isinstance(value["id"], str) or _ENTRY_ID.fullmatch(value["id"]) is None:
+        raise ValueError("Standard catalog entry id must be 1..64 ASCII alphanumeric, underscore, or hyphen characters")
+    if not isinstance(value["encounter"], str) or not value["encounter"]:
+        raise ValueError("Standard catalog entry encounter must be a non-empty string")
+    if type(value["hp"]) is not int or type(value["max_hp"]) is not int or not 1 <= value["hp"] <= value["max_hp"] <= 999:
+        raise ValueError("Standard catalog entry HP must satisfy 1 <= hp <= max_hp <= 999")
+    if type(value["gold"]) is not int or not 0 <= value["gold"] <= 2**32 - 1:
+        raise ValueError("Standard catalog entry gold must be a uint32 integer")
+    deck = value["deck"]
+    if not isinstance(deck, list) or not 1 <= len(deck) <= 999:
+        raise ValueError("Standard catalog entry deck must contain 1..999 cards")
+    for index, row in enumerate(deck):
+        if (not isinstance(row, dict) or set(row) - {"card", "upgrades", "misc"}
+                or not {"card", "upgrades"} <= row.keys()):
+            raise ValueError(f"Standard catalog entry deck[{index}] must contain card and upgrades")
+        if (not isinstance(row["card"], str) or not row["card"]
+                or type(row["upgrades"]) is not int or not 0 <= row["upgrades"] <= 73):
+            raise ValueError(f"Standard catalog entry deck[{index}] has invalid card/upgrades")
+        if "misc" in row and type(row["misc"]) is not int:
+            raise ValueError(f"Standard catalog entry deck[{index}].misc must be an integer")
+    for name in ("relics", "potions"):
+        if not isinstance(value[name], list):
+            raise ValueError(f"Standard catalog entry {name} must be a list")
+    if len(value["potions"]) > 16 or any(item is not None and not isinstance(item, str) for item in value["potions"]):
+        raise ValueError("Standard catalog entry potions must be strings or null")
+    if any(not isinstance(item, str) or not item for item in value["relics"]):
+        raise ValueError("Standard catalog entry relics must be non-empty strings")
+    return value
+
+
 def _parse_case(raw: object, *, split: str) -> NeuralCase:
     if not isinstance(raw, dict):
         raise ValueError("each neural case must be an object")
@@ -240,8 +316,15 @@ def _parse_case(raw: object, *, split: str) -> NeuralCase:
     elif mode == "run":
         if set(raw) != common | {"profile_id", "character", "ascension"}:
             raise ValueError("invalid Run neural case fields; catalog/resource resets are forbidden")
+    elif mode == "standard-standalone":
+        if set(raw) != common | {"entry"}:
+            raise ValueError("invalid Standard standalone neural case fields")
+    elif mode == "standard-run":
+        if set(raw) not in (common | {"character", "ascension"},
+                            common | {"character", "ascension", "creation"}):
+            raise ValueError("invalid Standard Run neural case fields")
     else:
-        raise ValueError("neural case mode must be standalone or run")
+        raise ValueError("neural case mode must be standalone, run, standard-standalone, or standard-run")
     case_id = _identifier(raw["case_id"], "case_id")
     lineage_id = _identifier(raw["lineage_id"], "lineage_id")
     cohort = _identifier(raw["cohort"], "cohort")
@@ -250,8 +333,17 @@ def _parse_case(raw: object, *, split: str) -> NeuralCase:
         _validate_entry(raw["entry"], entry_id=raw["entry_id"])
         return NeuralCase(case_id, lineage_id, mode, seed, cohort, raw["entry_id"],
                           raw["entry"], None, None, None)
+    if mode == "run":
+        return NeuralCase(case_id, lineage_id, mode, seed, cohort, None, None,
+                          raw["profile_id"], raw["character"], raw["ascension"])
+    if mode == "standard-standalone":
+        entry = _validate_standard_entry(raw["entry"])
+        return NeuralCase(case_id, lineage_id, mode, seed, cohort, entry["id"], entry,
+                          None, entry["character"], entry["ascension"])
+    _validate_standard_identity(raw["character"], raw["ascension"])
+    creation = raw.get("creation")
     return NeuralCase(case_id, lineage_id, mode, seed, cohort, None, None,
-                      raw["profile_id"], raw["character"], raw["ascension"])
+                      None, raw["character"], raw["ascension"], creation)
 
 
 def load_neural_cases(path: Path) -> NeuralCases:

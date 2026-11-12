@@ -129,7 +129,10 @@ def _exercise(test, configs, parent, api, caps):
     from spire_learn.neural.runner import RuntimeOperationLimits, _close_preserving
     from spire_learn.neural.stream_runner import run_stream_segment
     first, second = configs
-    test.assertEqual([c.scenario_stream['shard_index'] for c in configs], [0, 1])
+    shard_indices = [c.scenario_stream['shard_index'] for c in configs]
+    test.assertEqual(len(shard_indices), 2)
+    test.assertEqual(shard_indices[1], shard_indices[0] + 1)
+    first_index = shard_indices[0]
     test.assertNotEqual(first.config_sha256, second.config_sha256)
     test.assertNotEqual(first.manifest_sha256, second.manifest_sha256)
     # Public normalization happens in actual make_driver before it returns.
@@ -169,7 +172,7 @@ def _exercise(test, configs, parent, api, caps):
         dependencies=dict(create_runtime=warm_factory, train=api.train, clock=api.clock))
     test.assertEqual(result['report'].exit_code, 0, result['report'].summary)
     test.assertIsNotNone(result['checkpoint'])
-    test.assertEqual(result['next_shard']['shard_index'], 1)
+    test.assertEqual(result['next_shard']['shard_index'], first_index + 1)
     loaded = api.load_checkpoint(result['checkpoint'], first.accepted_identities[0], purpose='resume', device='cpu')
     test.assertTrue(api.finite_changed(dict(old.model_tensors), dict(loaded.model_tensors)))
     test.assertGreater(result['saved_prefix']['optimizer_accepted_steps'], 0)

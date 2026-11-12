@@ -1,5 +1,12 @@
 # Gym native-fault release: 2026-11-01
 
+**Historical adoption record.** The November 2 release changes categorical
+IDs and combat-view shapes; the old compatibility and warm-start statements
+below apply only to the November 1 release. See the
+[new migration record](neural-gym-migration.md)
+and [current capability assessment](gym-learning-capabilities.md). Learn has
+verified the newer delivery's files and both real adapters in a zero-gameplay check.
+
 Learn has staged and checked the Gym delivery from
 [`a86df922`](https://github.com/klottick/spire-gym/pull/67).
 The delivered wheel SHA256 is `06a008cced5e7dcd61c9c36085190f9160a3a01368c35e46f72b6b0de26ce2be`;

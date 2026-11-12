@@ -1,0 +1,85 @@
+{
+  "schema": "spire-learn-neural-cases-v1",
+  "split": "train",
+  "partition": "train",
+  "cases": [
+    {
+      "case_id": "standard-train-standalone-ironclad-a0",
+      "lineage_id": "lineage:standard:train:standalone:ironclad:a0",
+      "mode": "standard-standalone",
+      "environment_seed": 0,
+      "cohort": "standard_combat",
+      "entry": {
+        "ascension": 0,
+        "burning": null,
+        "character": "ironclad",
+        "deck": [
+          {
+            "card": "bash",
+            "misc": 0,
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "misc": 0,
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "misc": 0,
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "misc": 0,
+            "upgrades": 0
+          },
+          {
+            "card": "defend",
+            "misc": 0,
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "misc": 0,
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "misc": 0,
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "misc": 0,
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "misc": 0,
+            "upgrades": 0
+          },
+          {
+            "card": "strike",
+            "misc": 0,
+            "upgrades": 0
+          }
+        ],
+        "encounter": "cultist",
+        "gold": 99,
+        "hp": 80,
+        "id": "capture-ironclad-a0",
+        "max_hp": 80,
+        "potions": [
+          null,
+          null,
+          null
+        ],
+        "relic_counters": {},
+        "relics": [
+          "burning_blood"
+        ]
+      }
+    }
+  ]
+}

@@ -23,6 +23,15 @@ released. Importing the CLI, help, and `--validate-only` use only the standard
 library and do not initialize a device, construct a Gym environment, or create
 an output directory.
 
+For the current Gym release use the dated templates in
+[`configs/neural/gym-20261102/`](../configs/neural/gym-20261102/).
+The examples below retain their historical configuration paths. The
+[November 2 migration](neural-gym-migration.md) explains the changed categorical
+IDs and why old checkpoints cannot be used with the new runtime. Both modes
+passed constructor/schema qualification. The separately approved standalone
+[campaign has since completed](neural-curriculum.md#fresh-gym-campaign-results-2026-11-03);
+its combat-learning evidence does not establish a trained full-Run policy.
+
 ```sh
 PYTHONPATH=src python3.12 -B -m spire_learn.neural --help
 PYTHONPATH=src python3.12 -B -m spire_learn.neural train --config configs/neural/standalone.toml --validate-only

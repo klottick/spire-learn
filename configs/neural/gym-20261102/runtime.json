@@ -1,0 +1,20 @@
+{
+  "schema": "spire-learn-gym-runtime-profile-v1",
+  "gym_revision": "afb51f5f222b4c4331ed34067c5eebeda606db91",
+  "native_sha256": "1656e912d88b91043f3a1bc7632989638b63bd2b5554b53703d9484658990eac",
+  "wheel_sha256": "65b5367183d1ab530dbce123e01812749a6def0e7e9f74e8f9afe1f804af75af",
+  "wheel_path": "artifacts/development/neural-combat/gym-migration-20261102/inputs/spire_lab-0.1.0-cp312-cp312-manylinux_2_34_x86_64.whl",
+  "package_overlay": "artifacts/development/neural-combat/gym-migration-20261102/site",
+  "dependency_venv": "artifacts/development/neural-combat/task-8/runtime-output/cuda-setup-20261028-a/install-work/venv-cuda",
+  "dependency_lock_sha256": "92022c4b8f68dd7c5bad091b558744ffb30c627292135b7ab18a179f2fd65b45",
+  "delivery_manifest_sha256": "532c53f775b7733dc7a3268e4941e2fad28a3e45ff5168fe13e97bee0d02047f",
+  "common_view_fingerprint": "4c73f7de04d7b2875f473f8034c1cbacf984ea2d52d0a9428289c30cf1dff463",
+  "run_observation_fingerprint": "28d92d89c437eea7fdc260240585bca466dee1fd74b9b3eb38513d2b34b0be64",
+  "qualification_report": "artifacts/development/neural-combat/gym-migration-20261102/output/qualification.json",
+  "qualification_scope": "qualified: exact imported binary, five descriptor identities, complete common parser/feature plan, 369-row card metadata hash, and both actual Learn adapter factories; zero gameplay or training",
+  "historical_controls": "Existing one-use campaign controls remain pinned to their original runtime. New campaigns must explicitly bind this profile and overlay; this file grants no execution authority.",
+  "card_metadata_fingerprint": "b60b66c69bce54a6652442e54bc42a2a446d05ec7efa39bb1b11cf4b8c6ff5fb",
+  "checkpoint_policy": "fresh weights required; no legacy vocabulary checkpoint evaluation, warm start or resume",
+  "qualification_process": "artifacts/development/neural-combat/gym-migration-20261102/qualification-process.json",
+  "qualification_tool_exit": "artifacts/development/neural-combat/gym-migration-20261102/qualification-tool-exit.json"
+}

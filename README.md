@@ -69,7 +69,7 @@ mixed training never started, so their learning benefit remains unverified. The
 the failure, saved work and limits. The campaign is closed; no retry or further
 workload is authorized.
 
-Gym's delivered native-fault fixes at `a86df922` are now staged in a separate
+Gym's November 1 native-fault fixes at `a86df922` were staged in a separate
 Learn runtime overlay. Both adapters and the unchanged schema identities passed
 a zero-gameplay container check. See the [runtime upgrade](docs/neural-runtime-upgrade.md)
 for the exact pins, diagnosed causes and new config templates. Historical
@@ -80,7 +80,35 @@ two randomized checkpoints. Fixed training's paired development panel moved
 from 31/64 to 35/64 wins; randomized evaluation and mixed training never started.
 The [fixed-Gym campaign results](docs/neural-curriculum.md#fixed-gym-campaign-c)
 record the retained audit, independent review and P1 Gym issue `spire-14g`.
-The internal cause remains unknown. Training is stopped; no retry is authorized.
+The original Learn audit did not determine the internal cause. Training is
+stopped; the consumed campaign cannot be retried.
+
+Learn now pins Spire Gym 1.0.0 native revision
+`1929e18b9f44372e020877bd62f2a5c9dee3e64e` and adopts its Standard combat and
+Run views. The four mode templates and fresh-weight/rules qualifications are
+documented in the [Gym 1.0.0 migration record](docs/neural-gym-v1-migration.md).
+The one-reset native qualification is pending controller run; no training run
+was launched by this migration.
+
+The separately approved fresh-weight campaign on this release has now completed
+its development comparisons. Across 438,272 learned decisions, the final mixed
+combat policy improved from **18/64 to 41/64 development wins**. All eight panels
+completed, with no simulator faults or uncertain effects in the reconciled jobs.
+A user-requested checkpoint cutover preserved model/optimizer/RNG state and
+raised observed mixed-training throughput from 13.60 to 61.92 decisions/s.
+See the [complete results and limits](docs/neural-curriculum.md#fresh-gym-campaign-results-2026-11-03).
+This is one paired standalone Ironclad experiment; the protected final split
+remains unrun. The original interrupted execution and both source phases are
+retained. No additional training is authorized by this completion.
+
+A later sustained campaign and its repaired continuation saved further mixed
+training, but stopped on Learn orchestration failures. The available later
+development comparison was 32/64 wins versus its parent checkpoint's 35/64;
+latest saved shard442 is unevaluated. The
+[November 4 investigation](docs/learning-investigation-20261104.md) records the
+Docker timeout/cleanup issues, learning-diagnostic gaps and proposed comparisons.
+Training and monitoring are stopped; no full-campaign or final-split result is
+claimed for that continuation.
 
 Python **3.12** matches the gym's current Python package requirement. Spire Learn
 declares no runtime dependencies, and this project has not installed packages
@@ -111,6 +139,16 @@ not a fork of simulator ownership; the gym originals remain unchanged.
 Local code lives in `src/spire_learn/`. Keep large/generated datasets, checkpoints,
 rollouts and experiment logs out of Git; document their provenance and storage
 when actual experiments are introduced.
+
+The [learning-strategy review](docs/learning-strategies.md) explains what the
+expanded online literature search supports, what has failed in particular
+settings, and the implications for our PPO, imitation and curriculum comparisons.
+The [November 4 investigation](docs/learning-investigation-20261104.md) connects
+those findings to the later training plateau/regression, the Docker timeout and
+cleanup bugs, and proposed short comparisons before further sustained training.
+The [Gym capability assessment](docs/gym-learning-capabilities.md) separates
+supported strategies from environment gaps and learner-side work, including
+the public-information requirements for any future search interface.
 
 ## Distribution
 

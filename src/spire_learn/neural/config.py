@@ -20,6 +20,7 @@ from spire_learn.neural.cases import (
 )
 from spire_learn.neural.contracts import ModelConfig, NeuralIdentity, PPOConfig
 from spire_learn.neural.gym_contracts import GymContract, RUNTIME_REVISIONS, contract_for_revision
+from spire_learn.neural.modes import NEURAL_MODES
 
 
 ACCEPTED_GYM_REVISION = "533dad1c8aec86df624b3742b6b3ad1dbf1d0033"
@@ -178,7 +179,7 @@ def _identity(raw: object, *, model_hash: str, ppo_hash: str, contract: GymContr
     hashes = item["config_hashes"]
     if not isinstance(mappings, dict) or not isinstance(hashes, dict):
         raise ValueError("identity mappings and hashes must be tables")
-    if set(mappings) - {"standalone", "run", "standard-standalone", "standard-run"}:
+    if set(mappings) - NEURAL_MODES:
         raise ValueError("identity declares an unsupported raw mode")
     for raw_mode, mapping_id in mappings.items():
         expected_mapping = contract.raw_mode_mappings[raw_mode]
@@ -242,7 +243,7 @@ def load_neural_config(path: Path) -> NeuralConfig:
     if raw["schema"] != "spire-learn-neural-config-v1":
         raise ValueError("unsupported neural config schema")
     mode, operation, split, partition = raw["mode"], raw["operation"], raw["split"], raw["partition"]
-    if not isinstance(mode, str) or mode not in {"standalone", "run", "standard-standalone", "standard-run"}:
+    if not isinstance(mode, str) or mode not in NEURAL_MODES:
         raise ValueError("mode must be standalone, run, standard-standalone, or standard-run")
     standard_mode = mode in {"standard-standalone", "standard-run"}
     if not isinstance(operation, str) or operation not in {"train", "evaluate", "calibrate"}:
@@ -315,6 +316,8 @@ def load_neural_config(path: Path) -> NeuralConfig:
         if type(workers) is not int or not 1 <= workers <= 256:
             raise ValueError("environment.workers must be an integer in [1, 256]")
         if mode == "standard-run":
+            if workers != 1:
+                raise ValueError("standard-run requires workers = 1")
             standard_run_fingerprint = environment["standard_run_fingerprint"]
             if (contract.standard_run_fingerprint is None
                     or standard_run_fingerprint != contract.standard_run_fingerprint):
@@ -490,6 +493,7 @@ __all__ = [
     "COMMON_VIEW_ID",
     "NeuralBudget",
     "NeuralConfig",
+    "NEURAL_MODES",
     "RUN_OBSERVATION_FINGERPRINT",
     "RUN_OBSERVATION_VERSION",
     "RUN_PROFILE_ID",

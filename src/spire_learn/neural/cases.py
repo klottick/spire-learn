@@ -11,10 +11,12 @@ from pathlib import Path
 import re
 from types import MappingProxyType
 
+from spire_learn.neural.modes import NEURAL_MODES
+
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/@+-]*\Z")
 _ENTRY_ID = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 _SPLITS = {"train", "selection", "final"}
-_MODES = {"standalone", "run", "standard-standalone", "standard-run"}
+_MODES = NEURAL_MODES
 _STANDARD_CHARACTERS = {"ironclad", "silent", "defect", "watcher"}
 _RUN_PROFILE = "m10-ironclad-policy"
 

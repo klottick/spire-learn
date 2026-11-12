@@ -10,6 +10,7 @@ from types import MappingProxyType
 
 from spire_learn.contracts import ContractError
 from spire_learn.neural.views import COMMON_V1, VIEWS, view_for_fingerprint
+from spire_learn.neural.modes import NEURAL_MODES
 
 
 _FINGERPRINT = re.compile(r"[0-9a-fA-F]{64}\Z")
@@ -379,9 +380,7 @@ class NeuralIdentity:
         if not isinstance(self.accepted_raw_mode_mappings, Mapping):
             raise ContractError("NeuralIdentity accepted_raw_mode_mappings must be a mapping")
         mappings = dict(self.accepted_raw_mode_mappings)
-        if not mappings or any(mode not in {
-            "standalone", "run", "standard-standalone", "standard-run",
-        } for mode in mappings):
+        if not mappings or any(mode not in NEURAL_MODES for mode in mappings):
             raise ContractError("NeuralIdentity declares an unsupported raw-mode mapping")
         for mode, mapping_id in mappings.items():
             _identifier(mapping_id, f"NeuralIdentity {mode} mapping")
@@ -642,7 +641,7 @@ class Rollout:
 
     def __post_init__(self) -> None:
         if (not isinstance(self.mode, str)
-                or self.mode not in {"standalone", "run", "standard-standalone", "standard-run"}
+                or self.mode not in NEURAL_MODES
                 or not isinstance(self.split, str) or self.split not in {"train", "selection", "final"}):
             raise ContractError("Rollout mode or split is unsupported")
         if not isinstance(self.identity, NeuralIdentity):

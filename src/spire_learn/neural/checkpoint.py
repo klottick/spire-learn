@@ -25,6 +25,7 @@ from typing import Any
 import zipfile
 
 from spire_learn.neural.contracts import NeuralIdentity
+from spire_learn.neural.modes import NEURAL_MODES
 
 
 CHECKPOINT_SCHEMA_ID = "spire-learn-neural-checkpoint-v1"
@@ -177,7 +178,7 @@ def _validate_identity(raw: object) -> dict[str, object]:
     mappings = result["accepted_raw_mode_mappings"]
     if not isinstance(mappings, dict) or not mappings:
         raise ValueError("checkpoint identity raw-mode mappings must be a non-empty object")
-    if any(mode not in {"standalone", "run"} for mode in mappings):
+    if any(mode not in NEURAL_MODES for mode in mappings):
         raise ValueError("checkpoint identity declares an unsupported raw mode")
     if any(not isinstance(mapping, str) or not mapping for mapping in mappings.values()):
         raise ValueError("checkpoint identity raw-mode mapping IDs must be non-empty text")

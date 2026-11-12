@@ -22,6 +22,9 @@ from spire_learn.neural.checkpoint import (
 )
 from spire_learn.neural.config import RUN_RAW_MAPPING_ID, STANDALONE_RAW_MAPPING_ID
 from spire_learn.neural.contracts import NeuralIdentity
+from spire_learn.neural.config import load_neural_config
+from spire_learn.neural.gym_contracts import CURRENT_CONTRACT
+from spire_learn.neural.runner import _selected_identity
 
 
 def _identity(*, modes=("standalone", "run"), model_hash="a" * 64, ppo_hash="b" * 64):
@@ -77,6 +80,44 @@ def _write_archive(path: Path, *, member_name="model/data.bin", content=b"named 
 
 
 class NeuralCheckpointMetadataTests(unittest.TestCase):
+    def test_standard_config_identities_pass_metadata_and_preflight(self):
+        root = Path(__file__).resolve().parents[2]
+        for mode in ("standard-standalone", "standard-run"):
+            with self.subTest(mode=mode):
+                config = load_neural_config(root / "configs/neural/gym-v1.0.0" / f"{mode}.toml")
+                identity = _selected_identity(config)
+                metadata = _metadata(identity=identity)
+                metadata["run_metadata"]["mode"] = mode
+                validate_checkpoint_metadata(metadata, identity, purpose="evaluate")
+                with tempfile.TemporaryDirectory() as directory:
+                    checkpoint = Path(directory) / "checkpoint"
+                    checkpoint.mkdir()
+                    model_path = checkpoint / "model.pt"
+                    _write_archive(model_path)
+                    payload = model_path.read_bytes()
+                    metadata["payload_inventory"]["model.pt"] = {
+                        "size_bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest(),
+                    }
+                    (checkpoint / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+                    result = preflight_checkpoint(checkpoint, identity, purpose="evaluate")
+                    self.assertEqual(result.metadata["identity"]["accepted_raw_mode_mappings"],
+                                     identity_payload(identity)["accepted_raw_mode_mappings"])
+
+    def test_historical_mapping_is_rejected_for_standard_mode(self):
+        root = Path(__file__).resolve().parents[2]
+        config = load_neural_config(root / "configs/neural/gym-v1.0.0/standard-standalone.toml")
+        identity = _selected_identity(config)
+        historical = NeuralIdentity(
+            model_id=identity.model_id, features_id=identity.features_id,
+            action_id=identity.action_id, objective_id=identity.objective_id,
+            accepted_raw_mode_mappings={
+                "standard-standalone": CURRENT_CONTRACT.raw_mode_mappings["standalone"]
+            },
+            config_hashes=identity.config_hashes,
+        )
+        with self.assertRaisesRegex(CheckpointCompatibilityError, "standard-standalone raw-mode mapping"):
+            validate_checkpoint_metadata(_metadata(identity=historical), identity, purpose="evaluate")
+
     def test_loaded_checkpoint_contract_always_drops_inflight_records(self):
         loaded = LoadedCheckpoint(
             metadata={},

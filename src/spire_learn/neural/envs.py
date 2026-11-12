@@ -37,6 +37,7 @@ from spire_learn.neural.snapshot import snapshot_common
 from spire_learn.neural.gym_contracts import contract_for_revision
 from spire_learn.neural.views import COMMON_V1
 from spire_learn.neural.views import STANDARD_COMBAT_V1
+from spire_learn.neural.modes import NEURAL_MODES
 
 
 _MAX_ERROR_TEXT = 512
@@ -404,6 +405,7 @@ class _StandardNativeFault(RuntimeError):
 
     def __init__(self, error: BaseException):
         super().__init__("Spire Gym Standard combat fault; native details omitted")
+        self.native_type = type(error).__name__
         raw_slots = getattr(error, "slots", ())
         if isinstance(raw_slots, Sequence) and not isinstance(
             raw_slots, (str, bytes, bytearray)
@@ -554,10 +556,22 @@ class _StandardCombatProvider:
                     raise ContractError("Standard native reward must be finite")
                 if type(ended) is not bool or type(cut) is not bool:
                     raise ContractError("Standard native end flags must be booleans")
+                raw_info = _standard_info_slot(info, slot)
+                settled_info = _settle_standard_terminal(info, slot, self._encounters)
+                settled = raw_info.get("phase") == "terminal"
+                if ended is not settled:
+                    raise ContractError("Standard terminated flag must match the terminal phase")
+                if settled:
+                    outcome = _standard_info_slot(info, slot, _STANDARD_SETTLEMENT_KEYS).get(
+                        "terminal_reason"
+                    )
+                    expected_reward = {"victory": 1.0, "death": -1.0, "escaped": 0.0}.get(outcome)
+                    if expected_reward is None or float(reward) != expected_reward:
+                        raise ContractError("Standard terminal reward does not match terminal outcome")
                 rows.append(_RawTransition(
                     _RawBoundary(
                         _row_observation(observations, slot, batched=True),
-                        _settle_standard_terminal(info, slot, self._encounters),
+                        settled_info,
                     ),
                     float(reward), ended, cut,
                 ))
@@ -790,7 +804,12 @@ class CombatDriver:
                     slot for slot, status in slot_statuses
                     if status not in {"delivered", "unaffected"}
                 ),
-                len(batch_slots) > 64,
+                any(
+                    isinstance(record, Mapping)
+                    and isinstance(record.get("status"), str)
+                    and record["status"] not in {"delivered", "unaffected"}
+                    for record in batch_slots[64:]
+                ),
                 tuple(slot_statuses),
             )
         faults = getattr(error, "faults", None)
@@ -798,7 +817,12 @@ class CombatDriver:
             return (), False, ()
         slots: set[int] = set()
         statuses: dict[int, str] = {}
-        truncated = len(faults) > 64
+        truncated = any(
+            isinstance(record, Mapping)
+            and isinstance(record.get("status"), str)
+            and record["status"] not in {"delivered", "unaffected"}
+            for record in faults[64:]
+        )
         for record in faults[:64]:
             if not isinstance(record, Mapping):
                 continue
@@ -866,7 +890,7 @@ class CombatDriver:
             accepted_prefix=min(self._accepted_steps, _MAX_FAULT_PREFIX),
             failed_operation=min(self._accepted_operations + 1, _MAX_FAULT_PREFIX),
             delivery=delivery,
-            exception_type=type(error).__name__,
+            exception_type=getattr(error, "native_type", type(error).__name__),
             message=_clean_error(error),
             accepted_prefix_operations=min(self._accepted_operations, _MAX_FAULT_PREFIX),
             accepted_prefix_slot_actions=min(
@@ -1188,7 +1212,7 @@ class CombatDriver:
                 accepted_prefix=min(self._accepted_steps, _MAX_FAULT_PREFIX),
                 failed_operation=min(self._accepted_operations + 1, _MAX_FAULT_PREFIX),
                 delivery="closed-with-error",
-                exception_type=type(error).__name__,
+                exception_type=getattr(error, "native_type", type(error).__name__),
                 message=_clean_error(error),
                 accepted_prefix_operations=min(self._accepted_operations, _MAX_FAULT_PREFIX),
                 accepted_prefix_slot_actions=min(
@@ -1442,7 +1466,7 @@ def _validate_factory_inputs(config: NeuralConfig, cases: NeuralCases) -> None:
         raise ContractError("make_driver cases do not match the authenticated config manifest")
     if cases.partition not in {"train", "selection", "final"}:
         raise ContractError("unsupported neural case partition")
-    if config.mode not in {"standalone", "run", "standard-standalone", "standard-run"}:
+    if config.mode not in NEURAL_MODES:
         raise ContractError("unsupported neural driver mode")
     if not cases.for_mode(config.mode):
         raise ContractError(f"case manifest has no {config.mode} cases")
@@ -1482,9 +1506,10 @@ def _close_after_factory_error(env: object, error: BaseException) -> None:
 def make_driver(config: NeuralConfig, cases: NeuralCases) -> CombatDriver:
     """Construct an authenticated public Gym adapter without resetting or stepping.
 
-    Standalone mode creates one manually resettable public vector facade. Run
-    mode creates exactly one normal ``m10-ironclad-policy`` Run facade. The
-    Gym descriptor, environment identity and finite catalog are checked before
+    Common and Standard standalone modes create manually resettable public
+    vector facades. Common Run creates one ``m10-ironclad-policy`` facade;
+    Standard Run creates one scalar Run with profile ``Standard``. The Gym
+    descriptor, environment identity and finite catalog are checked before
     the driver is returned.
     """
     _validate_factory_inputs(config, cases)

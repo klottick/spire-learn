@@ -247,6 +247,16 @@ class StandardEnvTests(unittest.TestCase):
         self.assertEqual(tuple(candidate.index for candidate in transitions[0].successor.candidates), (0,))
         driver.close()
 
+    def test_masked_partial_reset_preserves_unselected_rows(self):
+        driver, fake = self._factory()
+        initial = driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        self.assertGreaterEqual(driver.batch_size, 2)
+        reset = driver.reset(seeds=[2] * driver.batch_size, entry_ids=[None] * driver.batch_size,
+                             reset_mask=[True] + [False] * (driver.batch_size - 1))
+        self.assertIs(reset[1], initial[1])
+        self.assertEqual(fake.kwargs["autoreset_mode"], "disabled")
+        driver.close()
+
     def test_standard_identity_mismatch_closes_env(self):
         made = []
 
@@ -298,6 +308,26 @@ class StandardEnvTests(unittest.TestCase):
         self.assertNotIn("private native detail", repr(caught.exception.evidence))
         self.assertNotIn("sensitive native detail", caught.exception.evidence.message)
         self.assertNotIn("private native detail", caught.exception.evidence.message)
+
+    def test_standard_native_fault_reports_native_exception_type_only(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        fake.next_error = FakeBatchFaultError([])
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([0] * driver.batch_size)
+        self.assertEqual(caught.exception.evidence.exception_type, "FakeBatchFaultError")
+        self.assertNotIn("sensitive native detail", caught.exception.evidence.message)
+
+    def test_fault_slot_truncation_only_marks_omitted_fault_records(self):
+        driver, _fake = self._factory()
+        for slot, expected in ((3, False), (66, True)):
+            records = [{"status": "unaffected"} for _ in range(70)]
+            records[slot] = {"status": "faulted"}
+            _slots, truncated, _statuses = driver._fault_slots(
+                FakeBatchFaultError(records), tuple(range(70))
+            )
+            self.assertEqual(truncated, expected)
+        driver.close()
 
     def test_standard_combat_input_error_on_step_is_recoverable(self):
         driver, fake = self._factory()
@@ -357,7 +387,7 @@ class StandardTerminalSettlementTests(unittest.TestCase):
     setUpClass = classmethod(StandardEnvTests.setUpClass.__func__)
     _runtime = StandardEnvTests._runtime
 
-    def _factory(self, outcome):
+    def _factory(self, outcome, *, phase="terminal", ended=True, reward=None):
         made = []
         schema = self.schema
 
@@ -379,14 +409,15 @@ class StandardTerminalSettlementTests(unittest.TestCase):
                     obs[name] = _Array([0] * size, spec.shape, spec.dtype)
                 info = inner._info()
                 rows = inner.num_envs
-                for key, value in (("phase", "terminal"), ("terminal_reason", outcome),
+                for key, value in (("phase", phase), ("terminal_reason", outcome),
                                    ("hp_before_healing", 29), ("hp_after_cleanup", 35),
                                    ("entry_id", inner.args[0]["entries"][0]["id"])):
                     info[key] = [value] * rows
                     info["_" + key] = [True] * rows
-                reward = {"victory": 1.0, "death": -1.0, "escaped": 0.0}[outcome]
+                native_reward = ({"victory": 1.0, "death": -1.0, "escaped": 0.0}[outcome]
+                                 if reward is None else reward)
                 return ({key: _BatchArray([value] * rows) for key, value in obs.items()},
-                        [reward] * rows, [True] * rows, [False] * rows, info)
+                        [native_reward] * rows, [ended] * rows, [False] * rows, info)
 
         with patch.object(envs, "_load_native_runtime", return_value=self._runtime(Terminal)):
             driver = envs.make_driver(self.config, self.cases)
@@ -420,6 +451,18 @@ class StandardTerminalSettlementTests(unittest.TestCase):
             return result
 
         fake.step = no_reason
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        with self.assertRaises(envs.DriverFault):
+            driver.step([0] * driver.batch_size)
+
+    def test_terminal_flag_must_match_raw_terminal_phase(self):
+        driver, _fake = self._factory("victory", ended=False)
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        with self.assertRaises(envs.DriverFault):
+            driver.step([0] * driver.batch_size)
+
+    def test_terminal_reward_must_match_outcome(self):
+        driver, _fake = self._factory("victory", reward=0.0)
         driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
         with self.assertRaises(envs.DriverFault):
             driver.step([0] * driver.batch_size)

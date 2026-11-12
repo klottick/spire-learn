@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 import random
 import unittest
 
 from spire_learn.contracts import ContractError
 from spire_learn.experiments.budget import Budget
 from spire_learn.neural.collector import Collector
-from spire_learn.neural.config import mode_family
+from spire_learn.neural.config import load_neural_config, mode_family
 from spire_learn.neural.contracts import CollectionDiagnostics, PolicyChoice, ResourceCheckpoint
-from spire_learn.neural.runner import _eval_complete, _fight_summary, _manifest_projection
+from spire_learn.neural.runner import (
+    _eval_complete, _fight_summary, _manifest_projection, _selected_identity,
+)
+from spire_learn.neural.checkpoint import identity_payload, validate_checkpoint_metadata
+from tests.unit.test_neural_checkpoint import _metadata
 from tests.unit import test_neural_envs_standard as standalone_env
 from tests.unit import test_neural_envs_standard_run as run_env
 
@@ -115,6 +120,16 @@ class StandardRunCollectorTests(unittest.TestCase):
     _runtime = run_env.StandardRunEnvTests._runtime
     _factory = run_env.StandardRunEnvTests._factory
 
+    def test_runner_identity_checkpoint_path_accepts_standard_configs(self):
+        root = Path(__file__).resolve().parents[2]
+        for mode in ("standard-standalone", "standard-run"):
+            config = load_neural_config(root / "configs/neural/gym-v1.0.0" / f"{mode}.toml")
+            identity = _selected_identity(config)
+            metadata = _metadata(identity=identity)
+            metadata["run_metadata"]["mode"] = config.mode
+            validate_checkpoint_metadata(metadata, identity, purpose="evaluate")
+            self.assertIn(config.mode, identity_payload(identity)["accepted_raw_mode_mappings"])
+
     def test_collector_runs_standard_run_noncombat_and_combat(self):
         driver, _fake = self._factory()
         config = replace(self.config, rollout_steps=2)
@@ -130,11 +145,12 @@ class StandardRunCollectorTests(unittest.TestCase):
         manifest = _manifest_projection(
             self.config, _runtime(driver), policy_kind="learned", action_selection="sample",
             allow_final=False)
-        self.assertEqual(manifest["profile_id"], "standard")
+        self.assertEqual(manifest["profile_id"], "Standard")
         self.assertEqual(manifest["content_id"], "spire-gym-standard-content-v1")
         self.assertEqual(manifest["reward_id"], "spire-gym-floor-key-terminal-reward-v1")
         self.assertEqual(manifest["standard_run_fingerprint"], self.config.standard_run_fingerprint)
         self.assertEqual(manifest["run_noncombat_controller_id"], "legal-random-v1")
+        self.assertEqual(manifest["resource_budgets"]["workers"], self.config.workers)
         driver.close()
 
     def test_run_family_completion(self):

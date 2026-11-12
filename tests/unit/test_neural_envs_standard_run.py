@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import fields
 import json
 from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -294,6 +295,16 @@ class StandardRunEnvTests(unittest.TestCase):
         with patch.object(envs, "_load_native_runtime", side_effect=AssertionError("import")):
             with self.assertRaises(ContractError):
                 envs.make_driver(replace(self.config, workers=2), self.cases)
+
+    def test_config_rejects_multiple_standard_run_workers(self):
+        source = ROOT / "configs/neural/gym-v1.0.0/standard-run.toml"
+        raw = source.read_text()
+        self.assertIn("workers = 1", raw)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "standard-run.toml"
+            path.write_text(raw.replace("workers = 1", "workers = 2", 1))
+            with self.assertRaisesRegex(ValueError, "standard-run requires workers = 1"):
+                load_neural_config(path)
 
 
 if __name__ == "__main__":

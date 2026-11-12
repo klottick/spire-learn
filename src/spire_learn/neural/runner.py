@@ -354,6 +354,7 @@ def _config_projection(config: NeuralConfig) -> dict[str, object]:
             "max_training_decisions": config.budgets.max_training_decisions,
             "max_environment_actions": config.budgets.max_environment_actions,
             "max_wall_seconds": config.budgets.max_wall_seconds,
+            "workers": config.workers,
         },
     }
 
@@ -419,6 +420,7 @@ def _manifest_projection(
         "rng_001": _RNG_001,
         "time_001": _TIME_001,
         "resource_budgets": _config_projection(config)["budgets"],
+        "workers": config.workers,
         "python_version": platform.python_version(),
     }
 
@@ -443,7 +445,7 @@ _ENVIRONMENT_IDENTITIES = {
         "reward_id": "spire-gym-combat-outcome-reward-v1",
     },
     "standard-run": lambda config: {
-        "profile_id": "standard",
+        "profile_id": "Standard",
         "content_id": "spire-gym-standard-content-v1",
         "rules_id": "spire-gym-native-standard-rules-v3",
         "reward_id": "spire-gym-floor-key-terminal-reward-v1",
@@ -1950,6 +1952,7 @@ class _NeuralTrainingRuntime:
         }
         run_metadata = {
             "mode": self.config.mode,
+            "workers": getattr(self.config, "workers", 1),
             "operation": "train",
             "split": "train",
             "partition": "train",

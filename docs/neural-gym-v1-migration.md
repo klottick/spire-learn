@@ -158,7 +158,8 @@ installed.
   driver closed once, and no training imports. The first two attempts failed
   on the draw-row and empty-slot differences above. Their outputs are kept
   beside the passing one.
-- **Driver soak.** A diagnostic drove Learn's real driver with uniformly random
+- **Driver soak.** `scripts/neural/soak_gym_v1.py --steps N --output DIR`
+  drives Learn's four real drivers with uniformly random
   legal actions; no learning was involved.
   - 3,000 steps each in `standalone`, `run`, `standard-standalone` and
     `standard-run`: 755, 41, 635 and 43 terminals respectively.

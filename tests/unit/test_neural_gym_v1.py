@@ -164,7 +164,9 @@ class GymV1ContractTests(unittest.TestCase):
                          new.accepted_raw_mode_mappings["standalone"].split("@")[1].split("+")[0])
         with patch("builtins.__import__", side_effect=_refuse_torch):
             for purpose in ("evaluate", "warm_start", "resume"):
-                with self.subTest(purpose=purpose), self.assertRaises(ValueError):
+                with self.subTest(purpose=purpose), self.assertRaisesRegex(
+                    ValueError, "raw-mode mapping"
+                ):
                     validate_checkpoint_metadata(
                         _metadata(identity=old, training=purpose == "resume"), new, purpose=purpose)
 

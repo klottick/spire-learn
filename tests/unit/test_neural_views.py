@@ -129,6 +129,21 @@ class FrameAndLifecycleTests(unittest.TestCase):
                                    COMMON_V1)
         schema.parse_lifecycle(_lifecycle_info(COMMON_V1.lifecycle_view_id))
 
+    def test_malformed_lifecycle_raises_contract_error(self):
+        from spire_learn.neural.views import STANDARD_COMBAT_V1
+        view_id = STANDARD_COMBAT_V1.lifecycle_view_id
+        exit_record = _lifecycle_info(view_id)["last_exit"]
+        for info in (
+            _lifecycle_info(view_id, routing=["noncombat"]),
+            _lifecycle_info(view_id, last_exit=dict(exit_record, outcome=["victory"])),
+        ):
+            with self.subTest(info=info), self.assertRaises(ContractError):
+                schema.parse_lifecycle(info, STANDARD_COMBAT_V1)
+        missing = _lifecycle_info(view_id)
+        del missing["routing"]
+        with self.assertRaisesRegex(ContractError, "missing fields: routing"):
+            schema.parse_lifecycle(missing, STANDARD_COMBAT_V1)
+
 
 if __name__ == "__main__":
     unittest.main()

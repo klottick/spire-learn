@@ -1017,11 +1017,6 @@ def parse_lifecycle(info: Mapping[str, object], view: ViewSpec = COMMON_V1) -> L
     metadata = _required_mapping(info, "lifecycle info")
     if metadata.get("combat_view_id") != view.lifecycle_view_id:
         raise ContractError("lifecycle combat_view_id is not the accepted combat view")
-    if metadata.get("routing") not in view.routings:
-        raise ContractError("lifecycle routing is not accepted for this combat view")
-    last_exit = metadata.get("last_exit")
-    if isinstance(last_exit, Mapping) and last_exit.get("outcome") not in view.outcomes:
-        raise ContractError("lifecycle last_exit outcome is not accepted for this combat view")
     required = (
         "active", "routing", "selection_owner", "active_visit", "combats_entered",
         "combats_settled", "last_exit",
@@ -1029,6 +1024,14 @@ def parse_lifecycle(info: Mapping[str, object], view: ViewSpec = COMMON_V1) -> L
     missing = tuple(key for key in required if key not in metadata)
     if missing:
         raise ContractError(f"lifecycle info is missing fields: {', '.join(missing)}")
+    routing = metadata["routing"]
+    if not isinstance(routing, str) or routing not in view.routings:
+        raise ContractError("lifecycle routing is not accepted for this combat view")
+    last_exit = metadata["last_exit"]
+    if isinstance(last_exit, Mapping):
+        outcome = last_exit.get("outcome")
+        if not isinstance(outcome, str) or outcome not in view.outcomes:
+            raise ContractError("lifecycle last_exit outcome is not accepted for this combat view")
     return Lifecycle(
         active=metadata["active"],
         routing=metadata["routing"],

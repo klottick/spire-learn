@@ -379,8 +379,10 @@ class NeuralIdentity:
         if not isinstance(self.accepted_raw_mode_mappings, Mapping):
             raise ContractError("NeuralIdentity accepted_raw_mode_mappings must be a mapping")
         mappings = dict(self.accepted_raw_mode_mappings)
-        if not mappings or any(mode not in {"standalone", "run"} for mode in mappings):
-            raise ContractError("NeuralIdentity must declare accepted standalone/run mappings")
+        if not mappings or any(mode not in {
+            "standalone", "run", "standard-standalone", "standard-run",
+        } for mode in mappings):
+            raise ContractError("NeuralIdentity declares an unsupported raw-mode mapping")
         for mode, mapping_id in mappings.items():
             _identifier(mapping_id, f"NeuralIdentity {mode} mapping")
         if not isinstance(self.config_hashes, Mapping):

@@ -1004,6 +1004,17 @@ def _validate_factory_inputs(config: NeuralConfig, cases: NeuralCases) -> None:
         config.profile_id != RUN_PROFILE_ID or config.run_observation_fingerprint != contract.run_fingerprint
     ):
         raise ContractError("Run config does not pin the accepted v3 Run observation")
+    if config.mode in {"standard-standalone", "standard-run"}:
+        if (contract.standard_combat_fingerprint is None
+                or config.standard_view_fingerprint != contract.standard_combat_fingerprint):
+            raise ContractError("Standard config does not pin the accepted Standard combat view")
+        if config.mode == "standard-run" and (
+            contract.standard_run_fingerprint is None
+            or config.standard_run_fingerprint != contract.standard_run_fingerprint
+        ):
+            raise ContractError("Standard Run config does not pin the accepted Standard Run observation")
+        if type(config.workers) is not int or not 1 <= config.workers <= 256:
+            raise ContractError("Standard config workers must be an integer in [1, 256]")
     if not config.accepted_identities or any(
         config.mode not in identity.accepted_raw_mode_mappings or any(
             mapping != contract.raw_mode_mappings.get(mode)
@@ -1016,7 +1027,7 @@ def _validate_factory_inputs(config: NeuralConfig, cases: NeuralCases) -> None:
         raise ContractError("make_driver cases do not match the authenticated config manifest")
     if cases.partition not in {"train", "selection", "final"}:
         raise ContractError("unsupported neural case partition")
-    if config.mode not in {"standalone", "run"}:
+    if config.mode not in {"standalone", "run", "standard-standalone", "standard-run"}:
         raise ContractError("unsupported neural driver mode")
     if not cases.for_mode(config.mode):
         raise ContractError(f"case manifest has no {config.mode} cases")
@@ -1062,6 +1073,8 @@ def make_driver(config: NeuralConfig, cases: NeuralCases) -> CombatDriver:
     the driver is returned.
     """
     _validate_factory_inputs(config, cases)
+    if config.mode in {"standard-standalone", "standard-run"}:
+        raise ContractError(f"{config.mode} driver is not yet supported")
     runtime = _load_native_runtime()
     _verify_native_build(runtime.native, config.environment_revision)
     if config.mode == "standalone":

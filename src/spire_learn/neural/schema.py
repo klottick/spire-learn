@@ -1,4 +1,4 @@
-"""Strict, dependency-free parsing and validation for the accepted common view."""
+"""Strict, dependency-free parsing and validation for the accepted combat views."""
 
 from __future__ import annotations
 
@@ -14,32 +14,27 @@ from types import MappingProxyType
 import weakref
 
 from spire_learn.contracts import ContractError
-from spire_learn.neural.config import (
-    ACCEPTED_GYM_REVISION,
-    COMMON_VIEW_FINGERPRINT,
-    COMMON_VIEW_ID,
-)
+from spire_learn.neural.config import COMMON_VIEW_FINGERPRINT
 from spire_learn.neural.contracts import BufferArray, CombatFrame, Lifecycle
 from spire_learn.neural.gym_contracts import LEGACY_CONTRACT, contract_for_schema
+from spire_learn.neural.views import COMMON_V1, ViewSpec, view_for_id
 
 
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}\Z")
-_COMBAT_VIEW_ID = "spire-gym-combat-policy-view-v1"
-_PROFILE_ID = "IroncladCombatPolicy"
 _ARRAY_LAYOUT = "owned_c_contiguous_native_endian_row_major"
-_FINGERPRINT_PREFIX = b"spire-gym/combat-policy-view/v1\0"
 _PARSER_AUTHORITY = object()
 _CHOICE_VERBS = frozenset({"choose"})
 _POTION_VERBS = frozenset({"use_potion", "discard_potion"})
 
 
-def _schema_contract(fingerprint: str, revision: str | None = None):
+def _schema_contract(fingerprint: str, revision: str | None = None, view: ViewSpec = COMMON_V1):
     # Keep the established legacy alias for synthetic structural fixtures;
     # deployed descriptors must still match their complete native body hash.
-    if fingerprint == COMMON_VIEW_FINGERPRINT:
+    if view is COMMON_V1 and fingerprint == COMMON_VIEW_FINGERPRINT:
         return LEGACY_CONTRACT
+    field = "common_fingerprint" if view is COMMON_V1 else "standard_combat_fingerprint"
     try:
-        return contract_for_schema(fingerprint, revision)
+        return contract_for_schema(fingerprint, revision, field=field)
     except ValueError as error:
         raise ContractError(str(error)) from error
 
@@ -176,15 +171,18 @@ class CombatSchema:
     tensors: Mapping[str, TensorSpec]
     _parser_authority: InitVar[object]
 
+    @property
+    def view(self) -> ViewSpec:
+        return view_for_id(self.schema_id)
+
     def __post_init__(self, _parser_authority: object) -> None:
         if _parser_authority is not _PARSER_AUTHORITY:
             raise ContractError("CombatSchema instances must come from the authenticated parser")
-        contract = _schema_contract(self.schema_fingerprint, self.gym_revision)
+        view = view_for_id(self.schema_id)
+        contract = _schema_contract(self.schema_fingerprint, self.gym_revision, view)
         if self.gym_revision != contract.source_revision:
             raise ContractError("CombatSchema Gym revision is not accepted")
-        if self.schema_id != COMMON_VIEW_ID:
-            raise ContractError("CombatSchema common-view ID is not accepted")
-        if self.profile_id != _PROFILE_ID:
+        if self.profile_id != view.profile_id:
             raise ContractError("CombatSchema profile ID is not accepted")
         if not isinstance(self.descriptor_digest, str) or _FINGERPRINT.fullmatch(
             self.descriptor_digest
@@ -423,7 +421,17 @@ def _parse_descriptor_columns(
 def parse_common_descriptor(
     raw: Mapping[str, object], *, revision: str | None = None,
 ) -> CombatSchema:
-    """Parse and authenticate the accepted Gym common combat descriptor.
+    """Parse and authenticate the accepted Gym common combat descriptor."""
+    schema = parse_combat_descriptor(raw, revision=revision)
+    if schema.view is not COMMON_V1:
+        raise ContractError("descriptor is not the accepted common view")
+    return schema
+
+
+def parse_combat_descriptor(
+    raw: Mapping[str, object], *, revision: str | None = None,
+) -> CombatSchema:
+    """Parse and authenticate an accepted Gym combat view descriptor.
 
     Pass the configured Gym revision: several releases share one fingerprint,
     and without a revision only an unambiguous fingerprint is accepted.
@@ -437,15 +445,14 @@ def parse_common_descriptor(
         raise ContractError("descriptor fingerprint must be lowercase SHA-256 hex")
     body = dict(normalized)
     del body["fingerprint"]
+    view = view_for_id(body.get("schema_id"))
     encoded = _canonical_json(body)
-    native_fingerprint = hashlib.sha256(_FINGERPRINT_PREFIX + encoded).hexdigest()
+    native_fingerprint = hashlib.sha256(view.fingerprint_domain + encoded).hexdigest()
     if supplied != native_fingerprint:
         raise ContractError("descriptor body does not match the supplied and accepted fingerprint")
-    contract = _schema_contract(supplied, revision)
+    contract = _schema_contract(supplied, revision, view)
 
-    if body.get("schema_id") != COMMON_VIEW_ID:
-        raise ContractError("descriptor common-view ID is not accepted")
-    if body.get("profile_id") != _PROFILE_ID:
+    if body.get("profile_id") != view.profile_id:
         raise ContractError("descriptor profile ID is not accepted")
     if body.get("array_layout") != _ARRAY_LAYOUT:
         raise ContractError("descriptor array layout is not accepted")
@@ -544,8 +551,8 @@ def parse_common_descriptor(
 
     return CombatSchema(
         gym_revision=contract.source_revision,
-        schema_id=COMMON_VIEW_ID,
-        profile_id=_PROFILE_ID,
+        schema_id=view.view_id,
+        profile_id=view.profile_id,
         schema_fingerprint=supplied,
         descriptor_digest=hashlib.sha256(encoded).hexdigest(),
         array_layout=_ARRAY_LAYOUT,
@@ -1005,11 +1012,16 @@ def candidates(frame: CombatFrame, schema: CombatSchema) -> tuple[CombatCandidat
     return tuple(result)
 
 
-def parse_lifecycle(info: Mapping[str, object]) -> Lifecycle:
+def parse_lifecycle(info: Mapping[str, object], view: ViewSpec = COMMON_V1) -> Lifecycle:
     """Copy only the documented lifecycle fields from boundary metadata."""
     metadata = _required_mapping(info, "lifecycle info")
-    if metadata.get("combat_view_id") != _COMBAT_VIEW_ID:
-        raise ContractError("lifecycle combat_view_id is not the accepted common view")
+    if metadata.get("combat_view_id") != view.lifecycle_view_id:
+        raise ContractError("lifecycle combat_view_id is not the accepted combat view")
+    if metadata.get("routing") not in view.routings:
+        raise ContractError("lifecycle routing is not accepted for this combat view")
+    last_exit = metadata.get("last_exit")
+    if isinstance(last_exit, Mapping) and last_exit.get("outcome") not in view.outcomes:
+        raise ContractError("lifecycle last_exit outcome is not accepted for this combat view")
     required = (
         "active", "routing", "selection_owner", "active_visit", "combats_entered",
         "combats_settled", "last_exit",
@@ -1039,6 +1051,7 @@ __all__ = [
     "ContractError",
     "TensorSpec",
     "candidates",
+    "parse_combat_descriptor",
     "parse_common_descriptor",
     "parse_lifecycle",
     "validate_frame",

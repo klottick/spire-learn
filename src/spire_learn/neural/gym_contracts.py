@@ -102,17 +102,28 @@ def contracts_for_fingerprint(fingerprint: str) -> tuple[GymContract, ...]:
     )
 
 
-def contract_for_schema(fingerprint: str, revision: str | None) -> GymContract:
-    """Select by revision; without one, accept only an unambiguous fingerprint."""
+def contract_for_schema(
+    fingerprint: str, revision: str | None, *, field: str = "common_fingerprint",
+) -> GymContract:
+    """Select by revision; without one, accept only an unambiguous fingerprint.
+
+    ``field`` names the contract fingerprint the descriptor must equal:
+    ``common_fingerprint`` or ``standard_combat_fingerprint``.
+    """
+    if field not in {"common_fingerprint", "standard_combat_fingerprint"}:
+        raise ValueError("unsupported combat view fingerprint field")
     if revision is not None:
         contract = contract_for_revision(revision)
-        if fingerprint != contract.common_fingerprint:
-            raise ValueError("common combat view fingerprint does not match the Gym revision")
+        if fingerprint != getattr(contract, field):
+            raise ValueError("combat view fingerprint does not match the Gym revision")
         return contract
-    matches = contracts_for_fingerprint(fingerprint)
+    matches = tuple(
+        contract for contract in CONTRACTS
+        if type(fingerprint) is str and fingerprint == getattr(contract, field)
+    )
     if not matches:
-        raise ValueError("unsupported common combat view fingerprint")
+        raise ValueError("unsupported combat view fingerprint")
     if len(matches) > 1:
-        raise ValueError("common combat view fingerprint is shared by several Gym revisions; "
+        raise ValueError("combat view fingerprint is shared by several Gym revisions; "
                          "the configured revision is required")
     return matches[0]

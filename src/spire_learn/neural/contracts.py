@@ -9,26 +9,12 @@ import re
 from types import MappingProxyType
 
 from spire_learn.contracts import ContractError
-from spire_learn.neural.gym_contracts import COMMON_FINGERPRINTS
+from spire_learn.neural.views import COMMON_V1, view_for_fingerprint
 
 
 _FINGERPRINT = re.compile(r"[0-9a-fA-F]{64}\Z")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/@+-]*\Z")
 _COMMON_VIEW_FINGERPRINT = "02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78"
-_COMMON_VALUE_GROUPS = {
-    "player", "permanent_cards", "combat_cards", "enemies", "powers", "relics",
-    "potions", "selection", "selection_counts", "actions", "combat_state", "known_draw",
-}
-_COMMON_OCCUPIED_GROUPS = {
-    "permanent_cards", "combat_cards", "enemies", "powers", "relics", "potions",
-    "selection", "actions", "known_draw",
-}
-_COMMON_ACTOR_TENSOR_NAMES = frozenset(
-    _COMMON_VALUE_GROUPS
-    | {f"{name}_known" for name in _COMMON_VALUE_GROUPS}
-    | {f"{name}_occupied" for name in _COMMON_OCCUPIED_GROUPS}
-    | {"action_mask"}
-)
 
 
 def _finite_number(value: object, name: str) -> float:
@@ -101,11 +87,16 @@ class CombatFrame:
         copied = dict(self.tensors)
         if not isinstance(self.schema_fingerprint, str) or _FINGERPRINT.fullmatch(self.schema_fingerprint) is None:
             raise ContractError("schema_fingerprint must be 64 hexadecimal characters")
-        if (self.schema_fingerprint != _COMMON_VIEW_FINGERPRINT
-                and self.schema_fingerprint not in COMMON_FINGERPRINTS):
-            raise ContractError("CombatFrame schema_fingerprint is not the accepted common view")
-        if any(not isinstance(name, str) or name not in _COMMON_ACTOR_TENSOR_NAMES
-               for name in copied):
+        # Synthetic fixtures may patch the module-level common fingerprint.
+        if self.schema_fingerprint == _COMMON_VIEW_FINGERPRINT:
+            view = COMMON_V1
+        else:
+            try:
+                view = view_for_fingerprint(self.schema_fingerprint)
+            except ContractError:
+                raise ContractError("CombatFrame schema_fingerprint is not an accepted combat view") from None
+        allowed = view.tensor_names
+        if any(not isinstance(name, str) or name not in allowed for name in copied):
             raise ContractError("CombatFrame contains a tensor outside the public actor-input descriptor")
         if any(not isinstance(value, BufferArray) for value in copied.values()):
             raise ContractError("CombatFrame tensors must be BufferArray records")

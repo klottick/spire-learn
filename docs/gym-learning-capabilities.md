@@ -1,22 +1,23 @@
 # Gym capabilities for evidence-informed learning
 
-Updated **2026-11-02** against the delivered Gym build
-`afb51f5f222b4c4331ed34067c5eebeda606db91`, native SHA256
-`1656e912d88b91043f3a1bc7632989638b63bd2b5554b53703d9484658990eac`.
-Learn verified the release packet, its 735 extension source inputs and 23
-packaged Python/stub files against the clean accepted source without importing
-Gym. **Both Learn adapters now pass the bounded zero-gameplay qualification**
-on this build. The old `a86df922` runtime and its check remain historical evidence.
-The [migration record](neural-gym-migration.md) records the changed vocabulary,
-shapes, exact pins, fresh-weight requirement and qualification boundary.
-Source availability, imported descriptor checks and actual gameplay are separate
-evidence grades.
+Updated **2026-11-12** for Gym 1.0.0, native revision
+`1929e18b9f44372e020877bd62f2a5c9dee3e64e`. Learn adopts its Standard combat
+and Run views through the four templates under
+`configs/neural/gym-v1.0.0/`. Gym 1.0.0 delivered public-information branching
+(`PublicSearch`, request `spire-2o7`) and tactical combat starts (request
+`spire-831`) on Standard roots. Learn has not integrated either capability:
+the PublicSearch teacher and tactical-start curricula remain follow-up work.
+The [Gym 1.0.0 migration record](neural-gym-v1-migration.md) lists identities,
+rules changes, qualification scope and current limits. The November 2
+assessment below is retained as historical context where its interface claims
+were specific to the earlier release.
 
 The [learning-strategy review](learning-strategies.md) motivates the questions
 below. The delivered API supplies the foundation for the existing PPO experiment and many
-imitation/curriculum experiments. The main missing public capability for a
-different strategy family is **safe decision-time branching for search**.
-Learner compatibility and fault evidence need attention before further training.
+imitation/curriculum experiments. Gym now supplies safe decision-time branching
+and tactical starts on Standard roots; integrating and evaluating them is Learn
+work. Learner compatibility and fault evidence need attention before further
+training.
 
 ## Capability map
 
@@ -26,33 +27,34 @@ Learner compatibility and fault evidence need attention before further training.
 | Imitation from a public-information policy | A teacher can read the same observation and choose a legal action through the existing facade. | Collecting demonstrations, scoring teacher quality and training on them are Learn work. A built-in expert or dataset is not required from Gym. |
 | Randomized decks and focused entry-deck lessons | Strict catalogs let callers choose supported encounters, decks/upgrades, HP, relics and potions; Gym owns shuffle/startup/enemies. | Already available for the finite admitted content. Sampling distributions, difficulty allocation and lesson outcomes belong to Learn. |
 | Learned card acquisition and Run decisions | `RunEnv` exposes the full Run observation/legal dispatch; `combat_view()` supplies a shared combat-facing view and lifecycle. | The existing fixed noncombat controller is a Learn limitation. Broader content remains bounded by the selected Run profile. |
-| Public-information MCTS/lookahead or search-generated demonstrations | Modern standalone and Run Python classes expose no public fork/branch/restore-with-continuation or public-belief sampling method. | Actual interface gap for efficient native search from the current decision. Requires Gym-owned design if pursued. |
-| Late-turn curricula / expert iteration on the same position | Catalog reset creates a fresh combat from owned resources; it cannot specify an arbitrary hand, turn, powers or queued state. | Restricted capability. Existing entry lessons are possible; validated tactical-start distributions or branchable public states would enable additional experiments. |
+| Public-information MCTS/lookahead or search-generated demonstrations | Gym 1.0.0 delivers `PublicSearch` branching on Standard roots. | Gym capability delivered (`spire-2o7`); Learn's search teacher and expert-iteration integration remain follow-up work. Use only the public-information contract, not exact-world state. |
+| Late-turn curricula / expert iteration on the same position | Gym 1.0.0 delivers validated tactical combat starts on Standard roots. | Gym capability delivered (`spire-831`); Learn has not added tactical-start curricula and must validate its distributions before use. |
 | Text/mechanic-aware teachers or semantic encoders | New `spire_lab.card_metadata.load()` / `_native.card_metadata()` exports versioned static cost, target, keywords, base values, upgrades and support metadata, joined by public card ID. | `spire-90f` is delivered upstream. Complete card-effect structure and natural-language mechanics are still absent. Live observations and profile admission remain authoritative; Learn owns encoding and teacher use. |
 | Long campaigns and useful fault diagnosis | Native faults freeze owners; existing diagnostics and reproduction APIs retain fault context. The latest packet reports passing replays at the earlier `spire-tsw`, `spire-bhl` and `spire-14g` fault points. | These are upstream fixes/replays, not a completed Learn reliability campaign. Learn still needs pending-action/first-fault capture and explicit qualification of its new adapter path. |
 | More normal-Run throughput | Standalone has a native serial batch, B=1..256, with explicit masked resets. The inspected Python `RunEnv` is single-session. | Potential delivery/performance gap for full-Run scaling, not a correctness blocker. Profile first; independent workers and current batching remain options. |
 
-## Search needs a stronger contract than an exact-state clone
+## Search needs a public-information contract
 
-The inspected modern Python surfaces are
+The November 2 audit of the earlier Python surfaces found that those interfaces
+exposed
 [`IroncladCombatEnv`](https://github.com/klottick/spire-gym/blob/afb51f5f222b4c4331ed34067c5eebeda606db91/python/spire_lab/gymnasium/ironclad.py),
 [`IroncladCombatVectorEnv`](https://github.com/klottick/spire-gym/blob/afb51f5f222b4c4331ed34067c5eebeda606db91/python/spire_lab/gymnasium/ironclad_vector.py),
 [`RunEnv`](https://github.com/klottick/spire-gym/blob/afb51f5f222b4c4331ed34067c5eebeda606db91/python/spire_lab/gymnasium/run.py)
-and their [`_native.pyi` signatures](https://github.com/klottick/spire-gym/blob/afb51f5f222b4c4331ed34067c5eebeda606db91/python/spire_lab/_native.pyi).
-None advertises an independent branch that can be stepped from the current
-combat decision. Normal Run recording/replay is useful for reproduction, but
-is not a callable fork returning a live alternative-action environment. The
-modern Ironclad v1/v2 facade does not promise a semantic replay interface.
+and their [`_native.pyi` signatures](https://github.com/klottick/spire-gym/blob/afb51f5f222b4c4331ed34067c5eebeda606db91/python/spire_lab/_native.pyi),
+but no independent public branch interface. Gym 1.0.0 subsequently delivered
+`PublicSearch` for Standard roots, so that earlier availability statement no
+longer describes the current release. Learn has not integrated that API yet.
+Normal Run recording/replay remains useful for reproduction and is separate
+from the player-information search contract.
 
-Internal Rust snapshots and the older Python combat model are not evidence of
-a public planning contract over the adopted modern engine. Copying those
-internals into Learn would duplicate game rules and introduce compatibility
-and hidden-state problems.
+Internal snapshots and the older Python combat model are not substitutes for
+Gym's public planning contract. Learn must not duplicate engine state or infer
+hidden future draws from exact-world branches.
 
-If search is pursued, Gym should own authoritative transitions and branch
-creation. A suitable future interface would need independent branch ownership,
-bounded effects/costs, cleanup, unchanged live-root state, legal-action mapping
-and declared chance semantics. Its design must distinguish:
+Gym owns authoritative transitions and branch creation. Learn's integration
+must use independent branch ownership, bounded effects/costs, cleanup,
+unchanged live-root state, legal-action mapping and declared chance semantics.
+Search outcomes that drive action selection must distinguish:
 
 - **Exact-world reproduction**, used only to diagnose/reproduce an execution.
 - **Player-information planning**, whose sampled worlds are consistent with
@@ -65,7 +67,10 @@ contract. Gym owns that semantics; Learn owns MCTS, action selection and teacher
 distillation. The literature motivates this capability but does not establish
 that it is the next most cost-effective experiment.
 
-## Coverage: do not request work Gym already contains
+## Historical coverage: do not request work Gym already contains
+
+This November 2 snapshot predates Standard support in Gym 1.0.0 and records the
+Ironclad-only coverage assessment at that time.
 
 The failed campaign used the then-frozen `ironclad-combat-v1` / common-view-v1 profile:
 75 Red cards and 43 admitted encounter setups, with finite relic/potion support.
@@ -147,16 +152,20 @@ actor/critic features.
 
 ## What to request upstream, and what stays here
 
-1. **Immediate:** migrate Learn to the delivered, source-matched fix release and
-   repair its capture gap. Do not retain old binary/descriptor pairings or reuse
-   old checkpoints under new categorical IDs.
-2. **If search/teacher experiments become a priority:** design a bounded,
-   public-information-safe native branch/chance interface. This is an additive
-   environment capability, not a request to put MCTS or PPO into Gym.
-3. **Optional:** consume the delivered card metadata in a semantic encoder or
+1. **Current:** Learn adopts the source-matched Gym 1.0.0 release and Standard
+   views. Complete the one-reset qualification and preserve the capture gap
+   evidence. Do not retain old binary/descriptor pairings or reuse old
+   checkpoints under new categorical IDs.
+2. **Follow-up in Learn:** integrate Gym 1.0.0 `PublicSearch` into a bounded,
+   public-information-safe search teacher and measure teacher quality before
+   expert iteration. Gym owns authoritative branch/chance semantics; Learn
+   owns search, action selection and distillation.
+3. **Follow-up in Learn:** evaluate Gym's delivered tactical starts as a
+   curriculum with validated public scenarios.
+4. **Optional:** consume the delivered card metadata in a semantic encoder or
    teacher; request richer mechanics against a concrete missing field.
-   Validated tactical starts, broader Python profiles and normal-Run batching
-   remain separate improvements needing a consumer and cost/benefit review.
+   Broader Python profiles and normal-Run batching remain separate improvements
+   needing a consumer and cost/benefit review.
 
 PPO variants, imitation losses, replay datasets, curricula, adaptive sampling,
 model encoders, reward shaping, teacher choice and evaluation design remain

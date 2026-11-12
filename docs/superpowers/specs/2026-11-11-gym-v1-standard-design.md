@@ -76,7 +76,7 @@ which Git ignores:
 
    | View | `view_id` | `profile_id` | Domain | Groups | Routings | Outcomes |
    | --- | --- | --- | --- | --- | --- | --- |
-   | Common v1 | `spire-gym-combat-policy-view-v1` | `IroncladCombatPolicy` | `spire-gym/combat-policy-view/v1\0` | the existing 12 | `combat`, `combat_selection` | `victory`, `death` |
+   | Common v1 | `spire-gym-combat-policy-view-v1` | `IroncladCombatPolicy` | `spire-gym/combat-policy-view/v1\0` | the existing 12 | `combat`, `combat_selection`, `noncombat` | `victory`, `death` |
    | Standard combat v1 | `spire-gym-standard-combat-view-v1` | `StandardCombat` | `spire-gym/combat-view/standard/v1\0` | the 16 below | `combat`, `combat_selection`, `noncombat` | `victory`, `death`, `escaped` |
 
    The 16 Standard combat groups are `combat_context`, `player`,
@@ -94,13 +94,19 @@ which Git ignores:
      - a `spire-gym-standard-combat-catalog-v1` catalog.
 
      This mode takes only `fresh_start` entries.
-   - **`standard-run`** uses `RunVectorEnv(profile="standard")` with:
+   - **`standard-run`** uses scalar `RunEnv(profile="standard")` with:
      - `autoreset_mode="disabled"`, `fault_policy="freeze"`;
      - `combat_views()` for combat;
      - Run `action_mask` legal indices for non-combat decisions, which are
        chosen by the existing random controller (`collector.py:605`).
+     - one row and `workers=1`; the Run-mode driver is batch-1.
    - Cases allow `character` in `ironclad|silent|defect|watcher` and
      `ascension` in 0–20 only in these modes. Existing modes stay Ironclad A0.
+
+   **Amended 2026-11-12:** Common v1 already routes Run decisions through
+   `noncombat`, so its registry entry includes that routing. The Standard Run
+   adapter is scalar `RunEnv`, not `RunVectorEnv`: the driver is batch-1 and
+   the Standard Run config pins one row and one worker.
 6. **Escape is a natural outcome.** `escaped` settles a Standard combat with
    reward 0. It is neither a win nor a fault, and it must never be retried.
    Run-mode escapes continue the Run.

@@ -283,6 +283,12 @@ also need a supported Gym interface. Existing Gym requests `spire-2o7` and
 `spire-831` cover those gaps; static metadata request `spire-90f` is delivered.
 This investigation creates no duplicate Gym issue or upstream change.
 
+**2026-11-12 update:** Gym 1.0.0 delivered `spire-2o7` PublicSearch branching
+and `spire-831` tactical combat starts on Standard roots. Learn adopts the
+Standard combat and Run views; the PublicSearch teacher and tactical-start
+curricula remain follow-up work. See the [Gym 1.0.0 migration
+record](neural-gym-v1-migration.md).
+
 Deck acquisition remains a separate later policy: realistic supplied decks help
 combat training, but do not teach reward selection, shopping or path planning.
 For the eventual full-game objective, the natural extension is hierarchical:

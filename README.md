@@ -83,13 +83,12 @@ record the retained audit, independent review and P1 Gym issue `spire-14g`.
 The original Learn audit did not determine the internal cause. Training is
 stopped; the consumed campaign cannot be retried.
 
-Learn has now migrated both adapters to the November 2 Gym build `afb51f5f`,
-which includes later fault fixes and reordered public vocabularies. A released
-CPU-only check verified the exact binary, complete schema and card metadata,
-and constructed/closed both real adapters with zero gameplay. Future runs on
-this release require fresh weights; old checkpoint IDs cannot be relabeled.
-See the [migration record](docs/neural-gym-migration.md) for the new templates,
-pins and limits. No new training was launched by this migration.
+Learn now pins Spire Gym 1.0.0 native revision
+`1929e18b9f44372e020877bd62f2a5c9dee3e64e` and adopts its Standard combat and
+Run views. The four mode templates and fresh-weight/rules qualifications are
+documented in the [Gym 1.0.0 migration record](docs/neural-gym-v1-migration.md).
+The one-reset native qualification is pending controller run; no training run
+was launched by this migration.
 
 The separately approved fresh-weight campaign on this release has now completed
 its development comparisons. Across 438,272 learned decisions, the final mixed

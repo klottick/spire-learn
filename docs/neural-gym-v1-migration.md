@@ -57,6 +57,33 @@ Standard combat also supports those routings and the `escaped` outcome. An
 escape settles naturally with reward 0: it is neither a win nor a death, fault
 or retry. Run-mode escapes continue the Run.
 
+Both Standard modes run through the existing collector and runner by driver
+family: `standard-standalone` behaves as standalone combat and `standard-run`
+as combat inside a Run. Rollouts, identities and run metadata keep the exact
+mode, and run metadata records the Standard profile, content, rules and reward
+identities. Curriculum case sampling, scenario streams and calibration remain
+legacy Ironclad standalone features.
+
+### Conformance with the real 1.0.0 build
+
+Native qualification and a driver soak found three Standard-only differences
+from the common view. Learn now accepts each one explicitly, per view:
+
+- Hidden draw-pile cards are `combat_cards` rows in zone `draw` with
+  `zone_position` −1 and known 0 (descriptor `semantics.draw_rows`). This is the
+  only unknown non-reference value that is not padding. The model already
+  zeroes unknown numeric inputs.
+- Potion capacity (16) exceeds every character's slots. Real empty slots are
+  known zeroes, and unused capacity rows are unknown zeroes. Empty orb slots are
+  also published as known zeroes. The common view keeps its rule that every
+  empty potion slot is a known zero.
+- A `standard-combat-v1` episode ends at the combat's own terminal, before Run
+  settlement. Gym keeps the lifecycle active with phase `terminal` and reports
+  the result in `terminal_reason` and the HP fields. Learn's adapter settles
+  that visit as standalone combat does: inactive, with `last_exit` built from
+  `terminal_reason`, the HP fields and the case's own catalog encounter. A
+  terminal with no recognised reason is a contract fault.
+
 ## Rules changes affecting comparability
 
 Gym 1.0.0 changes the rules represented by the combat score, independently of
@@ -67,12 +94,11 @@ process.
 
 - **Turn order** changed, affecting when player and enemy effects resolve.
 - **Louse openings** changed, changing initial enemy behavior and damage.
-- **Lagavulin Poison wake block** changed the block applied when Poison wakes
-  Lagavulin.
+- **Lagavulin** woken by Poison no longer keeps its Block.
 - **Burning elite buffs** now scale with act; the power identifier was renamed
   from `regeneration` to `regenerate`.
-- **Havoc and Exhume** now waive free-play restrictions for their forced card
-  plays.
+- **Autoplayed cards** (for example Havoc, then Exhume) no longer keep their
+  free-play waiver.
 - **Stasis** changed its roll mapping, altering the selected card outcomes.
 - **Power row order** changed in public observations, affecting the mapping of
   categorical rows even when the information remains public.
@@ -103,19 +129,44 @@ parity; RNG-001 and TIME-001 qualifications remain in force.
   roots. Learn has not integrated PublicSearch or tactical-start curricula;
   both are follow-up work.
 - Run noncombat decisions still use the random controller.
-- No training run was part of this migration.
-- Standard combat qualification covers one reset boundary per mode and no
-  gameplay step. It does not establish gameplay conformance or playing strength.
+- No training run was part of this migration, and no learned policy was
+  evaluated on 1.0.0.
+- The soak below uses uniformly random legal actions. It establishes that
+  Learn's adapters accept real 1.0.0 frames and boundaries; it does not
+  establish playing strength or full rules coverage.
+- Standard standalone was soaked with the single authored Ironclad case;
+  other characters were soaked through Standard Runs.
 - Simulator results do not establish transfer to the original game.
 
 ## Qualification status
 
-**pending controller run**
+**Qualified on 2026-11-12** against the verified release build. Every run
+used the offline runtime container `spire-learn/task8-python:cuda-setup-20261028-a`
+(`--network none`, read-only root, repository mounted read-only), the existing
+locked dependency environment and the read-only 1.0.0 overlay. Nothing was
+installed.
 
-The authored `scripts/neural/qualify_gym_v1.py --output DIR` probe constructs
-each of the four adapters, performs one reset per mode, validates the parsed
-public rows, checks the complete native build identity, and closes every
-driver. It has a meta-path guard against importing Torch, TorchRL or
-TensorDict, and it never calls `step`. Its unit tests use fakes and do not
-import `spire_lab`. No native qualification result is recorded here; the
-controller fills in the container run result and evidence.
+- **Build identity.** The wheel (`d157065d…`) and `_native` (`5398d2fd…`)
+  hashes matched the release. `build_info()` reported revision `1929e18b…`,
+  `dirty=false`, profile `release` and the published source and file digests.
+- **Descriptors.** Fixtures captured with `scripts/neural/capture_gym_descriptors.py`
+  matched all three published fingerprints. Common view v1 is byte-identical to
+  the `afb51f5` fixture, and the Standard Run combat view equals the standalone
+  Standard combat view.
+- **Qualification.** `scripts/neural/qualify_gym_v1.py` exited 0 with status
+  `qualified_one_reset_per_mode`: four adapters, four resets, zero steps, each
+  driver closed once, and no training imports. The first two attempts failed
+  on the draw-row and empty-slot differences above. Their outputs are kept
+  beside the passing one.
+- **Driver soak.** A diagnostic drove Learn's real driver with uniformly random
+  legal actions; no learning was involved.
+  - 3,000 steps each in `standalone`, `run`, `standard-standalone` and
+    `standard-run`: 755, 41, 635 and 43 terminals respectively.
+  - 2,000 Standard Run steps for each character at A0 and A20, ending 315 Runs
+    in total.
+  - It exposed the unsettled Standard terminal, and passed with no contract
+    fault after the fix.
+
+The generated outputs are under `artifacts/development/neural-combat/gym-v1.0.0/`
+(`qualification/`, `qualification-failed-1/`, `qualification-failed-2/` and
+`debug/`), which Git ignores.

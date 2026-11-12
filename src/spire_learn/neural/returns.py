@@ -10,7 +10,7 @@ from spire_learn.contracts import ContractError
 from spire_learn.neural.contracts import Lifecycle, ReturnBatch, StepRecord, TaskSignal
 
 
-_NATURAL_OUTCOMES = {"victory": 1.0, "death": -1.0}
+_NATURAL_OUTCOMES = {"victory": 1.0, "death": -1.0, "escaped": 0.0}
 
 
 def task_signal(

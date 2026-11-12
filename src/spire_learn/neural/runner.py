@@ -63,7 +63,7 @@ _DIAGNOSTIC_INTEGER_FIELDS = (
     "attempted_reset_slots", "forwarded_reset_slots", "known_accepted_reset_slots",
     "delivered_reset_slots", "uncertain_reset_slots", "learned_decisions",
     "fixed_decisions", "tasks_started", "task_terminals", "tasks_completed",
-    "victories", "deaths", "faults", "incomplete_decisions",
+    "victories", "deaths", "escaped", "faults", "incomplete_decisions",
     "incomplete_environment_slots", "undispatched_actor_decisions",
     "undispatched_fixed_decisions",
 )
@@ -825,6 +825,7 @@ def _fight_summary(config: NeuralConfig, runtime: Any, records: Sequence[StepRec
     completed = len(fight_rows)
     wins = sum(item["outcome"] == "victory" for item in fight_rows)
     deaths = sum(item["outcome"] == "death" for item in fight_rows)
+    escaped = sum(item["outcome"] == "escaped" for item in fight_rows)
     tasks_started = diagnostics.tasks_started if diagnostics is not None else 0
     run_terminated = any(record.terminated for record in records) if config.mode == "run" else False
     return {
@@ -833,6 +834,8 @@ def _fight_summary(config: NeuralConfig, runtime: Any, records: Sequence[StepRec
             "completed": completed if config.mode == "standalone" else 0,
             "victories": wins if config.mode == "standalone" else 0,
             "deaths": deaths if config.mode == "standalone" else 0,
+            "escaped": escaped if config.mode == "standalone" else 0,
+            "win_rate": wins / completed if completed and config.mode == "standalone" else None,
             "mean_hp_retention": (sum(hp_fractions) / len(hp_fractions) if hp_fractions and config.mode == "standalone" else None),
             "fights": fight_rows if config.mode == "standalone" else [],
         },
@@ -841,6 +844,8 @@ def _fight_summary(config: NeuralConfig, runtime: Any, records: Sequence[StepRec
             "completed": completed if config.mode == "run" else 0,
             "victories": wins if config.mode == "run" else 0,
             "deaths": deaths if config.mode == "run" else 0,
+            "escaped": escaped if config.mode == "run" else 0,
+            "win_rate": wins / completed if completed and config.mode == "run" else None,
             "mean_hp_retention": (sum(hp_fractions) / len(hp_fractions) if hp_fractions and config.mode == "run" else None),
             "fights": fight_rows if config.mode == "run" else [],
         },

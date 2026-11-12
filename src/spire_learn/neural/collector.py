@@ -177,6 +177,7 @@ class Collector:
         self._seed_ordinal = 0
         self._seed_allocations: list[SeedAllocation] = []
         self._resource_checkpoints: list[ResourceCheckpoint] = []
+        self._last_settlement_outcomes: tuple[str | None, ...] = (None,) * batch_size
         self._open_task_decisions: dict[tuple[str, str], int] = {}
         self._run_started_visits: set[tuple[int, int, int]] = set()
         self._inactive_reset_boundary = False
@@ -220,6 +221,7 @@ class Collector:
             "tasks_completed": 0,
             "victories": 0,
             "deaths": 0,
+            "escaped": 0,
             "faults": 0,
             "undispatched_actor_decisions": 0,
             "undispatched_fixed_decisions": 0,
@@ -513,7 +515,7 @@ class Collector:
                 if exit_record is not None:
                     outcome = exit_record.get("outcome")
                     visit = exit_record.get("visit")
-                    if outcome in {"victory", "death"} and type(visit) is int:
+                    if outcome in {"victory", "death", "escaped"} and type(visit) is int:
                         self._append_resource_checkpoint(
                             self._stream_id(slot),
                             self._task_id(slot, boundary),
@@ -674,6 +676,7 @@ class Collector:
             raise ContractError("driver.step returned a non-DriverTransition value")
 
         prepared = []
+        settlement_outcomes: list[str | None] = [None] * self._batch_size
         bootstrap_frames = []
         for slot, (source, result, choice) in enumerate(zip(rows, transitions, choices, strict=True)):
             if result.source != source:
@@ -751,11 +754,13 @@ class Collector:
                     raise ContractError("settled Run visit lacks its public exit checkpoint")
                 outcome = exit_record.get("outcome")
                 visit = exit_record.get("visit")
-                if outcome not in {"victory", "death"} or type(visit) is not int:
+                if outcome not in {"victory", "death", "escaped"} or type(visit) is not int:
                     raise ContractError("settled Run visit has an unsupported outcome")
+                settlement_outcomes[slot] = outcome
                 self._counts["tasks_completed"] += 1
                 self._counts["victories"] += int(outcome == "victory")
                 self._counts["deaths"] += int(outcome == "death")
+                self._counts["escaped"] += int(outcome == "escaped")
                 self._append_resource_checkpoint(
                     record.stream_id, task_id, visit, exit_record, result.successor.frame
                 )
@@ -765,6 +770,7 @@ class Collector:
                 self._needs_reset[slot] = True
 
         self._rows = tuple(item.successor for item in transitions)
+        self._last_settlement_outcomes = tuple(settlement_outcomes)
         self._phase = "ready"
         self._pending_decisions = 0
         self._current_operation_kind = "none"
@@ -776,14 +782,15 @@ class Collector:
             return
         self._phase = "case-sampler-observe"
         for slot, record in enumerate(records):
-            # task_signal has validated each new natural settlement. Termination
-            # alone, sticky exits, faults and segment boundaries do not qualify.
-            if record.task_signal.reward not in (-1.0, 1.0) or record.truncated:
+            # Only a newly settled lifecycle outcome qualifies. This includes
+            # neutral escapes in the win-rate denominator, but not terminal
+            # boundaries, sticky exits, faults or segment cuts.
+            outcome = self._last_settlement_outcomes[slot]
+            if outcome is None or record.truncated:
                 continue
             case = self._slot_cases[slot]
             if case is None:
                 raise ContractError("natural settlement has no retained sampled case")
-            outcome = "victory" if record.task_signal.reward == 1.0 else "death"
             self._case_sampler.observe(case.case_id, outcome)
         self._phase = "ready"
 
@@ -844,6 +851,7 @@ class Collector:
             tasks_completed=self._counts["tasks_completed"],
             victories=self._counts["victories"],
             deaths=self._counts["deaths"],
+            escaped=self._counts["escaped"],
             faults=self._counts["faults"],
             elapsed_seconds=elapsed,
             wall_overshoot_seconds=overshoot,
@@ -952,7 +960,7 @@ class Collector:
                         if not current.lifecycle.active and current.lifecycle.last_exit is not None:
                             exit_record = current.lifecycle.last_exit
                             outcome, visit = exit_record.get("outcome"), exit_record.get("visit")
-                            if outcome in {"victory", "death"} and type(visit) is int:
+                            if outcome in {"victory", "death", "escaped"} and type(visit) is int:
                                 task_id = self._task_id(slot, current)
                                 self._append_resource_checkpoint(
                                     self._stream_id(slot), task_id, visit,

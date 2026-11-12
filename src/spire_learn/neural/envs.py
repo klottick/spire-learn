@@ -31,6 +31,7 @@ from spire_learn.neural.schema import CombatCandidate, CombatSchema, candidates
 from spire_learn.neural.schema import parse_common_descriptor, parse_lifecycle, validate_frame
 from spire_learn.neural.snapshot import snapshot_common
 from spire_learn.neural.gym_contracts import contract_for_revision
+from spire_learn.neural.views import COMMON_V1
 
 
 _MAX_ERROR_TEXT = 512
@@ -327,10 +328,14 @@ class _RunProvider:
     mode = "run"
     batch_size = 1
 
-    def __init__(self, env: object, runtime: _NativeRuntime, run_action_count: int):
+    def __init__(
+        self, env: object, runtime: _NativeRuntime, run_action_count: int,
+        schema: CombatSchema | None = None,
+    ):
         self._env = env
         self._run_action_count = run_action_count
         self.dispatch_action_count = run_action_count
+        self.schema = schema
         self.input_errors = _error_types(runtime.native, ("RunInputError",))
         self.state_errors = _error_types(runtime.native, ("RunStateError",))
 
@@ -342,7 +347,9 @@ class _RunProvider:
         sidecar = _mapping(view, "Run combat_view")
         observation = _mapping(sidecar.get("obs"), "Run combat_view obs")
         info = _mapping(sidecar.get("info"), "Run combat_view info")
-        lifecycle = parse_lifecycle(info)
+        lifecycle = parse_lifecycle(
+            info, view=self.schema.view if self.schema is not None else COMMON_V1
+        )
         if lifecycle.active:
             noncombat_indices: tuple[int, ...] = ()
         else:
@@ -415,7 +422,7 @@ def _row_from_raw(
     dispatch_action_count: int | None = None,
 ) -> DriverRow:
     frame = snapshot_common(raw.observation, schema)
-    lifecycle = parse_lifecycle(raw.info)
+    lifecycle = parse_lifecycle(raw.info, view=schema.view)
     validate_frame(frame, schema)
     if lifecycle.active:
         if raw.noncombat_indices:
@@ -1139,7 +1146,7 @@ def make_driver(config: NeuralConfig, cases: NeuralCases) -> CombatDriver:
             env.combat_observation_spec(), revision=config.environment_revision)
         if schema.schema_fingerprint != config.common_view_fingerprint:
             raise ContractError("Run common descriptor fingerprint disagrees with config")
-        provider = _RunProvider(env, runtime, _run_action_count(run_descriptor))
+        provider = _RunProvider(env, runtime, _run_action_count(run_descriptor), schema)
         return CombatDriver(provider, schema)
     except BaseException as error:
         _close_after_factory_error(env, error)

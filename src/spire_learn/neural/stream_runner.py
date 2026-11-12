@@ -318,7 +318,7 @@ def summarize_development_reports(panel: Mapping[str, object], reports: Mapping[
         case_id = case['case_id']
         annotation = panel['annotations'][case_id]
         report = reports.get(case_id)
-        started = completed = wins = deaths = failed = metric_available = 0
+        started = completed = wins = deaths = escaped = failed = metric_available = 0
         hp_before, hp_after, retention = [], [], []
         if report is not None:
             if not isinstance(report, NeuralReport) or report.summary.get('mode') != 'standalone':
@@ -335,7 +335,8 @@ def summarize_development_reports(panel: Mapping[str, object], reports: Mapping[
                 metric_available = 1
                 started, completed, wins, deaths = (fight[k] for k in
                     ('reached_combat_denominator', 'completed', 'victories', 'deaths'))
-                if any(type(v) is not int or v < 0 for v in (started, completed, wins, deaths)) or not wins + deaths == completed <= started <= 1:
+                escaped = fight.get('escaped', 0)
+                if any(type(v) is not int or v < 0 for v in (started, completed, wins, deaths, escaped)) or not wins + deaths + escaped == completed <= started <= 1:
                     raise ValueError('development fight denominators are inconsistent')
                 if len(fight['fights']) != completed:
                     raise ValueError('resource rows must match actual completed fights')
@@ -359,14 +360,14 @@ def summarize_development_reports(panel: Mapping[str, object], reports: Mapping[
             keys = annotation['cards'] if dimension == 'card' else [annotation[dimension]]
             for key in keys:
                 row = groups.setdefault(key, {'scheduled': 0, 'reported': 0, 'started': 0,
-                    'completed': 0, 'wins': 0, 'deaths': 0, 'censored': 0,
+                    'completed': 0, 'wins': 0, 'deaths': 0, 'escaped': 0, 'censored': 0,
                     'fight_reports': 0, 'fight_reports_missing': 0,
                     'operational_failures': 0, 'hp_samples': 0, 'hp_before_healing_sum': 0,
                     'hp_after_cleanup_sum': 0, 'hp_after_cleanup_samples': 0,
                     'hp_retention_sum': 0.0, 'hp_retention_samples': 0,
                     'potion_use': None, 'potion_use_samples': 0})
                 for name, count in [('scheduled', 1), ('reported', int(report is not None)), ('started', started),
-                    ('completed', completed), ('wins', wins), ('deaths', deaths), ('censored', started - completed),
+                    ('completed', completed), ('wins', wins), ('deaths', deaths), ('escaped', escaped), ('censored', started - completed),
                     ('fight_reports', metric_available),
                     ('fight_reports_missing', int(report is not None) - metric_available),
                     ('operational_failures', failed), ('hp_samples', len(hp_before)),

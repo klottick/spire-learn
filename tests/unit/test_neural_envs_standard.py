@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from spire_learn.contracts import ContractError
+from spire_learn.artifacts.codec import to_json_value
 from spire_learn.neural import envs
 from spire_learn.neural.config import load_neural_config
 from spire_learn.neural.cases import load_neural_cases
@@ -50,6 +51,14 @@ class _BatchArray:
         return self.rows[slot]
 
 
+class _NumpyScalar:
+    def __init__(self, value):
+        self.value = value
+
+    def item(self):
+        return self.value
+
+
 class FakeBatchFaultError(RuntimeError):
     def __init__(self, slots):
         super().__init__("native batch fault with sensitive native detail")
@@ -57,6 +66,10 @@ class FakeBatchFaultError(RuntimeError):
 
 
 class FakeInputError(ValueError):
+    pass
+
+
+class FakeCombatInputError(ValueError):
     pass
 
 
@@ -129,20 +142,29 @@ class FakeStandardVector:
 
     def _info(self):
         values = {
-            "combat_view_id": ["spire-gym-standard-combat-view-v1"] * self.num_envs,
-            "active": [True] * self.num_envs, "routing": ["combat"] * self.num_envs,
+            "combat_view_id": [_NumpyScalar("spire-gym-standard-combat-view-v1")]
+                * self.num_envs,
+            "active": [_NumpyScalar(True)] * self.num_envs,
+            "routing": [_NumpyScalar("combat")] * self.num_envs,
             "selection_owner": [None] * self.num_envs,
-            "active_visit": [0] * self.num_envs, "combats_entered": [1] * self.num_envs,
-            "combats_settled": [0] * self.num_envs,
+            "active_visit": [_NumpyScalar(0)] * self.num_envs,
+            "combats_entered": [_NumpyScalar(1)] * self.num_envs,
+            "combats_settled": [_NumpyScalar(0)] * self.num_envs,
             "last_exit": [None] * self.num_envs,
             "effective_seed": [987654321] * self.num_envs,
             "diagnostic": ["private"] * self.num_envs,
             "slot_fault": [False] * self.num_envs, "fault": ["private"] * self.num_envs,
+            "phase": [_NumpyScalar("decision")] * self.num_envs,
         }
         info = {}
         for key, row in values.items():
             info[key] = row
-            info["_" + key] = [True] * self.num_envs
+            presence = [True] * self.num_envs
+            if key == "phase" and self.num_envs > 1:
+                presence[1] = _NumpyScalar(False)
+            else:
+                presence = [_NumpyScalar(flag) for flag in presence]
+            info["_" + key] = presence
         return info
 
     def reset(self, *, seed=None, options=None):
@@ -185,6 +207,7 @@ class StandardEnvTests(unittest.TestCase):
     def _runtime(self, vector_class):
         native = SimpleNamespace(
             build_info=lambda: dict(PUBLISHED_BUILD),
+            CombatInputError=FakeCombatInputError, CombatStateError=FakeStateError,
             RunInputError=FakeInputError, RunStateError=FakeStateError,
             RunFaultError=FakeRunFaultError, BatchFaultError=FakeBatchFaultError,
         )
@@ -246,19 +269,75 @@ class StandardEnvTests(unittest.TestCase):
         self.assertFalse(FORBIDDEN.intersection(row.frame.tensors))
         driver.close()
 
+    def test_standard_numpy_info_scalars_and_presence_mask(self):
+        driver, fake = self._factory()
+        rows = driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        lifecycle = rows[0].lifecycle
+        self.assertIs(type(lifecycle.active), bool)
+        self.assertIs(type(lifecycle.combats_entered), int)
+        self.assertIs(type(lifecycle.routing), str)
+        self.assertEqual(lifecycle.phase, "decision")
+        self.assertIsNone(rows[1].lifecycle.phase)
+        self.assertNotIn("phase", envs._standard_info_slot(fake._info(), 1))
+        driver.close()
+
     def test_batch_fault_freezes_with_slot_evidence(self):
         driver, fake = self._factory()
         driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
-        fake.next_error = FakeBatchFaultError([{"status": "faulted", "stage": "step",
-                                                "committed": True, "recoverable": False,
-                                                "message": "private native detail"}])
+        fake.next_error = FakeBatchFaultError([
+            {"status": "unaffected", "stage": "step", "committed": False,
+             "recoverable": False, "message": "private native detail"},
+            {"status": "faulted", "stage": "step", "committed": True,
+             "recoverable": False, "message": "private native detail"},
+        ])
         with self.assertRaises(envs.DriverFault) as caught:
             driver.step([0] * driver.batch_size)
-        self.assertEqual(caught.exception.evidence.fault_slots, (0,))
-        self.assertEqual(caught.exception.evidence.fault_slot_statuses, ((0, "faulted"),))
+        self.assertEqual(caught.exception.evidence.fault_slots, (1,))
+        self.assertEqual(caught.exception.evidence.fault_slot_statuses,
+                         ((0, "unaffected"), (1, "faulted")))
         self.assertNotIn("private native detail", repr(caught.exception.evidence))
         self.assertNotIn("sensitive native detail", caught.exception.evidence.message)
         self.assertNotIn("private native detail", caught.exception.evidence.message)
+
+    def test_standard_combat_input_error_on_step_is_recoverable(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        fake.next_error = FakeCombatInputError("invalid batch input")
+        with self.assertRaises(FakeCombatInputError):
+            driver.step([0] * driver.batch_size)
+        self.assertEqual(driver.accepted_steps, 0)
+        self.assertEqual(driver.step([0] * driver.batch_size)[0].native_reward, 0.0)
+        self.assertEqual(driver.accepted_steps, 1)
+        driver.close()
+
+    def test_standard_catalog_preserves_relic_order_and_fingerprint(self):
+        authored = to_json_value(self.cases.for_mode("standard-standalone")[0].entry)
+        authored["relics"] = ["burning_blood", "anchor"]
+        expected = json.loads(
+            (ROOT / "tests/fixtures/neural/standard-combat-catalog-1929e18.json").read_text()
+        )
+        expected["entries"][0]["relics"] = ["burning_blood", "anchor"]
+        self.assertEqual(
+            envs._verify_standard_catalog(expected, [authored]),
+            "0a13a076321511dfef2d7aeff644e2b6f8f37636a965a8daa9055a006880aa99",
+        )
+
+    def test_legacy_catalog_sorts_relics_using_literal_descriptor(self):
+        entry = {
+            "id": "legacy-order-check",
+            "deck": [{"card": "strike", "upgrades": 0}],
+            "relics": ["burning_blood", "anchor"],
+        }
+        descriptor = {
+            "catalog_schema_id": "spire-gym-combat-entry-catalog-v1",
+            "entries": [{
+                "id": "legacy-order-check",
+                "deck": [{"card": "strike", "upgrades": 0}],
+                "relics": ["anchor", "burning_blood"],
+                "relic_counters": {},
+            }],
+        }
+        envs._verify_catalog(descriptor, [entry])
 
     def test_never_calls_privileged_methods(self):
         driver, fake = self._factory()

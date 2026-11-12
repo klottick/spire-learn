@@ -185,11 +185,24 @@ def _load_native_runtime() -> _NativeRuntime:
     )
 
 
-def _error_types(native: object, names: tuple[str, ...]) -> tuple[type[Exception], ...]:
-    result = tuple(getattr(native, name, None) for name in names)
-    if any(not isinstance(item, type) or not issubclass(item, Exception) for item in result):
-        raise ContractError("installed Spire Gym lacks the accepted public error types")
-    return result  # type: ignore[return-value]
+def _error_types(
+    native: object,
+    names: tuple[str, ...],
+    *,
+    optional: tuple[str, ...] = (),
+) -> tuple[type[Exception], ...]:
+    optional_names = frozenset(optional)
+    if not optional_names <= set(names):
+        raise ValueError("optional error names must also be requested names")
+    result: list[type[Exception]] = []
+    for name in names:
+        item = getattr(native, name, None)
+        if item is None and name in optional_names:
+            continue
+        if not isinstance(item, type) or not issubclass(item, Exception):
+            raise ContractError("installed Spire Gym lacks the accepted public error types")
+        result.append(item)
+    return tuple(result)
 
 
 def _mapping(value: object, name: str) -> Mapping[str, object]:
@@ -424,8 +437,16 @@ class _StandardCombatProvider:
         self._env = env
         self._numpy = runtime.numpy
         self.batch_size = batch_size
-        self.input_errors = _error_types(runtime.native, ("RunInputError",))
-        self.state_errors = _error_types(runtime.native, ("RunStateError",))
+        self.input_errors = _error_types(
+            runtime.native,
+            ("CombatInputError", "RunInputError"),
+            optional=("CombatInputError",),
+        )
+        self.state_errors = _error_types(
+            runtime.native,
+            ("CombatStateError", "RunStateError"),
+            optional=("CombatStateError",),
+        )
         self.fault_errors = _error_types(
             runtime.native, ("RunFaultError", "BatchFaultError")
         )
@@ -709,7 +730,10 @@ class CombatDriver:
                         and isinstance(record.get("status"), str)):
                     slot_statuses.append((slot, record["status"]))
             return (
-                tuple(slot for slot, _status in slot_statuses),
+                tuple(
+                    slot for slot, status in slot_statuses
+                    if status not in {"delivered", "unaffected"}
+                ),
                 len(batch_slots) > 64,
                 tuple(slot_statuses),
             )
@@ -1142,7 +1166,7 @@ def _normalized_entry(entry: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(deck, list) or not isinstance(relics, list):
         raise ContractError("standalone case entry has invalid public deck or relics")
     result["deck"] = sorted(deck, key=lambda row: (row["card"], row["upgrades"]))
-    result["relics"] = list(relics)
+    result["relics"] = sorted(relics)
     counters = dict(result.get("relic_counters", {}))
     if "neows_lament" in result["relics"]:
         counters.setdefault("neows_lament", 3)
@@ -1182,7 +1206,7 @@ def _normalized_standard_entry(entry: Mapping[str, object]) -> dict[str, object]
     result["deck"] = sorted(
         normalized_deck, key=lambda row: (row["card"], row["upgrades"], row["misc"])
     )
-    result["relics"] = sorted(relics)
+    result["relics"] = list(relics)
     result["relic_counters"] = dict(result.get("relic_counters", {}))
     result["burning"] = result.get("burning")
     result["start_kind"] = "synthetic_position" if "position" in result else "fresh_start"

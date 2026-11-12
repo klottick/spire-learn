@@ -38,7 +38,8 @@ class FreshBootstrapTests(unittest.TestCase):
     def test_actual_probe_fixture_has_two_distinct_legal_actions(self):
         from scripts.neural.fresh_curriculum_bootstrap import initial_probe_frame
         from spire_learn.neural.schema import parse_common_descriptor,candidates
-        schema=parse_common_descriptor(json.loads(Path('tests/fixtures/neural/common-afb51f5.json').read_text()))
+        schema=parse_common_descriptor(json.loads(Path('tests/fixtures/neural/common-afb51f5.json').read_text()),
+            revision='afb51f5f222b4c4331ed34067c5eebeda606db91')
         frame=initial_probe_frame(schema)
         self.assertEqual([(row.index,row.verb) for row in candidates(frame,schema)],
                          [(2,'play_card'),(1023,'end_turn')])

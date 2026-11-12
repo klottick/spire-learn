@@ -1023,6 +1023,18 @@ def _verify_native_build(native: object, expected_revision: str) -> None:
     if (identity.get("extension") != "spire-python"
             or identity.get("revision") != expected_revision):
         raise ContractError("loaded Spire Gym extension does not match the accepted revision")
+    build = contract_for_revision(expected_revision).build
+    if build is None:
+        return
+    features = identity.get("features")
+    if (identity.get("dirty") is not False
+            or identity.get("revision") != build.revision
+            or identity.get("profile") != build.profile
+            or identity.get("source_digest") != build.source_digest
+            or identity.get("file_digest") != build.file_digest
+            or not isinstance(features, (list, tuple))
+            or tuple(features) != build.features):
+        raise ContractError("loaded Spire Gym extension does not match the published release build")
 
 
 def _close_after_factory_error(env: object, error: BaseException) -> None:
@@ -1057,7 +1069,8 @@ def make_driver(config: NeuralConfig, cases: NeuralCases) -> CombatDriver:
             partition=config.partition,
         )
         try:
-            schema = parse_common_descriptor(env.observation_spec())
+            schema = parse_common_descriptor(
+                env.observation_spec(), revision=config.environment_revision)
             if schema.schema_fingerprint != config.common_view_fingerprint:
                 raise ContractError("Gym common descriptor fingerprint disagrees with config")
             _require_environment_identity(
@@ -1122,7 +1135,8 @@ def make_driver(config: NeuralConfig, cases: NeuralCases) -> CombatDriver:
             },
             name="Run environment identity",
         )
-        schema = parse_common_descriptor(env.combat_observation_spec())
+        schema = parse_common_descriptor(
+            env.combat_observation_spec(), revision=config.environment_revision)
         if schema.schema_fingerprint != config.common_view_fingerprint:
             raise ContractError("Run common descriptor fingerprint disagrees with config")
         provider = _RunProvider(env, runtime, _run_action_count(run_descriptor))

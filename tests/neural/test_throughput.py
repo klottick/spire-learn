@@ -123,7 +123,7 @@ class NeuralThroughputTests(unittest.TestCase):
         cls.torch = torch
         cls.schema = parse_common_descriptor(json.loads(
             (root / "tests/fixtures/neural/common-afb51f5.json").read_text()
-        ))
+        ), revision="afb51f5f222b4c4331ed34067c5eebeda606db91")
         cls.config = load_neural_config(root / "configs/neural/gym-20261102/standalone.toml")
         cls.candidates = (
             CandidateInput(2, "play_card", "combat_cards", 0, "enemies", 0),

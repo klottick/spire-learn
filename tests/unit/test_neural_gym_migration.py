@@ -47,7 +47,7 @@ class GymMigrationTests(unittest.TestCase):
         from spire_learn.neural.features import feature_contract
         from tests.neural._support import authored_frame
         raw = json.loads(Path("tests/fixtures/neural/common-afb51f5.json").read_text())
-        accepted = schema.parse_common_descriptor(raw)
+        accepted = schema.parse_common_descriptor(raw, revision=REVISION)
         self.assertEqual(accepted.gym_revision, REVISION)
         self.assertEqual(accepted.tensors["combat_cards"].shape[0], 1024)
         self.assertEqual(accepted.tensors["known_draw"].shape[0], 1024)
@@ -67,7 +67,7 @@ class GymMigrationTests(unittest.TestCase):
         )
         from tests.neural._support import authored_frame
         accepted = schema.parse_common_descriptor(json.loads(
-            Path("tests/fixtures/neural/common-afb51f5.json").read_text()))
+            Path("tests/fixtures/neural/common-afb51f5.json").read_text()), revision=REVISION)
         frame = authored_frame(accepted)
         chosen = schema.candidates(frame, accepted)[0].index
         record = StepRecord("stream", "task", "decision", frame, frame, 0., False, False,
@@ -91,7 +91,7 @@ class GymMigrationTests(unittest.TestCase):
     def test_registry_binds_exact_revision_and_immutable_mapping_ids(self):
         try:
             from spire_learn.neural.gym_contracts import (
-                contract_for_revision, contract_for_fingerprint,
+                contract_for_revision, contracts_for_fingerprint,
             )
         except ImportError as error:
             self.fail(f"release-contract API missing: {error}")
@@ -102,15 +102,15 @@ class GymMigrationTests(unittest.TestCase):
                          f"spire-learn-standalone-common-v1@{COMMON}")
         self.assertEqual(current.raw_mode_mappings["run"],
                          f"spire-learn-run-policy-v3-common-v1@{RUN}:{COMMON}")
-        self.assertEqual(contract_for_fingerprint(COMMON), current)
+        self.assertIn(current, contracts_for_fingerprint(COMMON))
         with self.assertRaises(TypeError):
             current.raw_mode_mappings["run"] = "replacement"
         for revision in ("0" * 40, True, None):
             with self.subTest(revision=revision), self.assertRaises(ValueError):
                 contract_for_revision(revision)
         for fingerprint in ("0" * 64, True, None):
-            with self.subTest(fingerprint=fingerprint), self.assertRaises(ValueError):
-                contract_for_fingerprint(fingerprint)
+            with self.subTest(fingerprint=fingerprint):
+                self.assertEqual(contracts_for_fingerprint(fingerprint), ())
 
     def test_both_modes_admit_new_release_without_changing_legacy_identity(self):
         for mode in ("standalone", "run"):

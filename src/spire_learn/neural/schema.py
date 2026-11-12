@@ -20,7 +20,7 @@ from spire_learn.neural.config import (
     COMMON_VIEW_ID,
 )
 from spire_learn.neural.contracts import BufferArray, CombatFrame, Lifecycle
-from spire_learn.neural.gym_contracts import LEGACY_CONTRACT, contract_for_fingerprint
+from spire_learn.neural.gym_contracts import LEGACY_CONTRACT, contract_for_schema
 
 
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}\Z")
@@ -33,13 +33,13 @@ _CHOICE_VERBS = frozenset({"choose"})
 _POTION_VERBS = frozenset({"use_potion", "discard_potion"})
 
 
-def _schema_contract(fingerprint: str):
+def _schema_contract(fingerprint: str, revision: str | None = None):
     # Keep the established legacy alias for synthetic structural fixtures;
     # deployed descriptors must still match their complete native body hash.
     if fingerprint == COMMON_VIEW_FINGERPRINT:
         return LEGACY_CONTRACT
     try:
-        return contract_for_fingerprint(fingerprint)
+        return contract_for_schema(fingerprint, revision)
     except ValueError as error:
         raise ContractError(str(error)) from error
 
@@ -179,7 +179,7 @@ class CombatSchema:
     def __post_init__(self, _parser_authority: object) -> None:
         if _parser_authority is not _PARSER_AUTHORITY:
             raise ContractError("CombatSchema instances must come from the authenticated parser")
-        contract = _schema_contract(self.schema_fingerprint)
+        contract = _schema_contract(self.schema_fingerprint, self.gym_revision)
         if self.gym_revision != contract.source_revision:
             raise ContractError("CombatSchema Gym revision is not accepted")
         if self.schema_id != COMMON_VIEW_ID:
@@ -420,8 +420,14 @@ def _parse_descriptor_columns(
     return tuple(columns), reference_columns
 
 
-def parse_common_descriptor(raw: Mapping[str, object]) -> CombatSchema:
-    """Parse and authenticate the accepted Gym common combat descriptor."""
+def parse_common_descriptor(
+    raw: Mapping[str, object], *, revision: str | None = None,
+) -> CombatSchema:
+    """Parse and authenticate the accepted Gym common combat descriptor.
+
+    Pass the configured Gym revision: several releases share one fingerprint,
+    and without a revision only an unambiguous fingerprint is accepted.
+    """
     descriptor = _required_mapping(raw, "descriptor")
     normalized = _canonical_value(descriptor)
     if not isinstance(normalized, dict):
@@ -435,7 +441,7 @@ def parse_common_descriptor(raw: Mapping[str, object]) -> CombatSchema:
     native_fingerprint = hashlib.sha256(_FINGERPRINT_PREFIX + encoded).hexdigest()
     if supplied != native_fingerprint:
         raise ContractError("descriptor body does not match the supplied and accepted fingerprint")
-    contract = _schema_contract(supplied)
+    contract = _schema_contract(supplied, revision)
 
     if body.get("schema_id") != COMMON_VIEW_ID:
         raise ContractError("descriptor common-view ID is not accepted")

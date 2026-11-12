@@ -194,14 +194,14 @@ def _validate_admission(policy: Any, rollout: Rollout, config: PPOConfig) -> tup
     accepted_mappings = identity.accepted_raw_mode_mappings
     if rollout.mode not in accepted_mappings:
         raise ContractError("rollout mode is not accepted by its immutable identity")
-    from spire_learn.neural.gym_contracts import contract_for_fingerprint
+    from spire_learn.neural.gym_contracts import contract_for_revision
     from spire_learn.neural.schema import CombatSchema
 
     schema = getattr(policy, "_schema", None)
     if not isinstance(schema, CombatSchema):
         raise ContractError("policy schema is not the authenticated common public view")
     try:
-        contract = contract_for_fingerprint(schema.schema_fingerprint)
+        contract = contract_for_revision(schema.gym_revision)
     except ValueError as error:
         raise ContractError("policy schema is not the authenticated common public view") from error
     expected_mapping = contract.raw_mode_mappings[rollout.mode]

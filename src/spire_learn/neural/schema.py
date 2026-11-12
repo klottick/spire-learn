@@ -811,6 +811,7 @@ def validate_frame(frame: CombatFrame, schema: CombatSchema) -> None:
 def _validate_frame_contents(frame: CombatFrame, schema: CombatSchema) -> None:
     if frame.schema_fingerprint != schema.schema_fingerprint:
         raise ContractError("frame schema fingerprint does not match CombatSchema")
+    view = schema.view
     if set(frame.tensors) != set(schema.tensors):
         missing = set(schema.tensors) - set(frame.tensors)
         unexpected = set(frame.tensors) - set(schema.tensors)
@@ -861,9 +862,12 @@ def _validate_frame_contents(frame: CombatFrame, schema: CombatSchema) -> None:
                 value = values[flat_index]
                 is_known = bool(known[flat_index])
                 if not row_occupied:
-                    if key == "potions":
+                    if key in view.required_known_empty_groups:
                         if value != 0 or not is_known:
-                            raise ContractError("empty potion slots must be known zeroes with occupied=0")
+                            raise ContractError(f"empty {key} slots must be known zeroes with occupied=0")
+                    elif key in view.optional_known_empty_groups:
+                        if value != 0:
+                            raise ContractError(f"empty {key} slots must hold zero values with occupied=0")
                     elif value != spec.padding or is_known:
                         raise ContractError(f"unoccupied {key} rows must use zero/known0 padding")
                     continue
@@ -871,8 +875,11 @@ def _validate_frame_contents(frame: CombatFrame, schema: CombatSchema) -> None:
                 if value < column.low or value > column.high:
                     raise ContractError(f"{key}.{column.field} is outside its registered domain")
                 if not is_known:
-                    expected = column.unavailable if column.reference is not None else spec.padding
-                    if value != expected:
+                    if column.reference is not None:
+                        accepted = value == column.unavailable
+                    else:
+                        accepted = view.accepts_unknown(key, column.field, value, spec.padding)
+                    if not accepted:
                         raise ContractError(f"unknown {key}.{column.field} has the wrong typed padding")
                     continue
                 if column.vocabulary is not None:

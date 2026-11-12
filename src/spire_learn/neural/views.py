@@ -26,6 +26,15 @@ class ViewSpec:
     lifecycle_view_id: str
     routings: frozenset[str]
     outcomes: frozenset[str]
+    # (tensor, field, value): documented non-padding values an unknown cell may hold.
+    unknown_sentinels: frozenset[tuple[str, str, int]] = frozenset()
+    # Slot groups whose unoccupied rows are zero values; required: always known empty
+    # slots; optional: known empty slots or unknown unused capacity.
+    required_known_empty_groups: frozenset[str] = frozenset()
+    optional_known_empty_groups: frozenset[str] = frozenset()
+
+    def accepts_unknown(self, tensor: str, field: str, value: int, padding: int) -> bool:
+        return value == padding or (tensor, field, value) in self.unknown_sentinels
 
     @property
     def tensor_names(self) -> frozenset[str]:
@@ -52,6 +61,7 @@ COMMON_V1 = ViewSpec(
     lifecycle_view_id="spire-gym-combat-policy-view-v1",
     routings=frozenset({"combat", "combat_selection", "noncombat"}),
     outcomes=frozenset({"victory", "death"}),
+    required_known_empty_groups=frozenset({"potions"}),
 )
 STANDARD_COMBAT_V1 = ViewSpec(
     view_id="spire-gym-standard-combat-view-v1",
@@ -69,6 +79,10 @@ STANDARD_COMBAT_V1 = ViewSpec(
     lifecycle_view_id="spire-gym-standard-combat-view-v1",
     routings=frozenset({"combat", "combat_selection", "noncombat"}),
     outcomes=frozenset({"victory", "death", "escaped"}),
+    # Descriptor semantics.draw_rows: hidden draw-pile cards use zone_position -1/known 0.
+    unknown_sentinels=frozenset({("combat_cards", "zone_position", -1)}),
+    # Potion capacity exceeds every character's slots; orbs publish empty slots as known.
+    optional_known_empty_groups=frozenset({"potions", "orbs"}),
 )
 VIEWS = (COMMON_V1, STANDARD_COMBAT_V1)
 

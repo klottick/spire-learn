@@ -147,3 +147,85 @@ class FrameAndLifecycleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _with_unknown_zone_position(frame, parsed, value):
+    """Return ``frame`` with occupied combat_cards row 0's zone_position unknown at ``value``."""
+    import struct
+    from spire_learn.neural.contracts import BufferArray, CombatFrame
+    spec = parsed.tensors["combat_cards"]
+    columns = len(spec.columns)
+    column = next(i for i, c in enumerate(spec.columns) if c.field == "zone_position")
+    occupied = frame.tensors[spec.occupied_key].data
+    assert occupied[0] == 1, "authored frame must occupy combat_cards row 0"
+    tensors = dict(frame.tensors)
+    values = list(struct.unpack(f"={len(frame.tensors['combat_cards'].data) // 8}q",
+                                frame.tensors["combat_cards"].data))
+    known = bytearray(frame.tensors[spec.known_key].data)
+    values[column] = value
+    known[column] = 0
+    tensors["combat_cards"] = BufferArray("int64", spec.shape, struct.pack(f"={len(values)}q", *values))
+    tensors[spec.known_key] = BufferArray("int8", spec.shape, bytes(known))
+    return CombatFrame(tensors, frame.schema_fingerprint)
+
+
+class UnknownSentinelTests(unittest.TestCase):
+    def test_standard_hidden_draw_zone_position_sentinel(self):
+        from tests.neural._support import authored_frame
+        parsed = schema.parse_combat_descriptor(_load("standard-combat-1929e18"), revision=V1)
+        frame = authored_frame(parsed)
+        schema.validate_frame(_with_unknown_zone_position(frame, parsed, -1), parsed)
+        schema.validate_frame(_with_unknown_zone_position(frame, parsed, 0), parsed)
+        with self.assertRaises(ContractError):
+            schema.validate_frame(_with_unknown_zone_position(frame, parsed, 5), parsed)
+
+    def test_common_view_keeps_padding_for_unknown_zone_position(self):
+        from tests.neural._support import authored_frame
+        parsed = schema.parse_combat_descriptor(_load("common-1929e18"), revision=V1)
+        frame = authored_frame(parsed)
+        schema.validate_frame(_with_unknown_zone_position(frame, parsed, 0), parsed)
+        with self.assertRaises(ContractError):
+            schema.validate_frame(_with_unknown_zone_position(frame, parsed, -1), parsed)
+
+
+def _with_cell(frame, parsed, key, row, field, value, known):
+    """Return ``frame`` with one cell of an unoccupied ``key`` row rewritten."""
+    import struct
+    from spire_learn.neural.contracts import BufferArray, CombatFrame
+    spec = parsed.tensors[key]
+    columns = len(spec.columns)
+    assert frame.tensors[spec.occupied_key].data[row] == 0, "row must be unoccupied"
+    index = row * columns + next(i for i, c in enumerate(spec.columns) if c.field == field)
+    raw = frame.tensors[key].data
+    values = list(struct.unpack(f"={len(raw) // 8}q", raw))
+    known_bytes = bytearray(frame.tensors[spec.known_key].data)
+    values[index] = value
+    known_bytes[index] = known
+    tensors = dict(frame.tensors)
+    tensors[key] = BufferArray("int64", spec.shape, struct.pack(f"={len(values)}q", *values))
+    tensors[spec.known_key] = BufferArray("int8", spec.shape, bytes(known_bytes))
+    return CombatFrame(tensors, frame.schema_fingerprint)
+
+
+class EmptySlotTests(unittest.TestCase):
+    def test_standard_empty_slots_may_be_known_or_unused_capacity(self):
+        from tests.neural._support import authored_frame
+        parsed = schema.parse_combat_descriptor(_load("standard-combat-1929e18"), revision=V1)
+        frame = authored_frame(parsed)
+        for key, field in (("potions", "potion_kind"), ("orbs", "kind")):
+            last = parsed.tensors[key].shape[0] - 1
+            with self.subTest(key=key):
+                schema.validate_frame(_with_cell(frame, parsed, key, last, field, 0, 1), parsed)
+                schema.validate_frame(_with_cell(frame, parsed, key, last, field, 0, 0), parsed)
+                with self.assertRaises(ContractError):
+                    schema.validate_frame(_with_cell(frame, parsed, key, last, field, 1, 1), parsed)
+
+    def test_common_empty_potion_slots_stay_known(self):
+        from tests.neural._support import authored_frame
+        parsed = schema.parse_combat_descriptor(_load("common-1929e18"), revision=V1)
+        frame = authored_frame(parsed)
+        last = parsed.tensors["potions"].shape[0] - 1
+        if frame.tensors["potions_occupied"].data[last]:
+            self.skipTest("authored common frame occupies every potion slot")
+        with self.assertRaises(ContractError):
+            schema.validate_frame(_with_cell(frame, parsed, "potions", last, "potion_kind", 0, 0), parsed)

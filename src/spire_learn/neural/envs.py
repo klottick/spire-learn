@@ -355,6 +355,50 @@ _STANDARD_LIFECYCLE_KEYS = frozenset({
 })
 
 
+def _settle_standard_terminal(
+    info: object, slot: int, encounters: Mapping[str, str],
+) -> Mapping[str, object]:
+    """Express Gym's unsettled Standard combat terminal as a settled visit.
+
+    ``standard-combat-v1`` ends at the combat's own terminal, before Run
+    settlement: the lifecycle stays active with phase ``terminal`` and the
+    public outcome is in ``terminal_reason``. Learn's standalone contract
+    settles the visit, so the outcome becomes ``last_exit`` here.
+    """
+    row = _standard_info_slot(info, slot)
+    if row.get("phase") != "terminal":
+        return row
+    settlement = _standard_info_slot(info, slot, _STANDARD_SETTLEMENT_KEYS)
+    outcome = settlement.get("terminal_reason")
+    if outcome not in STANDARD_COMBAT_V1.outcomes:
+        raise ContractError("Standard combat terminal lacks a public terminal_reason")
+    entry_id = settlement.get("entry_id")
+    if not isinstance(entry_id, str) or entry_id not in encounters:
+        raise ContractError("Standard combat terminal names an unknown catalog entry")
+    visit = row.get("active_visit")
+    entered = row.get("combats_entered")
+    if row.get("active") is not True or type(visit) is not int or entered != visit + 1:
+        raise ContractError("Standard combat terminal must close the active visit")
+    return {
+        "combat_view_id": row.get("combat_view_id"),
+        "active": False,
+        "routing": "noncombat",
+        "selection_owner": None,
+        "active_visit": None,
+        "combats_entered": entered,
+        "combats_settled": entered,
+        "last_exit": {
+            "visit": visit,
+            "encounter": encounters[entry_id],
+            "outcome": outcome,
+            "hp_before_healing": settlement.get("hp_before_healing"),
+            "hp_after_cleanup": settlement.get("hp_after_cleanup"),
+        },
+        "phase": "terminal",
+        "selection_resume_phase": None,
+    }
+
+
 class _StandardNativeFault(RuntimeError):
     """Redacted Standard native fault retaining only status-by-slot evidence."""
 
@@ -400,15 +444,22 @@ def _standard_info_field(key: str, value: object) -> object:
     }
 
 
-def _standard_info_slot(info: object, slot: int) -> Mapping[str, object]:
+_STANDARD_SETTLEMENT_KEYS = frozenset({
+    "terminal_reason", "hp_before_healing", "hp_after_cleanup", "entry_id",
+})
+
+
+def _standard_info_slot(
+    info: object, slot: int, keys: frozenset[str] = _STANDARD_LIFECYCLE_KEYS,
+) -> Mapping[str, object]:
     """Read one Gymnasium dict-of-arrays row, honoring each ``_key`` mask.
 
-    Only lifecycle fields are copied. In particular, seeds, fault payloads,
-    diagnostics and any other vector info never enter the driver boundary.
+    Only the named public fields are copied. In particular, seeds, fault
+    payloads, diagnostics and any other vector info never enter the driver.
     """
     values = _mapping(info, "Standard vector info")
     row: dict[str, object] = {}
-    for key in _STANDARD_LIFECYCLE_KEYS:
+    for key in keys:
         if key not in values:
             continue
         mask = values.get("_" + key)
@@ -433,10 +484,15 @@ class _StandardCombatProvider:
 
     mode = "standalone"
 
-    def __init__(self, env: object, runtime: _NativeRuntime, batch_size: int):
+    def __init__(
+        self, env: object, runtime: _NativeRuntime, batch_size: int,
+        encounters: Mapping[str, str],
+    ):
         self._env = env
         self._numpy = runtime.numpy
         self.batch_size = batch_size
+        # Public catalog encounter per entry id, for settling terminal visits.
+        self._encounters = dict(encounters)
         self.input_errors = _error_types(
             runtime.native,
             ("CombatInputError", "RunInputError"),
@@ -472,7 +528,7 @@ class _StandardCombatProvider:
             for slot in range(self.batch_size):
                 rows.append(_RawBoundary(
                     _row_observation(observations, slot, batched=True),
-                    _standard_info_slot(info, slot),
+                    _settle_standard_terminal(info, slot, self._encounters),
                 ))
             return tuple(rows)
         except BaseException as error:
@@ -501,7 +557,7 @@ class _StandardCombatProvider:
                 rows.append(_RawTransition(
                     _RawBoundary(
                         _row_observation(observations, slot, batched=True),
-                        _standard_info_slot(info, slot),
+                        _settle_standard_terminal(info, slot, self._encounters),
                     ),
                     float(reward), ended, cut,
                 ))
@@ -1485,7 +1541,10 @@ def make_driver(config: NeuralConfig, cases: NeuralCases) -> CombatDriver:
                 },
                 name="Standard standalone environment identity",
             )
-            provider = _StandardCombatProvider(env, runtime, config.rollout_rows)
+            provider = _StandardCombatProvider(
+                env, runtime, config.rollout_rows,
+                {str(entry["id"]): str(entry["encounter"]) for entry in catalog["entries"]},
+            )
             return CombatDriver(provider, schema)
         except BaseException as error:
             _close_after_factory_error(env, error)

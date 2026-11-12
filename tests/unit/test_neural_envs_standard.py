@@ -349,3 +349,77 @@ class StandardEnvTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StandardTerminalSettlementTests(unittest.TestCase):
+    """Gym ends a Standard standalone episode at the combat's own terminal, unsettled."""
+
+    setUpClass = classmethod(StandardEnvTests.setUpClass.__func__)
+    _runtime = StandardEnvTests._runtime
+
+    def _factory(self, outcome):
+        made = []
+        schema = self.schema
+
+        class Terminal(FakeStandardVector):
+            def __init__(inner, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                inner.schema = schema
+                inner._parsed_schema = schema
+                made.append(inner)
+
+            def step(inner, actions):
+                obs = inner._obs()
+                for name in ("action_mask", schema.tensors["actions"].occupied_key,
+                             schema.tensors["actions"].known_key, "actions"):
+                    spec = schema.tensors[name]
+                    size = 1
+                    for dimension in spec.shape:
+                        size *= dimension
+                    obs[name] = _Array([0] * size, spec.shape, spec.dtype)
+                info = inner._info()
+                rows = inner.num_envs
+                for key, value in (("phase", "terminal"), ("terminal_reason", outcome),
+                                   ("hp_before_healing", 29), ("hp_after_cleanup", 35),
+                                   ("entry_id", inner.args[0]["entries"][0]["id"])):
+                    info[key] = [value] * rows
+                    info["_" + key] = [True] * rows
+                reward = {"victory": 1.0, "death": -1.0, "escaped": 0.0}[outcome]
+                return ({key: _BatchArray([value] * rows) for key, value in obs.items()},
+                        [reward] * rows, [True] * rows, [False] * rows, info)
+
+        with patch.object(envs, "_load_native_runtime", return_value=self._runtime(Terminal)):
+            driver = envs.make_driver(self.config, self.cases)
+        return driver, made[0]
+
+    def test_terminal_boundary_settles_the_visit(self):
+        for outcome in ("victory", "death", "escaped"):
+            with self.subTest(outcome=outcome):
+                driver, fake = self._factory(outcome)
+                driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+                transition = driver.step([0] * driver.batch_size)[0]
+                lifecycle = transition.lifecycle
+                self.assertTrue(transition.terminated)
+                self.assertFalse(lifecycle.active)
+                self.assertEqual(lifecycle.routing, "noncombat")
+                self.assertEqual(lifecycle.combats_settled, lifecycle.combats_entered)
+                self.assertEqual(dict(lifecycle.last_exit), {
+                    "visit": 0, "outcome": outcome, "hp_before_healing": 29, "hp_after_cleanup": 35,
+                    "encounter": fake.args[0]["entries"][0]["encounter"],
+                })
+                self.assertEqual(transition.successor.candidates, ())
+                driver.close()
+
+    def test_terminal_without_reason_is_a_contract_fault(self):
+        driver, fake = self._factory("victory")
+        original = fake.step
+
+        def no_reason(actions):
+            result = original(actions)
+            del result[4]["terminal_reason"], result[4]["_terminal_reason"]
+            return result
+
+        fake.step = no_reason
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        with self.assertRaises(envs.DriverFault):
+            driver.step([0] * driver.batch_size)

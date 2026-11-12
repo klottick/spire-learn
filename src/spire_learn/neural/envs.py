@@ -1244,6 +1244,95 @@ def _verify_standard_catalog(
     ).hexdigest()
 
 
+_STANDARD_RUN_DOMAIN = b"spire-gym/run-schema/standard/v1\0"
+_STANDARD_RUN_SCHEMA_ID = "spire-gym-standard-run-observation-v1"
+
+
+def _standard_run_case(config: NeuralConfig, cases: NeuralCases) -> object:
+    """Validate the single Standard Run case before any optional import."""
+    mode_cases = cases.for_mode("standard-run")
+    # The driver's Run mode is one native row; Run configs are fixed at construction.
+    if len(mode_cases) != 1 or config.rollout_rows != 1:
+        raise ContractError("Standard Run driver requires exactly one case and one native row")
+    if config.workers != 1:
+        raise ContractError("Standard Run driver uses one scalar Run; workers must be 1")
+    return mode_cases[0]
+
+
+def _verify_standard_run_descriptor(descriptor: object, expected_fingerprint: str) -> Mapping[str, object]:
+    values = _mapping(descriptor, "Standard Run observation descriptor")
+    if (values.get("schema_id") != _STANDARD_RUN_SCHEMA_ID
+            or values.get("profile_id") != "Standard"):
+        raise ContractError("Gym Run descriptor is not the accepted Standard Run observation")
+    body = {key: value for key, value in values.items() if key != "fingerprint"}
+    canonical = json.dumps(
+        body, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
+    actual = hashlib.sha256(_STANDARD_RUN_DOMAIN + canonical).hexdigest()
+    if values.get("fingerprint") != expected_fingerprint or actual != expected_fingerprint:
+        raise ContractError("Gym Standard Run descriptor fingerprint disagrees with config")
+    return values
+
+
+def _expected_standard_creation(creation: object) -> dict[str, object] | None:
+    """Gym reports the supplied ``note`` back as ``stored_note``."""
+    if creation is None:
+        return None
+    value = to_json_value(creation)
+    if not isinstance(value, dict):
+        raise ContractError("Standard Run creation must thaw to a JSON object")
+    return {"neow": value["neow"], "seen_bosses": value["seen_bosses"],
+            "stored_note": value["note"]}
+
+
+def _make_standard_run_driver(
+    config: NeuralConfig, runtime: _NativeRuntime, case: object,
+) -> CombatDriver:
+    creation = None if case.creation is None else to_json_value(case.creation)  # type: ignore[attr-defined]
+    env = runtime.run_env(
+        case.character,  # type: ignore[attr-defined]
+        case.ascension,  # type: ignore[attr-defined]
+        profile="standard",
+        partition=config.partition,
+        creation=creation,
+        record_replay=False,
+    )
+    try:
+        run_descriptor = _verify_standard_run_descriptor(
+            env.observation_spec(), config.standard_run_fingerprint)
+        identity = _require_environment_identity(
+            env.environment_spec(),
+            expected={
+                "profile_id": "Standard",
+                "schema_id": _STANDARD_RUN_SCHEMA_ID,
+                "observation_fingerprint": config.standard_run_fingerprint,
+                "content_id": "spire-gym-standard-content-v1",
+                "rules_id": "spire-gym-native-standard-rules-v3",
+                "reward_id": "spire-gym-floor-key-terminal-reward-v1",
+                "combat_view_id": STANDARD_COMBAT_V1.view_id,
+                "mode": "normal_run",
+                "partition": config.partition,
+                "autoreset": "disabled",
+                "character": case.character,  # type: ignore[attr-defined]
+                "ascension": case.ascension,  # type: ignore[attr-defined]
+            },
+            name="Standard Run environment identity",
+        )
+        expected_creation = _expected_standard_creation(case.creation)  # type: ignore[attr-defined]
+        if expected_creation is not None and identity.get("creation") != expected_creation:
+            raise ContractError("Standard Run environment creation does not match the case")
+        schema = parse_combat_descriptor(
+            env.combat_observation_spec(), revision=config.environment_revision)
+        if (schema.view is not STANDARD_COMBAT_V1
+                or schema.schema_fingerprint != config.standard_view_fingerprint):
+            raise ContractError("Standard Run combat view disagrees with config")
+        provider = _RunProvider(env, runtime, _run_action_count(run_descriptor), schema)
+        return CombatDriver(provider, schema)
+    except BaseException as error:
+        _close_after_factory_error(env, error)
+        raise
+
+
 def _run_action_count(descriptor: object) -> int:
     values = _mapping(descriptor, "Run observation descriptor")
     action_space = _mapping(values.get("action_space"), "Run action space")
@@ -1344,9 +1433,11 @@ def make_driver(config: NeuralConfig, cases: NeuralCases) -> CombatDriver:
     """
     _validate_factory_inputs(config, cases)
     if config.mode == "standard-run":
-        raise ContractError(f"{config.mode} driver is not yet supported")
+        standard_run_case = _standard_run_case(config, cases)
     runtime = _load_native_runtime()
     _verify_native_build(runtime.native, config.environment_revision)
+    if config.mode == "standard-run":
+        return _make_standard_run_driver(config, runtime, standard_run_case)
     if config.mode == "standard-standalone":
         mode_cases = cases.for_mode("standard-standalone")
         entries = tuple(case.entry for case in mode_cases)

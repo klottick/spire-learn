@@ -29,7 +29,7 @@ from spire_learn.neural.checkpoint import (
     save_checkpoint,
 )
 from spire_learn.neural.collector import Collector, CollectorRecovery
-from spire_learn.neural.config import NeuralConfig
+from spire_learn.neural.config import NeuralConfig, mode_family
 from spire_learn.neural.contracts import (
     CollectionDiagnostics,
     CombatFrame,
@@ -398,13 +398,12 @@ def _manifest_projection(
             "the loaded native build is checked against environment_revision; "
             "no Gym Git checkout is mounted for a dirty-state query"
         ),
-        "profile_id": config.profile_id or "ironclad-combat-v1",
-        "content_id": "spire-gym-ironclad-combat-content-v1" if config.mode == "standalone" else "profile-defined-m10-ironclad-policy",
-        "rules_id": "spire-gym-native-m10-rules-v1",
-        "reward_id": "spire-gym-combat-outcome-reward-v1" if config.mode == "standalone" else "spire-gym-floor-key-terminal-reward-v1",
+        **_ENVIRONMENT_IDENTITIES[config.mode](config),
         "common_view_id": config.common_view_id,
         "common_view_fingerprint": config.common_view_fingerprint,
         "run_observation_fingerprint": config.run_observation_fingerprint,
+        "standard_view_fingerprint": config.standard_view_fingerprint,
+        "standard_run_fingerprint": config.standard_run_fingerprint,
         "schema_descriptor_digest": getattr(schema, "descriptor_digest", None),
         "learner_identity": identity_payload(_selected_identity(config)),
         "policy_kind": policy_kind,
@@ -414,7 +413,7 @@ def _manifest_projection(
             dict(runtime.device_report)
             if isinstance(getattr(runtime, "device_report", None), Mapping) else None
         ),
-        "run_noncombat_controller_id": "legal-random-v1" if config.mode == "run" else None,
+        "run_noncombat_controller_id": "legal-random-v1" if mode_family(config.mode) == "run" else None,
         "parent_checkpoint": str(getattr(runtime, "parent_checkpoint", None)) if getattr(runtime, "parent_checkpoint", None) is not None else None,
         "allow_final": allow_final,
         "rng_001": _RNG_001,
@@ -422,6 +421,34 @@ def _manifest_projection(
         "resource_budgets": _config_projection(config)["budgets"],
         "python_version": platform.python_version(),
     }
+
+
+_ENVIRONMENT_IDENTITIES = {
+    "standalone": lambda config: {
+        "profile_id": config.profile_id or "ironclad-combat-v1",
+        "content_id": "spire-gym-ironclad-combat-content-v1",
+        "rules_id": "spire-gym-native-m10-rules-v1",
+        "reward_id": "spire-gym-combat-outcome-reward-v1",
+    },
+    "run": lambda config: {
+        "profile_id": config.profile_id or "ironclad-combat-v1",
+        "content_id": "profile-defined-m10-ironclad-policy",
+        "rules_id": "spire-gym-native-m10-rules-v1",
+        "reward_id": "spire-gym-floor-key-terminal-reward-v1",
+    },
+    "standard-standalone": lambda config: {
+        "profile_id": "standard-combat-v1",
+        "content_id": "spire-gym-standard-content-v1",
+        "rules_id": "spire-gym-native-standard-rules-v3",
+        "reward_id": "spire-gym-combat-outcome-reward-v1",
+    },
+    "standard-run": lambda config: {
+        "profile_id": "standard",
+        "content_id": "spire-gym-standard-content-v1",
+        "rules_id": "spire-gym-native-standard-rules-v3",
+        "reward_id": "spire-gym-floor-key-terminal-reward-v1",
+    },
+}
 
 
 def _selected_identity(config: NeuralConfig) -> NeuralIdentity:
@@ -716,7 +743,7 @@ def _case_accounting(
             if not 0 <= slot < len(next_episode):
                 continue
             episode = next_episode[slot]
-            if config.mode == "standalone":
+            if mode_family(config.mode) == "standalone":
                 allocation_by_task[f"task-{slot}-{episode}"] = allocation.case_id
             else:
                 allocation_by_task[f"task-{slot}-run-{episode}"] = allocation.case_id
@@ -727,7 +754,7 @@ def _case_accounting(
 
     completed: set[str] = set()
     for record in records:
-        if config.mode == "standalone":
+        if mode_family(config.mode) == "standalone":
             case_id = allocation_by_task.get(record.task_id)
             if case_id is not None:
                 started.add(case_id)
@@ -740,7 +767,7 @@ def _case_accounting(
                 started.add(case_id)
                 if record.terminated:
                     completed.add(case_id)
-    if diagnostics is not None and config.mode == "run":
+    if diagnostics is not None and mode_family(config.mode) == "run":
         for checkpoint in diagnostics.resource_checkpoints:
             episode_key = "-".join(checkpoint.task_id.split("-")[:4])
             case_id = allocation_by_task.get(episode_key)
@@ -827,33 +854,33 @@ def _fight_summary(config: NeuralConfig, runtime: Any, records: Sequence[StepRec
     deaths = sum(item["outcome"] == "death" for item in fight_rows)
     escaped = sum(item["outcome"] == "escaped" for item in fight_rows)
     tasks_started = diagnostics.tasks_started if diagnostics is not None else 0
-    run_terminated = any(record.terminated for record in records) if config.mode == "run" else False
+    run_terminated = any(record.terminated for record in records) if mode_family(config.mode) == "run" else False
     return {
         "standalone_fights": {
-            "reached_combat_denominator": tasks_started if config.mode == "standalone" else 0,
-            "completed": completed if config.mode == "standalone" else 0,
-            "victories": wins if config.mode == "standalone" else 0,
-            "deaths": deaths if config.mode == "standalone" else 0,
-            "escaped": escaped if config.mode == "standalone" else 0,
-            "win_rate": wins / completed if completed and config.mode == "standalone" else None,
-            "mean_hp_retention": (sum(hp_fractions) / len(hp_fractions) if hp_fractions and config.mode == "standalone" else None),
-            "fights": fight_rows if config.mode == "standalone" else [],
+            "reached_combat_denominator": tasks_started if mode_family(config.mode) == "standalone" else 0,
+            "completed": completed if mode_family(config.mode) == "standalone" else 0,
+            "victories": wins if mode_family(config.mode) == "standalone" else 0,
+            "deaths": deaths if mode_family(config.mode) == "standalone" else 0,
+            "escaped": escaped if mode_family(config.mode) == "standalone" else 0,
+            "win_rate": wins / completed if completed and mode_family(config.mode) == "standalone" else None,
+            "mean_hp_retention": (sum(hp_fractions) / len(hp_fractions) if hp_fractions and mode_family(config.mode) == "standalone" else None),
+            "fights": fight_rows if mode_family(config.mode) == "standalone" else [],
         },
         "in_run_fights": {
-            "reached_combat_denominator": tasks_started if config.mode == "run" else 0,
-            "completed": completed if config.mode == "run" else 0,
-            "victories": wins if config.mode == "run" else 0,
-            "deaths": deaths if config.mode == "run" else 0,
-            "escaped": escaped if config.mode == "run" else 0,
-            "win_rate": wins / completed if completed and config.mode == "run" else None,
-            "mean_hp_retention": (sum(hp_fractions) / len(hp_fractions) if hp_fractions and config.mode == "run" else None),
-            "fights": fight_rows if config.mode == "run" else [],
+            "reached_combat_denominator": tasks_started if mode_family(config.mode) == "run" else 0,
+            "completed": completed if mode_family(config.mode) == "run" else 0,
+            "victories": wins if mode_family(config.mode) == "run" else 0,
+            "deaths": deaths if mode_family(config.mode) == "run" else 0,
+            "escaped": escaped if mode_family(config.mode) == "run" else 0,
+            "win_rate": wins / completed if completed and mode_family(config.mode) == "run" else None,
+            "mean_hp_retention": (sum(hp_fractions) / len(hp_fractions) if hp_fractions and mode_family(config.mode) == "run" else None),
+            "fights": fight_rows if mode_family(config.mode) == "run" else [],
         },
         "full_run_progress": {
-            "run_cases_scheduled": len(config.cases.for_mode("run")) if config.mode == "run" else 0,
-            "combat_visits_settled": completed if config.mode == "run" else 0,
+            "run_cases_scheduled": len(config.cases.for_mode(config.mode)) if mode_family(config.mode) == "run" else 0,
+            "combat_visits_settled": completed if mode_family(config.mode) == "run" else 0,
             "run_terminal_observed": run_terminated,
-            "status": "complete" if run_terminated else "incomplete" if config.mode == "run" else "not_applicable",
+            "status": "complete" if run_terminated else "incomplete" if mode_family(config.mode) == "run" else "not_applicable",
             "progress_source": "public combat visit checkpoints and terminal flags",
         },
         "environment_actions": len(records),
@@ -1426,7 +1453,7 @@ def _eval_complete(
     diagnostics: CollectionDiagnostics | None,
     recovery: CollectorRecovery,
 ) -> bool:
-    if config.mode == "run":
+    if mode_family(config.mode) == "run":
         return any(record.terminated for record in records)
     accounting = _case_accounting(config, records, diagnostics, recovery)
     return accounting["complete"] >= accounting["scheduled"]
@@ -1580,7 +1607,7 @@ def evaluate_policy(
             if _eval_complete(config, records, latest_diagnostics, initial_recovery):
                 stop_reason = "fixed_cases_completed"
                 break
-            if config.mode == "run" and any(record.terminated for record in rollout.records):
+            if mode_family(config.mode) == "run" and any(record.terminated for record in rollout.records):
                 stop_reason = "full_run_terminal"
                 break
             if rollout.collection is not None and rollout.collection.stop_reason in {
@@ -1597,7 +1624,7 @@ def evaluate_policy(
                 break
         if status == "complete" and _case_accounting(
             config, records, latest_diagnostics, initial_recovery
-        )["complete"] < len(config.cases.for_mode(config.mode)) and config.mode == "standalone":
+        )["complete"] < len(config.cases.for_mode(config.mode)) and mode_family(config.mode) == "standalone":
             status = "incomplete"
             stop_reason = "fixed_case_budget_incomplete"
         runtime_close_attempted = True

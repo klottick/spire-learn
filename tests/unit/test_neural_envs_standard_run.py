@@ -243,6 +243,22 @@ class StandardRunEnvTests(unittest.TestCase):
                 self.assertTrue(row.lifecycle.active)
                 driver.close()
 
+    def test_run_terminal_outside_combat(self):
+        # heart_victory (after the Act 4 Proceed), empty_deck and act3_no_keys end the
+        # Run on a non-combat decision: no new settlement and an empty terminal mask.
+        def script(fake):
+            settled = _combat_info(active=False, settled=1, last_exit=_exit("victory"))
+            fake.script = [(settled, (3,), 0.0, False), (settled, (), 100.0, True)]
+
+        driver, _fake = self._factory(script)
+        driver.reset(seeds=[3], entry_ids=[None])
+        transition = driver.step([3])[0]
+        self.assertTrue(transition.terminated)
+        self.assertEqual(transition.successor.noncombat_indices, ())
+        self.assertEqual(transition.lifecycle.combats_settled, 1)
+        driver.reset(seeds=[4], entry_ids=[None])
+        driver.close()
+
     def test_run_info_privacy(self):
         driver, _fake = self._factory()
         row = driver.reset(seeds=[3], entry_ids=[None])[0]

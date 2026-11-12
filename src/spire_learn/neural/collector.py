@@ -10,7 +10,7 @@ from typing import Any
 
 from spire_learn.contracts import ContractError
 from spire_learn.neural.cases import NeuralCase, environment_seed_for
-from spire_learn.neural.config import NeuralConfig
+from spire_learn.neural.config import NeuralConfig, mode_family
 from spire_learn.neural.contracts import (
     CollectionDiagnostics,
     CollectionFault,
@@ -94,7 +94,8 @@ class Collector:
             raise TypeError("Collector requires a NeuralConfig")
         mode = getattr(driver, "mode", None)
         batch_size = getattr(driver, "batch_size", None)
-        if mode != config.mode or type(batch_size) is not int or batch_size != config.rollout_rows:
+        if (mode != mode_family(config.mode) or type(batch_size) is not int
+                or batch_size != config.rollout_rows):
             raise ContractError("driver mode and batch width must match the neural config")
         rows = getattr(driver, "rows", None)
         if not isinstance(rows, tuple) or len(rows) != batch_size:
@@ -124,11 +125,12 @@ class Collector:
         if not learned_combat_policy and not callable(getattr(policy_generator, "choice", None)):
             raise ContractError("reference policy requires an injected Python choice generator")
 
-        cases = config.cases.for_mode(mode)
+        cases = config.cases.for_mode(config.mode)
         if not cases:
-            raise ContractError(f"neural case manifest has no {mode} cases")
+            raise ContractError(f"neural case manifest has no {config.mode} cases")
         if case_sampler is not None:
-            if (mode != "standalone" or config.operation != "train" or config.split != "train"
+            # The curriculum sampler targets legacy Ironclad scenario cases only.
+            if (config.mode != "standalone" or config.operation != "train" or config.split != "train"
                     or not learned_combat_policy):
                 raise ContractError("case_sampler requires standalone learned-policy training")
             if rows != (None,) * batch_size:
@@ -143,14 +145,14 @@ class Collector:
             identities = tuple(
                 identity for identity in config.accepted_identities
                 if tuple(getattr(identity, name) for name in identity_fields) == policy_identity
-                and mode in identity.accepted_raw_mode_mappings
+                and config.mode in identity.accepted_raw_mode_mappings
             )
             if len(identities) != 1:
                 raise ContractError("policy must match one configured identity for the selected mode")
         else:
             identities = tuple(
                 identity for identity in config.accepted_identities
-                if mode in identity.accepted_raw_mode_mappings
+                if config.mode in identity.accepted_raw_mode_mappings
             )
             if len(identities) != 1:
                 raise ContractError("reference policy requires one configured transport identity")
@@ -167,6 +169,7 @@ class Collector:
         self._policy_generator = policy_generator
         self._learned_combat_policy = learned_combat_policy
         self._mode = mode
+        self._config_mode = config.mode
         self._batch_size = batch_size
         self._rows: tuple[DriverRow | None, ...] = rows
         self._needs_reset = [row is None for row in rows]
@@ -878,7 +881,7 @@ class Collector:
             self._counts["environment_truncations"],
         )
         return Rollout(
-            mode=self._mode,
+            mode=self._config_mode,
             split=self.config.split,
             identity=self.identity,
             records=records,

@@ -202,6 +202,20 @@ def _identity(raw: object, *, model_hash: str, ppo_hash: str, contract: GymContr
     return identity
 
 
+_MODE_FAMILIES = {
+    "standalone": "standalone", "standard-standalone": "standalone",
+    "run": "run", "standard-run": "run",
+}
+
+
+def mode_family(mode: str) -> str:
+    """Driver family of a config mode: standalone combat or combat inside a Run."""
+    try:
+        return _MODE_FAMILIES[mode]
+    except (KeyError, TypeError):
+        raise ValueError("mode must be standalone, run, standard-standalone, or standard-run") from None
+
+
 def load_neural_config(path: Path) -> NeuralConfig:
     """Parse a strict TOML config and its case manifest without runtime side effects."""
     source = Path(path).resolve()
@@ -482,4 +496,5 @@ __all__ = [
     "RUN_REPLAY_VERSION",
     "SeedStreams",
     "load_neural_config",
+    "mode_family",
 ]

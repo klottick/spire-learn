@@ -505,3 +505,16 @@ package. The native Gym is only imported lazily inside `envs._load_native_runtim
   `unit.test_gym_release_qualification` module, plus `git diff --check`.
   Expected: all OK.**
 - [ ] **Step 5: Commit** with message `docs: record Gym 1.0.0 Standard adoption and qualification`.
+
+### Task 10: Standard modes through the collector and runner (added during execution)
+
+**Files:**
+- Modify: `src/spire_learn/neural/config.py` (`mode_family`), `collector.py`, `contracts.py` (`Rollout` modes), `runner.py`
+- Test: `tests/unit/test_neural_standard_runner.py` (new); `tests/unit/test_neural_envs_standard_run.py` (out-of-combat Run terminal)
+
+**Interfaces:**
+- Produces: `mode_family(mode) -> "standalone" | "run"`. The collector checks the driver mode against the family, selects cases and identities by `config.mode`, and emits `Rollout.mode == config.mode`. The runner branches on the family and records per-mode `profile_id`/`content_id`/`rules_id`/`reward_id` plus `standard_view_fingerprint`/`standard_run_fingerprint` in run metadata. Curriculum `case_sampler`, scenario streams and calibration stay legacy-standalone-only.
+
+- [ ] Write failing tests (mode family; collector selects Standard cases for both modes; cross-family driver rejected; manifest identities for both Standard modes; standalone fight summary; Run-family completion)
+- [ ] Implement, run the module and the neural/gym/integration regression sweep
+- [ ] Commit `feat: run Standard modes through the collector and runner`

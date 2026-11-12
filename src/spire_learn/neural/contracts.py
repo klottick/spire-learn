@@ -641,7 +641,8 @@ class Rollout:
     collection: CollectionDiagnostics | None = None
 
     def __post_init__(self) -> None:
-        if (not isinstance(self.mode, str) or self.mode not in {"standalone", "run"}
+        if (not isinstance(self.mode, str)
+                or self.mode not in {"standalone", "run", "standard-standalone", "standard-run"}
                 or not isinstance(self.split, str) or self.split not in {"train", "selection", "final"}):
             raise ContractError("Rollout mode or split is unsupported")
         if not isinstance(self.identity, NeuralIdentity):

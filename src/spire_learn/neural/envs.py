@@ -11,6 +11,8 @@ from spire_learn.neural.profiling import observed, span
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+import hashlib
+import json
 import math
 import struct
 from typing import Protocol
@@ -28,10 +30,13 @@ from spire_learn.neural.config import (
 )
 from spire_learn.neural.contracts import CombatFrame, Lifecycle
 from spire_learn.neural.schema import CombatCandidate, CombatSchema, candidates
-from spire_learn.neural.schema import parse_common_descriptor, parse_lifecycle, validate_frame
+from spire_learn.neural.schema import (
+    parse_combat_descriptor, parse_common_descriptor, parse_lifecycle, validate_frame,
+)
 from spire_learn.neural.snapshot import snapshot_common
 from spire_learn.neural.gym_contracts import contract_for_revision
 from spire_learn.neural.views import COMMON_V1
+from spire_learn.neural.views import STANDARD_COMBAT_V1
 
 
 _MAX_ERROR_TEXT = 512
@@ -71,6 +76,7 @@ class DriverFaultEvidence:
     uncertain_current_slots: int = 0
     fault_slots: tuple[int, ...] = ()
     fault_slots_truncated: bool = False
+    fault_slot_statuses: tuple[tuple[int, str], ...] = ()
     close_error: str | None = None
 
 
@@ -163,15 +169,20 @@ class _NativeRuntime:
     native: object
     ironclad_vector_env: type
     run_env: type
+    standard_combat_vector_env: type | None = None
 
 
 def _load_native_runtime() -> _NativeRuntime:
     """Load the pinned optional runtime only after an explicit factory call."""
     import numpy
     from spire_lab import _native
-    from spire_lab.gymnasium import IroncladCombatVectorEnv, RunEnv
+    from spire_lab.gymnasium import (
+        IroncladCombatVectorEnv, RunEnv, StandardCombatVectorEnv,
+    )
 
-    return _NativeRuntime(numpy, _native, IroncladCombatVectorEnv, RunEnv)
+    return _NativeRuntime(
+        numpy, _native, IroncladCombatVectorEnv, RunEnv, StandardCombatVectorEnv
+    )
 
 
 def _error_types(native: object, names: tuple[str, ...]) -> tuple[type[Exception], ...]:
@@ -317,6 +328,163 @@ class _StandaloneProvider:
                     cut,
                 ))
             return tuple(result)
+        except BaseException as error:
+            raise _PostReturnFailure(error) from error
+
+    def close(self) -> None:
+        self._env.close()  # type: ignore[attr-defined]
+
+
+_STANDARD_LIFECYCLE_KEYS = frozenset({
+    "combat_view_id", "active", "routing", "selection_owner", "active_visit",
+    "combats_entered", "combats_settled", "last_exit", "phase",
+    "selection_resume_phase",
+})
+
+
+class _StandardNativeFault(RuntimeError):
+    """Redacted Standard native fault retaining only status-by-slot evidence."""
+
+    def __init__(self, error: BaseException):
+        super().__init__("Spire Gym Standard combat fault; native details omitted")
+        raw_slots = getattr(error, "slots", ())
+        if isinstance(raw_slots, Sequence) and not isinstance(
+            raw_slots, (str, bytes, bytearray)
+        ):
+            self.slots = tuple(
+                {"status": record["status"]}
+                if isinstance(record, Mapping) and isinstance(record.get("status"), str)
+                else {}
+                for record in raw_slots
+            )
+        else:
+            self.slots = ()
+
+
+def _standard_info_value(value: object) -> object:
+    """Own only public lifecycle values, converting NumPy scalars recursively."""
+    item = getattr(value, "item", None)
+    if callable(item):
+        value = item()
+    if isinstance(value, Mapping):
+        return {key: _standard_info_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return tuple(_standard_info_value(item) for item in value)
+    return value
+
+
+def _standard_info_field(key: str, value: object) -> object:
+    if key != "last_exit" or value is None:
+        return _standard_info_value(value)
+    exit_info = _mapping(value, "Standard last_exit")
+    public_exit_keys = {
+        "visit", "encounter", "outcome", "hp_before_healing", "hp_after_cleanup",
+    }
+    return {
+        name: _standard_info_value(item)
+        for name, item in exit_info.items()
+        if name in public_exit_keys
+    }
+
+
+def _standard_info_slot(info: object, slot: int) -> Mapping[str, object]:
+    """Read one Gymnasium dict-of-arrays row, honoring each ``_key`` mask.
+
+    Only lifecycle fields are copied. In particular, seeds, fault payloads,
+    diagnostics and any other vector info never enter the driver boundary.
+    """
+    values = _mapping(info, "Standard vector info")
+    row: dict[str, object] = {}
+    for key in _STANDARD_LIFECYCLE_KEYS:
+        if key not in values:
+            continue
+        mask = values.get("_" + key)
+        if mask is None:
+            raise ContractError(f"Standard vector info is missing the {key} presence mask")
+        try:
+            present = _standard_info_value(mask[slot])  # type: ignore[index]
+        except (IndexError, KeyError, TypeError) as error:
+            raise ContractError("Standard vector info presence mask has the wrong batch width") from error
+        if type(present) is not bool:
+            raise ContractError("Standard vector info presence mask must contain booleans")
+        if present:
+            try:
+                row[key] = _standard_info_field(key, values[key][slot])  # type: ignore[index]
+            except (IndexError, KeyError, TypeError) as error:
+                raise ContractError("Standard vector info field has the wrong batch width") from error
+    return row
+
+
+class _StandardCombatProvider:
+    """Adapter for Gym 1.0.0's StandardCombatVectorEnv public vector API."""
+
+    mode = "standalone"
+
+    def __init__(self, env: object, runtime: _NativeRuntime, batch_size: int):
+        self._env = env
+        self._numpy = runtime.numpy
+        self.batch_size = batch_size
+        self.input_errors = _error_types(runtime.native, ("RunInputError",))
+        self.state_errors = _error_types(runtime.native, ("RunStateError",))
+        self.fault_errors = _error_types(
+            runtime.native, ("RunFaultError", "BatchFaultError")
+        )
+
+    def reset(
+        self,
+        seeds: tuple[int, ...],
+        entry_ids: tuple[str | None, ...],
+        reset_mask: tuple[bool, ...],
+    ) -> tuple[_RawBoundary | None, ...]:
+        np = self._numpy
+        mask = np.asarray(reset_mask, dtype=np.dtype("bool"))  # type: ignore[attr-defined]
+        try:
+            with span("native_reset_public_export"):
+                observations, info = self._env.reset(  # type: ignore[attr-defined]
+                    seed=list(seeds),
+                    options={"reset_mask": mask, "entry_ids": list(entry_ids)},
+                )
+        except self.fault_errors as error:
+            raise _StandardNativeFault(error) from None
+        try:
+            rows = []
+            for slot in range(self.batch_size):
+                rows.append(_RawBoundary(
+                    _row_observation(observations, slot, batched=True),
+                    _standard_info_slot(info, slot),
+                ))
+            return tuple(rows)
+        except BaseException as error:
+            raise _PostReturnFailure(error) from error
+
+    def step(self, actions: tuple[int, ...]) -> tuple[_RawTransition, ...]:
+        np = self._numpy
+        native_actions = np.asarray(actions, dtype=np.dtype("=i8"))  # type: ignore[attr-defined]
+        try:
+            with span("native_step_public_export"):
+                observations, rewards, terminated, truncated, info = self._env.step(  # type: ignore[attr-defined]
+                    native_actions
+                )
+        except self.fault_errors as error:
+            raise _StandardNativeFault(error) from None
+        try:
+            rows = []
+            for slot in range(self.batch_size):
+                reward = _public_scalar(rewards[slot], "Standard native reward")
+                ended = _public_scalar(terminated[slot], "Standard terminated flag")
+                cut = _public_scalar(truncated[slot], "Standard truncated flag")
+                if type(reward) not in (int, float) or not math.isfinite(reward):
+                    raise ContractError("Standard native reward must be finite")
+                if type(ended) is not bool or type(cut) is not bool:
+                    raise ContractError("Standard native end flags must be booleans")
+                rows.append(_RawTransition(
+                    _RawBoundary(
+                        _row_observation(observations, slot, batched=True),
+                        _standard_info_slot(info, slot),
+                    ),
+                    float(reward), ended, cut,
+                ))
+            return tuple(rows)
         except BaseException as error:
             raise _PostReturnFailure(error) from error
 
@@ -528,12 +696,28 @@ class CombatDriver:
         self,
         error: BaseException,
         operation_slot_indices: tuple[int, ...],
-    ) -> tuple[tuple[int, ...], bool]:
+    ) -> tuple[tuple[int, ...], bool, tuple[tuple[int, str], ...]]:
         """Keep only a small set of in-range slot indices from public fault records."""
+        batch_slots = getattr(error, "slots", None)
+        if isinstance(batch_slots, Sequence) and not isinstance(
+            batch_slots, (str, bytes, bytearray)
+        ):
+            slot_statuses: list[tuple[int, str]] = []
+            for slot, record in enumerate(batch_slots[:64]):
+                if (type(slot) is int and slot in operation_slot_indices
+                        and isinstance(record, Mapping)
+                        and isinstance(record.get("status"), str)):
+                    slot_statuses.append((slot, record["status"]))
+            return (
+                tuple(slot for slot, _status in slot_statuses),
+                len(batch_slots) > 64,
+                tuple(slot_statuses),
+            )
         faults = getattr(error, "faults", None)
         if not isinstance(faults, Sequence) or isinstance(faults, (str, bytes, bytearray)):
-            return (), False
+            return (), False, ()
         slots: set[int] = set()
+        statuses: dict[int, str] = {}
         truncated = len(faults) > 64
         for record in faults[:64]:
             if not isinstance(record, Mapping):
@@ -541,7 +725,10 @@ class CombatDriver:
             slot = record.get("slot")
             if type(slot) is int and slot in operation_slot_indices:
                 slots.add(slot)
-        return tuple(sorted(slots)), truncated
+                status = record.get("status")
+                if isinstance(status, str):
+                    statuses[slot] = status
+        return tuple(sorted(slots)), truncated, tuple(sorted(statuses.items()))
 
     def _fault(
         self,
@@ -591,7 +778,9 @@ class CombatDriver:
         public_operation_slots = public_operation_slots[:64]
         known_current_delivery_slots = min(known_current_delivery_slots, operation_slots)
         uncertain_current_slots = min(uncertain_current_slots, operation_slots)
-        fault_slots, fault_slots_truncated = self._fault_slots(error, public_operation_slots)
+        fault_slots, fault_slots_truncated, fault_slot_statuses = self._fault_slots(
+            error, public_operation_slots
+        )
         evidence = DriverFaultEvidence(
             phase=phase,
             accepted_prefix=min(self._accepted_steps, _MAX_FAULT_PREFIX),
@@ -610,6 +799,7 @@ class CombatDriver:
             uncertain_current_slots=uncertain_current_slots,
             fault_slots=fault_slots,
             fault_slots_truncated=fault_slots_truncated,
+            fault_slot_statuses=fault_slot_statuses,
             close_error=close_error,
         )
         return DriverFault(evidence)
@@ -952,7 +1142,7 @@ def _normalized_entry(entry: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(deck, list) or not isinstance(relics, list):
         raise ContractError("standalone case entry has invalid public deck or relics")
     result["deck"] = sorted(deck, key=lambda row: (row["card"], row["upgrades"]))
-    result["relics"] = sorted(relics)
+    result["relics"] = list(relics)
     counters = dict(result.get("relic_counters", {}))
     if "neows_lament" in result["relics"]:
         counters.setdefault("neows_lament", 3)
@@ -972,6 +1162,62 @@ def _verify_catalog(catalog_descriptor: object, entries: Sequence[Mapping[str, o
     expected = [_normalized_entry(entry) for entry in entries]
     if actual != expected:
         raise ContractError("Gym normalized catalog does not match the supplied public cases")
+
+
+def _normalized_standard_entry(entry: Mapping[str, object]) -> dict[str, object]:
+    """Apply Gym 1.0.0 catalog defaults and ordering before semantic comparison."""
+    value = to_json_value(entry)
+    if not isinstance(value, dict):
+        raise ContractError("Standard case entry must thaw to a JSON object")
+    result = dict(value)
+    deck = result.get("deck")
+    relics = result.get("relics")
+    if not isinstance(deck, list) or not isinstance(relics, list):
+        raise ContractError("Standard case entry has invalid public deck or relics")
+    normalized_deck = []
+    for card in deck:
+        if not isinstance(card, dict):
+            raise ContractError("Standard case deck contains a malformed card")
+        normalized_deck.append({**card, "misc": card.get("misc", 0)})
+    result["deck"] = sorted(
+        normalized_deck, key=lambda row: (row["card"], row["upgrades"], row["misc"])
+    )
+    result["relics"] = sorted(relics)
+    result["relic_counters"] = dict(result.get("relic_counters", {}))
+    result["burning"] = result.get("burning")
+    result["start_kind"] = "synthetic_position" if "position" in result else "fresh_start"
+    return result
+
+
+def _verify_standard_catalog(
+    catalog_descriptor: object, entries: Sequence[Mapping[str, object]],
+) -> str:
+    """Require Gym's full normalized public catalog to match the case entries."""
+    descriptor = _mapping(catalog_descriptor, "public Standard catalog descriptor")
+    if set(descriptor) != {"catalog_schema_id", "profile_id", "entries"}:
+        raise ContractError("public Standard catalog descriptor has unexpected fields")
+    if descriptor.get("catalog_schema_id") != "spire-gym-standard-combat-catalog-v1":
+        raise ContractError("public Standard catalog descriptor has an unsupported schema")
+    if descriptor.get("profile_id") != "standard-combat-v1":
+        raise ContractError("public Standard catalog descriptor has an unsupported profile")
+    actual = descriptor.get("entries")
+    if not isinstance(actual, list):
+        raise ContractError("public Standard catalog descriptor entries must be a list")
+    expected = [_normalized_standard_entry(entry) for entry in entries]
+    if actual != expected:
+        raise ContractError("Gym normalized Standard catalog does not match the supplied public cases")
+    expected_descriptor = {
+        "catalog_schema_id": "spire-gym-standard-combat-catalog-v1",
+        "profile_id": "standard-combat-v1",
+        "entries": expected,
+    }
+    canonical = json.dumps(
+        expected_descriptor, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(
+        b"spire-gym/standard-combat-catalog/v1\0" + canonical
+    ).hexdigest()
 
 
 def _run_action_count(descriptor: object) -> int:
@@ -1073,10 +1319,62 @@ def make_driver(config: NeuralConfig, cases: NeuralCases) -> CombatDriver:
     the driver is returned.
     """
     _validate_factory_inputs(config, cases)
-    if config.mode in {"standard-standalone", "standard-run"}:
+    if config.mode == "standard-run":
         raise ContractError(f"{config.mode} driver is not yet supported")
     runtime = _load_native_runtime()
     _verify_native_build(runtime.native, config.environment_revision)
+    if config.mode == "standard-standalone":
+        mode_cases = cases.for_mode("standard-standalone")
+        entries = tuple(case.entry for case in mode_cases)
+        if any(not isinstance(entry, Mapping) for entry in entries):
+            raise ContractError("Standard standalone cases must provide public entries")
+        catalog = {
+            "catalog_schema_id": "spire-gym-standard-combat-catalog-v1",
+            "profile_id": "standard-combat-v1",
+            "entries": [to_json_value(entry) for entry in entries],
+        }
+        standard_env = runtime.standard_combat_vector_env
+        if standard_env is None:
+            raise ContractError("installed Spire Gym lacks StandardCombatVectorEnv")
+        env = standard_env(
+            catalog,
+            config.rollout_rows,
+            partition=config.partition,
+            workers=config.workers,
+            autoreset_mode="disabled",
+            fault_policy="freeze",
+        )
+        try:
+            schema = parse_combat_descriptor(
+                env.observation_spec(), revision=config.environment_revision
+            )
+            if schema.view is not STANDARD_COMBAT_V1:
+                raise ContractError("Gym descriptor is not the accepted Standard combat view")
+            if schema.schema_fingerprint != config.standard_view_fingerprint:
+                raise ContractError("Gym Standard descriptor fingerprint disagrees with config")
+            catalog_fingerprint = _verify_standard_catalog(env.catalog_descriptor(), entries)
+            _require_environment_identity(
+                env.environment_spec(),
+                expected={
+                    "profile_id": "standard-combat-v1",
+                    "schema_id": STANDARD_COMBAT_V1.view_id,
+                    "combat_view_id": STANDARD_COMBAT_V1.lifecycle_view_id,
+                    "observation_fingerprint": config.standard_view_fingerprint,
+                    "content_id": "spire-gym-standard-content-v1",
+                    "rules_id": "spire-gym-native-standard-rules-v3",
+                    "reward_id": "spire-gym-combat-outcome-reward-v1",
+                    "mode": "standalone_combat",
+                    "partition": config.partition,
+                    "autoreset": "disabled",
+                    "entry_catalog_fingerprint": catalog_fingerprint,
+                },
+                name="Standard standalone environment identity",
+            )
+            provider = _StandardCombatProvider(env, runtime, config.rollout_rows)
+            return CombatDriver(provider, schema)
+        except BaseException as error:
+            _close_after_factory_error(env, error)
+            raise
     if config.mode == "standalone":
         mode_cases = cases.for_mode("standalone")
         entries = tuple(case.entry for case in mode_cases)

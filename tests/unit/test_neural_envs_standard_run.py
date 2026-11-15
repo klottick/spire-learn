@@ -18,6 +18,14 @@ from tests.unit.test_neural_envs import _DType, _Flags, _NumpyStub
 from tests.unit.test_neural_envs_standard import (
     FakeStandardVector,
     _Array,
+    _AttributeHostileError,
+    _CausePropertyError,
+    _ForgedNameError,
+    _InvalidNameError,
+    _LearnAttributeHostileError,
+    _LearnNativeTypePropertyError,
+    _RecursiveNameError,
+    _RaisingNameError,
     FakeNativeValueError,
     _HostileContractError,
     _secret_error,
@@ -395,7 +403,7 @@ class StandardRunEnvTests(unittest.TestCase):
         driver, fake = self._factory()
         driver.reset(seeds=[3], entry_ids=[None])
         fake.next_error = _secret_error(FakeRunStateError, "stale state")
-        fake.next_error.reason = "stale_token"
+        fake.next_error.args = ("stale token",)
 
         with self.assertRaises(envs._StandardNativeRecoverable) as caught:
             driver.step([5])
@@ -405,6 +413,48 @@ class StandardRunEnvTests(unittest.TestCase):
         self.assertFalse(driver._failed)
         self.assertTrue(driver.step([5])[0].successor.lifecycle.active)
         driver.close()
+
+    def test_standard_run_hostile_exception_inspection_is_redacted_at_all_boundaries(self):
+        cases = (
+            (_AttributeHostileError, "_AttributeHostileError"),
+            (_CausePropertyError, "RuntimeError"),
+            (_LearnAttributeHostileError, "ContractError"),
+            (_LearnNativeTypePropertyError, "ContractError"),
+            (_ForgedNameError, "_ForgedNameError"),
+            (_RaisingNameError, "_RaisingNameError"),
+            (_RecursiveNameError, "_RecursiveNameError"),
+            (_InvalidNameError, "UnknownError"),
+        )
+        for error_type, safe_name in cases:
+            for phase in ("reset", "step", "close", "cleanup"):
+                with self.subTest(error=error_type, phase=phase):
+                    driver, fake = self._factory()
+                    if phase in {"step", "cleanup"}:
+                        driver.reset(seeds=[3], entry_ids=[None])
+                    error = error_type("SECRET payload")
+                    if phase == "close":
+                        fake.next_close_error = error
+                        failure = driver.close
+                    elif phase == "cleanup":
+                        fake.next_error = RuntimeError("SECRET primary")
+                        fake.next_close_error = error
+                        failure = lambda: driver.step([5])
+                    elif phase == "step":
+                        fake.next_error = error
+                        failure = lambda: driver.step([5])
+                    else:
+                        fake.next_error = error
+                        failure = lambda: driver.reset(seeds=[3], entry_ids=[None])
+
+                    with self.assertRaises(envs.DriverFault) as caught:
+                        failure()
+
+                    expected_name = "RuntimeError" if phase == "cleanup" else safe_name
+                    assert_driver_fault_redacted(self, caught, expected_name)
+                    if phase == "cleanup":
+                        self.assertIn(safe_name, caught.exception.evidence.close_error)
+                    self.assertTrue(driver._failed)
+                    self.assertTrue(fake.closed)
 
     def test_standard_run_hostile_state_formatting_is_redacted_and_fatal(self):
         driver, fake = self._factory()
@@ -525,6 +575,24 @@ class StandardRunEnvTests(unittest.TestCase):
             driver.step([5])
 
         self.assertIn("native Run fault detail", caught.exception.evidence.message)
+
+    def test_legacy_run_stale_token_state_error_remains_recoverable(self):
+        _standard_driver, fake = self._factory()
+        provider = envs._RunProvider(
+            fake, self._runtime(type(fake)), RUN_ACTIONS, self.schema,
+        )
+        driver = envs.CombatDriver(provider, self.schema)
+        driver.reset(seeds=[3], entry_ids=[None])
+        fake.next_error = FakeRunStateError("stale token")
+
+        with self.assertRaises(FakeRunStateError) as caught:
+            driver.step([5])
+
+        self.assertEqual(str(caught.exception), "stale token")
+        self.assertFalse(driver._failed)
+        self.assertFalse(fake.closed)
+        self.assertTrue(driver.step([5])[0].successor.lifecycle.active)
+        driver.close()
 
     def test_legacy_run_close_error_message_unchanged(self):
         _standard_driver, fake = self._factory()

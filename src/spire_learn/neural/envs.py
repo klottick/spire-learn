@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+import re
 import struct
 from typing import Protocol
 
@@ -43,6 +44,7 @@ from spire_learn.neural.modes import NEURAL_MODES
 _MAX_ERROR_TEXT = 512
 _MAX_FAULT_PREFIX = 1_000_000
 _MAX_STANDARD_ERROR_CHAIN_LINKS = 32
+_SAFE_ERROR_CLASS_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z", re.ASCII)
 
 
 class DriverInputError(ValueError):
@@ -437,10 +439,29 @@ class _StandardNativeProcessControl(BaseException):
         super().__init__("Spire Gym Standard provider error; native details omitted")
 
 
+def _safe_exception_class_name(error_type: type) -> str:
+    """Read and validate a class name without invoking its metaclass hooks."""
+    try:
+        descriptor = type.__dict__["__name__"]
+        name = descriptor.__get__(error_type, type)
+        if type(name) is str and _SAFE_ERROR_CLASS_NAME.fullmatch(name) is not None:
+            return name
+    except BaseException:
+        pass
+    return "UnknownError"
+
+
 def _standard_error_type(error: BaseException) -> str:
-    if isinstance(error, (_StandardNativeError, _StandardNativeProcessControl)):
-        return error.native_type
-    return type(error).__name__
+    error_type = type(error)
+    try:
+        if issubclass(error_type, (_StandardNativeError, _StandardNativeProcessControl)):
+            attributes = BaseException.__getattribute__(error, "__dict__")
+            native_type = dict.get(attributes, "native_type")
+            if type(native_type) is str:
+                return native_type
+    except BaseException:
+        pass
+    return _safe_exception_class_name(error_type)
 
 
 def _standard_info_value(value: object) -> object:
@@ -776,29 +797,42 @@ class CombatDriver:
             raise DriverStateError("driver is faulted; accepted actions cannot be retried")
 
     def _is_recoverable(self, error: BaseException) -> bool:
-        if isinstance(error, _StandardNativeRecoverable):
+        if issubclass(type(error), _StandardNativeRecoverable):
             return True
         if not getattr(self._provider, "redacts_native_errors", False):
-            if isinstance(error, self._provider.input_errors):
+            error_type = type(error)
+            if issubclass(error_type, self._provider.input_errors):
                 return True
-            if isinstance(error, self._provider.state_errors):
+            if issubclass(error_type, self._provider.state_errors):
                 reason = getattr(error, "reason", None)
                 return reason == "stale_token" or "stale" in str(error).lower()
             return False
+        recoverable, _classification_error = self._standard_recoverability(error)
+        return recoverable
+
+    def _standard_recoverability(
+        self, error: BaseException,
+    ) -> tuple[bool, BaseException | None]:
+        """Classify native errors without retaining the message used as a hint."""
         try:
-            if isinstance(error, self._provider.input_errors):
-                return True
-            if isinstance(error, self._provider.state_errors):
+            error_type = type(error)
+            if issubclass(error_type, self._provider.input_errors):
+                return True, None
+            if issubclass(error_type, self._provider.state_errors):
                 try:
                     reason = getattr(error, "reason", None)
+                except BaseException as classification_error:
+                    return False, classification_error
+                if type(reason) is str and reason == "stale_token":
+                    return True, None
+                try:
+                    message = str(error)
                 except BaseException:
-                    return False
-                if type(reason) is str:
-                    return reason == "stale_token"
-                return False
-        except BaseException:
-            return False
-        return False
+                    return False, None
+                return "stale" in message.lower(), None
+        except BaseException as classification_error:
+            return False, classification_error
+        return False, None
 
     def _sanitize_error_chain(self, error: BaseException) -> BaseException:
         """Copy a bounded error graph without native attributes, notes, or text."""
@@ -817,8 +851,8 @@ class CombatDriver:
                 if current_id in seen_errors:
                     continue
                 seen_errors.add(current_id)
-                if not isinstance(current, (*learn_error_types, _StandardNativeError,
-                                            _StandardNativeProcessControl)):
+                if not issubclass(type(current), (*learn_error_types, _StandardNativeError,
+                                                   _StandardNativeProcessControl)):
                     values = [
                         BaseException.__getattribute__(current, "args"),
                         BaseException.__getattribute__(current, "__dict__"),
@@ -863,55 +897,66 @@ class CombatDriver:
         try:
             sensitive_texts = native_texts(error)
         except BaseException as sanitation_error:
-            return _StandardNativeError(type(sanitation_error).__name__)
+            return _StandardNativeError(_safe_exception_class_name(type(sanitation_error)))
 
         def make_safe(current: BaseException, *, is_root: bool) -> BaseException:
-            if isinstance(current, learn_error_types):
-                error_type = type(current)
+            current_type = type(current)
+            if issubclass(current_type, learn_error_types):
+                if issubclass(current_type, ContractError):
+                    safe_type = ContractError
+                elif issubclass(current_type, DriverInputError):
+                    safe_type = DriverInputError
+                else:
+                    safe_type = DriverStateError
                 # A subclass that customizes formatting can surface arbitrary state
                 # even after its args have been replaced. Keep its class name only.
-                if (error_type.__str__ is not BaseException.__str__
-                        or error_type.__repr__ is not BaseException.__repr__):
-                    return _StandardNativeError(error_type.__name__)
+                if (current_type.__str__ is not BaseException.__str__
+                        or current_type.__repr__ is not BaseException.__repr__):
+                    return _StandardNativeError(_safe_exception_class_name(current_type))
                 try:
-                    message = BaseException.__str__(current)
+                    if current_type is safe_type:
+                        message = BaseException.__str__(current)
+                    else:
+                        message = "Learn-authored subclass details omitted"
                     for sensitive in sensitive_texts:
                         message = message.replace(sensitive, "<native details omitted>")
-                    safe = BaseException.__new__(error_type)
+                    safe = BaseException.__new__(safe_type)
                     BaseException.__init__(safe, message)
                     BaseException.__getattribute__(safe, "__dict__").clear()
                     return safe
                 except BaseException:
-                    return _StandardNativeError(error_type.__name__)
+                    return _StandardNativeError(_safe_exception_class_name(current_type))
 
-            if isinstance(current, _StandardNativeRecoverable):
-                return _StandardNativeRecoverable(current.native_type)
-            if isinstance(current, _StandardNativeChainTruncated):
+            if issubclass(current_type, _StandardNativeRecoverable):
+                return _StandardNativeRecoverable(_standard_error_type(current))
+            if issubclass(current_type, _StandardNativeChainTruncated):
                 return _StandardNativeChainTruncated()
-            if isinstance(current, _StandardNativeFault):
-                return _StandardNativeFault(current.native_type)
-            if isinstance(current, _StandardNativeProcessControl):
-                return _StandardNativeProcessControl(current.native_type)
-            if isinstance(current, _StandardNativeError):
-                return _StandardNativeError(current.native_type)
-            if not isinstance(current, Exception):
-                return _StandardNativeProcessControl(type(current).__name__)
+            if issubclass(current_type, _StandardNativeFault):
+                return _StandardNativeFault(_standard_error_type(current))
+            if issubclass(current_type, _StandardNativeProcessControl):
+                return _StandardNativeProcessControl(_standard_error_type(current))
+            if issubclass(current_type, _StandardNativeError):
+                return _StandardNativeError(_standard_error_type(current))
+            if not issubclass(current_type, Exception):
+                return _StandardNativeProcessControl(_safe_exception_class_name(current_type))
             if is_root:
                 try:
-                    if isinstance(current, self._provider.input_errors):
-                        return _StandardNativeRecoverable(type(current).__name__)
-                    if isinstance(current, self._provider.state_errors):
-                        try:
-                            reason = getattr(current, "reason", None)
-                        except BaseException as classification_error:
-                            return _StandardNativeError(type(classification_error).__name__)
-                        if type(reason) is str and reason == "stale_token":
-                            return _StandardNativeRecoverable(type(current).__name__)
-                    if isinstance(current, self._provider.fault_errors):
-                        return _StandardNativeFault(type(current).__name__)
+                    recoverable, classification_error = self._standard_recoverability(current)
+                    if classification_error is not None:
+                        return _StandardNativeError(
+                            _safe_exception_class_name(type(classification_error))
+                        )
+                    if recoverable:
+                        return _StandardNativeRecoverable(
+                            _safe_exception_class_name(current_type)
+                        )
+                    if issubclass(current_type, self._provider.fault_errors):
+                        return _StandardNativeFault(_safe_exception_class_name(current_type))
                 except BaseException as classification_error:
-                    return _StandardNativeError(type(classification_error).__name__)
-            return _StandardNativeError(type(current).__name__)
+                    return _StandardNativeError(
+                        _safe_exception_class_name(type(classification_error))
+                    )
+            return _StandardNativeError(_safe_exception_class_name(current_type))
 
         try:
             copied: dict[int, BaseException] = {id(error): make_safe(error, is_root=True)}
@@ -931,7 +976,9 @@ class CombatDriver:
                     )
                 except BaseException as sanitation_error:
                     # The malformed exception itself is contained as a fatal marker.
-                    return _StandardNativeError(type(sanitation_error).__name__)
+                    return _StandardNativeError(
+                        _safe_exception_class_name(type(sanitation_error))
+                    )
 
                 for link_name, target in (("__cause__", cause), ("__context__", context)):
                     if target is None:
@@ -955,7 +1002,7 @@ class CombatDriver:
             return copied[id(error)]
         except BaseException as sanitation_error:
             # Sanitizer failures are fatal Standard faults, never raw exceptions.
-            return _StandardNativeError(type(sanitation_error).__name__)
+            return _StandardNativeError(_safe_exception_class_name(type(sanitation_error)))
 
     def _raise_fault(
         self, error: BaseException, *, sanitized: bool = False, **kwargs,
@@ -973,8 +1020,8 @@ class CombatDriver:
             return error
         return None
 
-    @staticmethod
     def _failure_context(
+        self,
         error: BaseException,
         *,
         phase: str,
@@ -983,8 +1030,9 @@ class CombatDriver:
         known_current_delivery_slots: int,
         uncertain_current_slots: int,
     ) -> str:
+        type_name = _safe_exception_class_name(type(error))
         return (
-            f"primary failure {type(error).__name__}: {_clean_error(error)}; "
+            f"primary failure {type_name}: {_clean_error(error)}; "
             f"phase={phase}; delivery={delivery}; operation_slots={operation_slots}; "
             f"known_current_delivery_slots={known_current_delivery_slots}; "
             f"uncertain_current_slots={uncertain_current_slots}"
@@ -1062,7 +1110,7 @@ class CombatDriver:
         uncertain_current_slots = min(max(uncertain_current_slots, 0), operation_slots)
         close_error: str | None = None
         if close_failure is not None:
-            if not isinstance(close_failure, Exception):
+            if not issubclass(type(close_failure), Exception):
                 context = self._failure_context(
                     error,
                     phase=phase,
@@ -1101,7 +1149,7 @@ class CombatDriver:
             accepted_prefix=min(self._accepted_steps, _MAX_FAULT_PREFIX),
             failed_operation=min(self._accepted_operations + 1, _MAX_FAULT_PREFIX),
             delivery=delivery,
-            exception_type=getattr(error, "native_type", type(error).__name__),
+            exception_type=_standard_error_type(error),
             message=_clean_error(error),
             accepted_prefix_operations=min(self._accepted_operations, _MAX_FAULT_PREFIX),
             accepted_prefix_slot_actions=min(
@@ -1129,7 +1177,7 @@ class CombatDriver:
         operation_slot_indices: Sequence[int] = (),
         known_current_delivery_slots: int | None = None,
     ) -> None:
-        post_return = isinstance(error, _PostReturnFailure)
+        post_return = issubclass(type(error), _PostReturnFailure)
         if post_return:
             error = error.error
             phase = f"{phase}-export"
@@ -1138,7 +1186,7 @@ class CombatDriver:
         error = self._sanitize_error_chain(error)
         if not post_return and self._is_recoverable(error):
             raise error
-        if not isinstance(error, Exception):
+        if not issubclass(type(error), Exception):
             self._failed = True
             close_failure = self._close_after_failure()
             if close_failure is not None:
@@ -1457,14 +1505,14 @@ class CombatDriver:
             return
         error = self._sanitize_error_chain(failure)
         self._failed = True
-        if not isinstance(error, Exception):
+        if not issubclass(type(error), Exception):
             raise error
         evidence = DriverFaultEvidence(
             phase="close",
             accepted_prefix=min(self._accepted_steps, _MAX_FAULT_PREFIX),
             failed_operation=min(self._accepted_operations + 1, _MAX_FAULT_PREFIX),
             delivery="closed-with-error",
-            exception_type=getattr(error, "native_type", type(error).__name__),
+            exception_type=_standard_error_type(error),
             message=_clean_error(error),
             accepted_prefix_operations=min(self._accepted_operations, _MAX_FAULT_PREFIX),
             accepted_prefix_slot_actions=min(
@@ -1753,7 +1801,10 @@ def _close_after_factory_error(env: object, error: BaseException) -> None:
     except BaseException as close_error:
         add_note = getattr(error, "add_note", None)
         if callable(add_note):
-            add_note(f"Gym close after factory failure also raised {type(close_error).__name__}")
+            add_note(
+                f"Gym close after factory failure also raised "
+                f"{_safe_exception_class_name(type(close_error))}"
+            )
 
 
 def make_driver(config: NeuralConfig, cases: NeuralCases) -> CombatDriver:

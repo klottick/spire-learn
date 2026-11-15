@@ -107,6 +107,72 @@ class _HostileContractError(ContractError):
         raise RuntimeError("SECRET learn repr")
 
 
+class _AttributeHostileError(RuntimeError):
+    def __getattribute__(self, name):
+        if name in {"args", "__dict__", "__cause__", "__context__", "__class__"}:
+            raise RuntimeError("SECRET native getattribute")
+        return super().__getattribute__(name)
+
+
+class _CausePropertyError(RuntimeError):
+    @property
+    def __cause__(self):
+        raise RuntimeError("SECRET cause property")
+
+
+class _LearnAttributeHostileError(ContractError):
+    def __getattribute__(self, name):
+        if name in {"__class__", "native_type"}:
+            raise RuntimeError("SECRET Learn getattribute")
+        return super().__getattribute__(name)
+
+
+class _LearnNativeTypePropertyError(ContractError):
+    @property
+    def native_type(self):
+        raise RuntimeError("SECRET Learn native_type property")
+
+
+class _ForgedNameMeta(type):
+    def __getattribute__(cls, name):
+        if name == "__name__":
+            return "SECRET forged class name"
+        return super().__getattribute__(name)
+
+
+class _ForgedNameError(RuntimeError, metaclass=_ForgedNameMeta):
+    pass
+
+
+class _RaisingNameMeta(type):
+    def __getattribute__(cls, name):
+        if name == "__name__":
+            raise RuntimeError("SECRET name lookup")
+        return super().__getattribute__(name)
+
+
+class _RaisingNameError(RuntimeError, metaclass=_RaisingNameMeta):
+    pass
+
+
+class _RecursiveNameMeta(type):
+    def __getattribute__(cls, name):
+        if name == "__name__":
+            raise _NameBomb("SECRET fallback name lookup")
+        return super().__getattribute__(name)
+
+
+class _NameBomb(RuntimeError, metaclass=_RecursiveNameMeta):
+    pass
+
+
+class _RecursiveNameError(RuntimeError, metaclass=_RecursiveNameMeta):
+    pass
+
+
+_InvalidNameError = type("SECRET invalid class name", (RuntimeError,), {})
+
+
 def _secret_error(error_type, label):
     if error_type is FakeBatchFaultError:
         error = error_type([])
@@ -534,7 +600,7 @@ class StandardEnvTests(unittest.TestCase):
         driver, fake = self._factory()
         driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
         fake.next_error = _secret_error(FakeStateError, "stale state")
-        fake.next_error.reason = "stale_token"
+        fake.next_error.args = ("stale token",)
 
         with self.assertRaises(envs._StandardNativeRecoverable) as caught:
             driver.step([0] * driver.batch_size)
@@ -544,6 +610,54 @@ class StandardEnvTests(unittest.TestCase):
         self.assertFalse(driver._failed)
         self.assertEqual(driver.step([0] * driver.batch_size)[0].native_reward, 0.0)
         driver.close()
+
+    def test_standard_hostile_exception_inspection_is_redacted_at_all_boundaries(self):
+        cases = (
+            (_AttributeHostileError, "_AttributeHostileError"),
+            (_CausePropertyError, "RuntimeError"),
+            (_LearnAttributeHostileError, "ContractError"),
+            (_LearnNativeTypePropertyError, "ContractError"),
+            (_ForgedNameError, "_ForgedNameError"),
+            (_RaisingNameError, "_RaisingNameError"),
+            (_RecursiveNameError, "_RecursiveNameError"),
+            (_InvalidNameError, "UnknownError"),
+        )
+        for error_type, safe_name in cases:
+            for phase in ("reset", "step", "close", "cleanup"):
+                with self.subTest(error=error_type, phase=phase):
+                    driver, fake = self._factory()
+                    if phase in {"step", "cleanup"}:
+                        driver.reset(
+                            seeds=[1] * driver.batch_size,
+                            entry_ids=[None] * driver.batch_size,
+                        )
+                    error = error_type("SECRET payload")
+                    if phase == "close":
+                        fake.next_close_error = error
+                        failure = driver.close
+                    elif phase == "cleanup":
+                        fake.next_error = RuntimeError("SECRET primary")
+                        fake.next_close_error = error
+                        failure = lambda: driver.step([0] * driver.batch_size)
+                    elif phase == "step":
+                        fake.next_error = error
+                        failure = lambda: driver.step([0] * driver.batch_size)
+                    else:
+                        fake.next_error = error
+                        failure = lambda: driver.reset(
+                            seeds=[1] * driver.batch_size,
+                            entry_ids=[None] * driver.batch_size,
+                        )
+
+                    with self.assertRaises(envs.DriverFault) as caught:
+                        failure()
+
+                    expected_name = "RuntimeError" if phase == "cleanup" else safe_name
+                    assert_driver_fault_redacted(self, caught, expected_name)
+                    if phase == "cleanup":
+                        self.assertIn(safe_name, caught.exception.evidence.close_error)
+                    self.assertTrue(driver._failed)
+                    self.assertTrue(fake.closed)
 
     def test_standard_hostile_state_formatting_is_redacted_and_fatal(self):
         driver, fake = self._factory()

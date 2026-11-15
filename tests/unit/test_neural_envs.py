@@ -1144,6 +1144,8 @@ class NeuralEnvTests(unittest.TestCase):
             run_fingerprint=LEGACY_CONTRACT.run_fingerprint,
             raw_mode_mappings=LEGACY_CONTRACT.raw_mode_mappings,
             build=None,
+            m10_rules_id=LEGACY_CONTRACT.m10_rules_id,
+            standard_rules_id=LEGACY_CONTRACT.standard_rules_id,
         )
         with (
             patch.object(envs, "contract_for_revision", return_value=synthetic_contract),
@@ -1234,6 +1236,8 @@ class NeuralEnvTests(unittest.TestCase):
             run_fingerprint=LEGACY_CONTRACT.run_fingerprint,
             raw_mode_mappings=LEGACY_CONTRACT.raw_mode_mappings,
             build=None,
+            m10_rules_id=LEGACY_CONTRACT.m10_rules_id,
+            standard_rules_id=LEGACY_CONTRACT.standard_rules_id,
         )
         with (
             patch.object(envs, "contract_for_revision", return_value=synthetic_contract),

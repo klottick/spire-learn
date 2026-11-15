@@ -75,7 +75,7 @@ class GymV1QualificationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, \
                 patch.object(envs, "make_driver", side_effect=make_driver), \
                 patch.object(envs, "_load_native_runtime", return_value=runtime):
-            result = qualification.run(Path(temporary))
+            result = qualification.run(Path(temporary), profile_dir=CONFIGS)
             saved = json.loads((Path(temporary) / "qualification.json").read_text())
 
         self.assertEqual([item["mode"] for item in result["modes"]], [
@@ -101,7 +101,7 @@ class GymV1QualificationTests(unittest.TestCase):
                 patch.object(envs, "make_driver", side_effect=make_driver), \
                 patch.object(envs, "_load_native_runtime", return_value=runtime):
             with self.assertRaisesRegex(AssertionError, "training import"):
-                qualification.run(Path(temporary))
+                qualification.run(Path(temporary), profile_dir=CONFIGS)
 
         self.assertEqual(len(drivers), 1)
         self.assertEqual(drivers[0].step_calls, 0)

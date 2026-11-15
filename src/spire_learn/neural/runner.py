@@ -45,6 +45,7 @@ from spire_learn.neural.device import (
     validate_resume_device,
 )
 from spire_learn.neural.evaluation import REFERENCE_POLICIES, choose_reference
+from spire_learn.neural.gym_contracts import contract_for_revision
 from spire_learn.neural.ppo import UpdateFault, UpdateMetrics, ppo_update
 
 
@@ -429,25 +430,25 @@ _ENVIRONMENT_IDENTITIES = {
     "standalone": lambda config: {
         "profile_id": config.profile_id or "ironclad-combat-v1",
         "content_id": "spire-gym-ironclad-combat-content-v1",
-        "rules_id": "spire-gym-native-m10-rules-v1",
+        "rules_id": contract_for_revision(config.environment_revision).m10_rules_id,
         "reward_id": "spire-gym-combat-outcome-reward-v1",
     },
     "run": lambda config: {
         "profile_id": config.profile_id or "ironclad-combat-v1",
         "content_id": "profile-defined-m10-ironclad-policy",
-        "rules_id": "spire-gym-native-m10-rules-v1",
+        "rules_id": contract_for_revision(config.environment_revision).m10_rules_id,
         "reward_id": "spire-gym-floor-key-terminal-reward-v1",
     },
     "standard-standalone": lambda config: {
         "profile_id": "standard-combat-v1",
         "content_id": "spire-gym-standard-content-v1",
-        "rules_id": "spire-gym-native-standard-rules-v3",
+        "rules_id": contract_for_revision(config.environment_revision).standard_rules_id,
         "reward_id": "spire-gym-combat-outcome-reward-v1",
     },
     "standard-run": lambda config: {
         "profile_id": "Standard",
         "content_id": "spire-gym-standard-content-v1",
-        "rules_id": "spire-gym-native-standard-rules-v3",
+        "rules_id": contract_for_revision(config.environment_revision).standard_rules_id,
         "reward_id": "spire-gym-floor-key-terminal-reward-v1",
     },
 }

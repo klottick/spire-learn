@@ -67,8 +67,10 @@ class StandardSchemaTests(unittest.TestCase):
         self.assertIn("orbs", parsed.tensors)
         self.assertEqual(parsed.action_space.n, 2048)
 
-    def test_standard_parse_without_revision_is_unambiguous(self):
-        parsed = schema.parse_combat_descriptor(_load("standard-combat-1929e18"))
+    def test_standard_parse_without_revision_is_ambiguous(self):
+        with self.assertRaisesRegex(ContractError, "revision is required"):
+            schema.parse_combat_descriptor(_load("standard-combat-1929e18"))
+        parsed = schema.parse_combat_descriptor(_load("standard-combat-1929e18"), revision=V1)
         self.assertEqual(parsed.gym_revision, V1)
 
     def test_common_fixture_still_parses_under_both_revisions(self):

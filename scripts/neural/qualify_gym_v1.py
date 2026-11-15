@@ -12,6 +12,7 @@ from typing import Any
 
 
 _ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_PROFILE_DIR = Path("configs/neural/gym-8726d467")
 _MODES = ("standalone", "run", "standard-standalone", "standard-run")
 
 
@@ -44,7 +45,7 @@ def _entry_ids(config: Any) -> list[str | None]:
 def _check_build(info: dict[str, object], contract: Any) -> dict[str, object]:
     expected = contract.build
     if expected is None:
-        raise AssertionError("Gym 1.0.0 contract is missing its build identity")
+        raise AssertionError("selected Gym contract is missing its build identity")
     wanted = {
         "extension": "spire-python",
         "revision": expected.revision,
@@ -57,32 +58,37 @@ def _check_build(info: dict[str, object], contract: Any) -> dict[str, object]:
     for key, value in wanted.items():
         actual = list(info[key]) if key == "features" and isinstance(info.get(key), tuple) else info.get(key)
         if actual != value:
-            raise AssertionError(f"Gym build_info {key} does not match GYM_V1_CONTRACT.build")
+            raise AssertionError(f"Gym build_info {key} does not match the selected contract build")
     if info.get("dirty") is not False:
         raise AssertionError("Gym native build must report dirty=False")
     return {key: (list(value) if isinstance(value, tuple) else value)
             for key, value in info.items()}
 
 
-def run(output: Path) -> dict[str, object]:
-    """Run one public reset on each authored Gym 1.0.0 mode and save its record."""
+def run(output: Path, *, profile_dir: Path = _DEFAULT_PROFILE_DIR) -> dict[str, object]:
+    """Run one public reset on each configured Gym mode and save its record."""
     guard = _NoTrainingImports()
     sys.meta_path.insert(0, guard)
     try:
         from spire_learn.neural.config import load_neural_config
         from spire_learn.neural.envs import _load_native_runtime, make_driver
-        from spire_learn.neural.gym_contracts import GYM_V1_CONTRACT
+        from spire_learn.neural.gym_contracts import contract_for_revision
 
+        profile_dir = Path(profile_dir)
+        if not profile_dir.is_absolute():
+            profile_dir = _ROOT / profile_dir
+        first_config = load_neural_config(profile_dir / "standalone.toml")
+        contract = contract_for_revision(first_config.environment_revision)
         runtime = _load_native_runtime()
-        build_info = _check_build(dict(runtime.native.build_info()), GYM_V1_CONTRACT)
+        build_info = _check_build(dict(runtime.native.build_info()), contract)
         output = Path(output).resolve()
         output.mkdir(parents=True, exist_ok=True)
         mode_records: list[dict[str, object]] = []
         close_counts: dict[str, int] = {}
         for mode in _MODES:
-            config = load_neural_config(_ROOT / "configs" / "neural" / "gym-v1.0.0" / f"{mode}.toml")
-            if config.mode != mode or config.environment_revision != GYM_V1_CONTRACT.source_revision:
-                raise AssertionError(f"{mode} config does not select the Gym 1.0.0 contract")
+            config = load_neural_config(profile_dir / f"{mode}.toml")
+            if config.mode != mode or config.environment_revision != contract.source_revision:
+                raise AssertionError(f"{mode} config does not select the selected Gym contract")
             driver = make_driver(config, config.cases)
             try:
                 expected_driver_mode = "run" if mode.endswith("run") else "standalone"
@@ -147,8 +153,10 @@ def run(output: Path) -> dict[str, object]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path, help="directory for qualification.json")
+    parser.add_argument("--profile-dir", type=Path, default=_DEFAULT_PROFILE_DIR,
+                        help="directory containing the four authored mode configs")
     args = parser.parse_args(argv)
-    run(args.output)
+    run(args.output, profile_dir=args.profile_dir)
     return 0
 
 

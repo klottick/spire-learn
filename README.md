@@ -84,11 +84,12 @@ The original Learn audit did not determine the internal cause. Training is
 stopped; the consumed campaign cannot be retried.
 
 Learn now pins Spire Gym 1.0.0 native revision
-`1929e18b9f44372e020877bd62f2a5c9dee3e64e` and adopts its Standard combat and
-Run views. The four mode templates and fresh-weight/rules qualifications are
-documented in the [Gym 1.0.0 migration record](docs/neural-gym-v1-migration.md).
-The one-reset native qualification is pending controller run; no training run
-was launched by this migration.
+`8726d467ad8579730ddf4fa236b24aeb2206b71a`, with templates in
+`configs/neural/gym-8726d467/`, and adopts its Standard combat and Run views.
+The earlier 1.0.0 build `1929e18b` and its `configs/neural/gym-v1.0.0/` templates
+remain valid for their own revision. Native qualification and the driver soak
+passed on both builds; no training run has been launched on either. See the
+[Gym 1.0.0 migration record](docs/neural-gym-v1-migration.md).
 
 The separately approved fresh-weight campaign on this release has now completed
 its development comparisons. Across 438,272 learned decisions, the final mixed

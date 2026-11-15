@@ -19,7 +19,7 @@ from typing import Protocol
 
 from spire_learn.artifacts.codec import to_json_value
 from spire_learn.contracts import ContractError
-from spire_learn.neural.cases import NeuralCases
+from spire_learn.neural.cases import NeuralCase, NeuralCases
 from spire_learn.neural.config import (
     ACCEPTED_RUNTIME_GYM_REVISIONS,
     COMMON_VIEW_FINGERPRINT,
@@ -514,9 +514,10 @@ class _StandardCombatProvider:
         seeds: tuple[int, ...],
         entry_ids: tuple[str | None, ...],
         reset_mask: tuple[bool, ...],
-    ) -> tuple[_RawBoundary | None, ...]:
+    ) -> tuple[_RawBoundary, ...]:
         np = self._numpy
         mask = np.asarray(reset_mask, dtype=np.dtype("bool"))  # type: ignore[attr-defined]
+        native_fault = None
         try:
             with span("native_reset_public_export"):
                 observations, info = self._env.reset(  # type: ignore[attr-defined]
@@ -524,7 +525,9 @@ class _StandardCombatProvider:
                     options={"reset_mask": mask, "entry_ids": list(entry_ids)},
                 )
         except self.fault_errors as error:
-            raise _StandardNativeFault(error) from None
+            native_fault = _StandardNativeFault(error)
+        if native_fault is not None:
+            raise native_fault
         try:
             rows = []
             for slot in range(self.batch_size):
@@ -539,13 +542,16 @@ class _StandardCombatProvider:
     def step(self, actions: tuple[int, ...]) -> tuple[_RawTransition, ...]:
         np = self._numpy
         native_actions = np.asarray(actions, dtype=np.dtype("=i8"))  # type: ignore[attr-defined]
+        native_fault = None
         try:
             with span("native_step_public_export"):
                 observations, rewards, terminated, truncated, info = self._env.step(  # type: ignore[attr-defined]
                     native_actions
                 )
         except self.fault_errors as error:
-            raise _StandardNativeFault(error) from None
+            native_fault = _StandardNativeFault(error)
+        if native_fault is not None:
+            raise native_fault
         try:
             rows = []
             for slot in range(self.batch_size):
@@ -556,9 +562,8 @@ class _StandardCombatProvider:
                     raise ContractError("Standard native reward must be finite")
                 if type(ended) is not bool or type(cut) is not bool:
                     raise ContractError("Standard native end flags must be booleans")
-                raw_info = _standard_info_slot(info, slot)
                 settled_info = _settle_standard_terminal(info, slot, self._encounters)
-                settled = raw_info.get("phase") == "terminal"
+                settled = settled_info.get("phase") == "terminal"
                 if ended is not settled:
                     raise ContractError("Standard terminated flag must match the terminal phase")
                 if settled:
@@ -590,13 +595,19 @@ class _RunProvider:
     def __init__(
         self, env: object, runtime: _NativeRuntime, run_action_count: int,
         schema: CombatSchema | None = None,
+        *, redact_native_errors: bool = False,
     ):
         self._env = env
         self._run_action_count = run_action_count
         self.dispatch_action_count = run_action_count
         self.schema = schema
+        self.redact_native_errors = redact_native_errors
         self.input_errors = _error_types(runtime.native, ("RunInputError",))
         self.state_errors = _error_types(runtime.native, ("RunStateError",))
+        self.fault_errors = (
+            _error_types(runtime.native, ("RunFaultError",))
+            if redact_native_errors else ()
+        )
 
     def _capture(
         self,
@@ -627,8 +638,17 @@ class _RunProvider:
     ) -> tuple[_RawBoundary | None, ...]:
         if len(seeds) != 1 or len(entry_ids) != 1 or len(reset_mask) != 1 or reset_mask != (True,):
             raise DriverInputError("Run reset requires one selected row")
+        native_fault = None
         with span("native_reset_public_export"):
-            result = self._env.reset(seed=seeds[0])  # type: ignore[attr-defined]
+            if self.redact_native_errors:
+                try:
+                    result = self._env.reset(seed=seeds[0])  # type: ignore[attr-defined]
+                except self.fault_errors as error:
+                    native_fault = _StandardNativeFault(error)
+            else:
+                result = self._env.reset(seed=seeds[0])  # type: ignore[attr-defined]
+        if native_fault is not None:
+            raise native_fault
         try:
             # The common sidecar and its token are valid only for this decision.
             with span("run_combat_public_export"):
@@ -639,8 +659,17 @@ class _RunProvider:
             raise _PostReturnFailure(error) from error
 
     def step(self, actions: tuple[int, ...]) -> tuple[_RawTransition, ...]:
+        native_fault = None
         with span("native_step_public_export"):
-            result = self._env.step(actions[0])  # type: ignore[attr-defined]
+            if self.redact_native_errors:
+                try:
+                    result = self._env.step(actions[0])  # type: ignore[attr-defined]
+                except self.fault_errors as error:
+                    native_fault = _StandardNativeFault(error)
+            else:
+                result = self._env.step(actions[0])  # type: ignore[attr-defined]
+        if native_fault is not None:
+            raise native_fault
         try:
             # Read the sidecar before inspecting or dispatching another decision.
             with span("run_combat_public_export"):
@@ -1328,7 +1357,7 @@ _STANDARD_RUN_DOMAIN = b"spire-gym/run-schema/standard/v1\0"
 _STANDARD_RUN_SCHEMA_ID = "spire-gym-standard-run-observation-v1"
 
 
-def _standard_run_case(config: NeuralConfig, cases: NeuralCases) -> object:
+def _standard_run_case(config: NeuralConfig, cases: NeuralCases) -> NeuralCase:
     """Validate the single Standard Run case before any optional import."""
     mode_cases = cases.for_mode("standard-run")
     # The driver's Run mode is one native row; Run configs are fixed at construction.
@@ -1358,20 +1387,20 @@ def _expected_standard_creation(creation: object) -> dict[str, object] | None:
     """Gym reports the supplied ``note`` back as ``stored_note``."""
     if creation is None:
         return None
-    value = to_json_value(creation)
-    if not isinstance(value, dict):
+    if not isinstance(creation, dict):
         raise ContractError("Standard Run creation must thaw to a JSON object")
-    return {"neow": value["neow"], "seen_bosses": value["seen_bosses"],
-            "stored_note": value["note"]}
+    return {"neow": creation["neow"], "seen_bosses": creation["seen_bosses"],
+            "stored_note": creation["note"]}
 
 
 def _make_standard_run_driver(
-    config: NeuralConfig, runtime: _NativeRuntime, case: object,
+    config: NeuralConfig, runtime: _NativeRuntime, case: NeuralCase,
 ) -> CombatDriver:
-    creation = None if case.creation is None else to_json_value(case.creation)  # type: ignore[attr-defined]
+    creation = None if case.creation is None else to_json_value(case.creation)
+    expected_creation = _expected_standard_creation(creation)
     env = runtime.run_env(
-        case.character,  # type: ignore[attr-defined]
-        case.ascension,  # type: ignore[attr-defined]
+        case.character,
+        case.ascension,
         profile="standard",
         partition=config.partition,
         creation=creation,
@@ -1393,12 +1422,11 @@ def _make_standard_run_driver(
                 "mode": "normal_run",
                 "partition": config.partition,
                 "autoreset": "disabled",
-                "character": case.character,  # type: ignore[attr-defined]
-                "ascension": case.ascension,  # type: ignore[attr-defined]
+                "character": case.character,
+                "ascension": case.ascension,
             },
             name="Standard Run environment identity",
         )
-        expected_creation = _expected_standard_creation(case.creation)  # type: ignore[attr-defined]
         if expected_creation is not None and identity.get("creation") != expected_creation:
             raise ContractError("Standard Run environment creation does not match the case")
         schema = parse_combat_descriptor(
@@ -1406,7 +1434,10 @@ def _make_standard_run_driver(
         if (schema.view is not STANDARD_COMBAT_V1
                 or schema.schema_fingerprint != config.standard_view_fingerprint):
             raise ContractError("Standard Run combat view disagrees with config")
-        provider = _RunProvider(env, runtime, _run_action_count(run_descriptor), schema)
+        provider = _RunProvider(
+            env, runtime, _run_action_count(run_descriptor), schema,
+            redact_native_errors=True,
+        )
         return CombatDriver(provider, schema)
     except BaseException as error:
         _close_after_factory_error(env, error)

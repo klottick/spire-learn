@@ -49,6 +49,10 @@ class FakeRunStateError(RuntimeError):
     pass
 
 
+class FakeRunFaultError(RuntimeError):
+    pass
+
+
 def _exit(outcome, visit=0):
     return {"visit": visit, "encounter": "cultist", "outcome": outcome,
             "hp_before_healing": 50, "hp_after_cleanup": 56}
@@ -80,6 +84,7 @@ class FakeStandardRun:
         self.environment = _fixture("standard-run-environment")
         self.combat_descriptor = _fixture("standard-combat")
         self.schema = None
+        self.next_error = None
         # Each boundary: (combat_info, run_legal, reward, terminated)
         self.script = [
             (_combat_info(active=False), (5, 2047), 0.0, False),
@@ -121,6 +126,9 @@ class FakeStandardRun:
         return run_obs, {"schema_id": "spire-gym-standard-run-observation-v1", "effective_seed": 1}
 
     def step(self, action):
+        if self.next_error is not None:
+            error, self.next_error = self.next_error, None
+            raise error
         self.calls.append(("step", action))
         self.cursor += 1
         info, run_obs, reward, terminated = self._boundary()
@@ -152,6 +160,7 @@ class StandardRunEnvTests(unittest.TestCase):
         native = SimpleNamespace(
             build_info=lambda: dict(PUBLISHED_BUILD),
             RunInputError=FakeRunInputError, RunStateError=FakeRunStateError,
+            RunFaultError=FakeRunFaultError,
         )
         return envs._NativeRuntime(_NumpyStub(), native, object, run_class)
 
@@ -208,6 +217,65 @@ class StandardRunEnvTests(unittest.TestCase):
         row = driver.step([5])[0].successor
         self.assertEqual(tuple(candidate.index for candidate in row.candidates), (0,))
         self.assertEqual(row.noncombat_indices, ())
+        driver.close()
+
+    def test_standard_run_fault_is_redacted(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[3], entry_ids=[None])
+        native = FakeRunFaultError("SECRET native Run detail")
+        native.args = ("SECRET native args",)
+        native.secret = "SECRET native attribute"
+        fake.next_error = native
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([5])
+
+        self.assertEqual(caught.exception.evidence.exception_type, "FakeRunFaultError")
+        self.assertNotIn("SECRET", repr(caught.exception.evidence))
+        self.assertNotIn("SECRET", repr(caught.exception))
+        redacted = caught.exception.__cause__
+        self.assertIsInstance(redacted, envs._StandardNativeFault)
+        self.assertIsNone(redacted.__cause__)
+        self.assertIsNone(redacted.__context__)
+        pending = [caught.exception]
+        seen = set()
+        while pending:
+            error = pending.pop()
+            if id(error) in seen:
+                continue
+            seen.add(id(error))
+            self.assertNotIn("SECRET", repr(error))
+            self.assertNotIn("SECRET", str(error))
+            self.assertNotIn("SECRET", repr(getattr(error, "__dict__", {})))
+            if error.__cause__ is not None:
+                pending.append(error.__cause__)
+            if error.__context__ is not None:
+                pending.append(error.__context__)
+
+    def test_legacy_run_error_message_unchanged(self):
+        _standard_driver, fake = self._factory()
+        provider = envs._RunProvider(
+            fake, self._runtime(type(fake)), RUN_ACTIONS, self.schema,
+        )
+        driver = envs.CombatDriver(provider, self.schema)
+        driver.reset(seeds=[3], entry_ids=[None])
+        fake.next_error = FakeRunFaultError("native Run fault detail")
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([5])
+
+        self.assertIn("native Run fault detail", caught.exception.evidence.message)
+
+    def test_standard_run_input_error_recoverable(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[3], entry_ids=[None])
+        fake.next_error = FakeRunInputError("invalid Run input")
+
+        with self.assertRaises(FakeRunInputError):
+            driver.step([5])
+
+        self.assertFalse(driver._failed)
+        self.assertEqual(driver.step([5])[0].successor.lifecycle.active, True)
         driver.close()
 
     def test_escape_in_run_continues(self):

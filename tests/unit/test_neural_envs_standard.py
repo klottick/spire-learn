@@ -312,11 +312,47 @@ class StandardEnvTests(unittest.TestCase):
     def test_standard_native_fault_reports_native_exception_type_only(self):
         driver, fake = self._factory()
         driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
-        fake.next_error = FakeBatchFaultError([])
+        native = FakeBatchFaultError([])
+        native.args = ("SECRET from native args",)
+        native.secret = "SECRET native attribute"
+        fake.next_error = native
         with self.assertRaises(envs.DriverFault) as caught:
             driver.step([0] * driver.batch_size)
         self.assertEqual(caught.exception.evidence.exception_type, "FakeBatchFaultError")
-        self.assertNotIn("sensitive native detail", caught.exception.evidence.message)
+        self.assertNotIn("SECRET", caught.exception.evidence.message)
+
+    def test_standard_fault_has_no_native_context(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        native = FakeBatchFaultError([{"status": "faulted", "message": "SECRET slot detail"}])
+        native.args = ("SECRET native args",)
+        native.secret = "SECRET native attribute"
+        fake.next_error = native
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([0] * driver.batch_size)
+
+        self.assertEqual(caught.exception.evidence.exception_type, "FakeBatchFaultError")
+        self.assertNotIn("SECRET", repr(caught.exception.evidence))
+        self.assertNotIn("SECRET", repr(caught.exception))
+        redacted = caught.exception.__cause__
+        self.assertIsInstance(redacted, envs._StandardNativeFault)
+        self.assertIsNone(redacted.__cause__)
+        self.assertIsNone(redacted.__context__)
+        pending = [caught.exception]
+        seen = set()
+        while pending:
+            error = pending.pop()
+            if id(error) in seen:
+                continue
+            seen.add(id(error))
+            self.assertNotIn("SECRET", repr(error))
+            self.assertNotIn("SECRET", str(error))
+            self.assertNotIn("SECRET", repr(getattr(error, "__dict__", {})))
+            if error.__cause__ is not None:
+                pending.append(error.__cause__)
+            if error.__context__ is not None:
+                pending.append(error.__context__)
 
     def test_fault_slot_truncation_only_marks_omitted_fault_records(self):
         driver, _fake = self._factory()

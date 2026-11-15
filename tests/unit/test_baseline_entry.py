@@ -45,6 +45,8 @@ class _Fakes:
         self.log, self.segments, self.decisions = [], [], 0
         self.env_attempts = self.updates = 0
         self.outcome = "win"
+        self.corrupt_fresh = False
+        self.failed_segment_at = None
         self.fail_evaluation_at = None
         self.decisions_per_segment = decisions_per_segment
         self.missing_checkpoint_at, self.fault_at = missing_checkpoint_at, fault_at
@@ -81,8 +83,12 @@ class _Fakes:
         if self.fault_at == training_index:
             raise RuntimeError("segment fault")
         if self.missing_checkpoint_at == training_index:
+            # A wall-limited segment: healthy exit, incomplete status, nothing published.
             return {"checkpoint": None, "saved_prefix": None, "next_shard": None,
-                    "report": SimpleNamespace(summary={"status": "incomplete"})}
+                    "report": SimpleNamespace(exit_code=0, summary={"status": "incomplete"})}
+        if self.failed_segment_at == training_index:
+            return {"checkpoint": None, "saved_prefix": None, "next_shard": None,
+                    "report": SimpleNamespace(exit_code=1, summary={"status": "operational_failure"})}
         # Like runner._collection_budget_stop: limits are cumulative, including the restored prefix.
         restored_env = 0 if purpose == "warm_start" else self.env_attempts
         restored_updates = 0 if purpose == "warm_start" else self.updates
@@ -128,7 +134,15 @@ class _Fakes:
                     create_runtime=self.create_runtime, run_stream_segment=self.run_stream_segment,
                     evaluate=self.evaluate, preflight=self.preflight, load_recipe=self.load_recipe,
                     build_panel=self.build_panel, summarize=self.summarize,
-                    disk_free=lambda path: self.free, tree_bytes=lambda path: self.bytes)
+                    disk_free=lambda path: self.free, tree_bytes=lambda path: self.bytes,
+                    load_checkpoint=self.load_checkpoint, weights_snapshot=lambda runtime: {"w": 1},
+                    weights_equal=lambda before, after: before == after)
+
+    def load_checkpoint(self, path, identity, *, purpose, device):
+        self.log.append(("load_checkpoint", purpose, device))
+        weights = {"w": 2} if self.corrupt_fresh else {"w": 1}
+        return SimpleNamespace(model_tensors=weights,
+                               metadata={"training_state": {"optimizer_step": 0, "behavior_policy_version": 0}})
 
 
 def _run(fakes, *, clock=None):
@@ -312,6 +326,75 @@ class BaselineEntryTests(unittest.TestCase):
             written = json.loads((output / "summary.json").read_text())
         self.assertEqual(written["result"], "interrupted")
         self.assertEqual(written["interrupted"], "KeyboardInterrupt")
+
+    def test_returned_segment_fault_is_not_evaluated(self):
+        fakes = _Fakes(decisions_per_segment=4096)
+        fakes.failed_segment_at = 3
+        summary, _, _ = _run(fakes)
+        self.assertEqual(summary["stop_reason"], "segment_fault")
+        self.assertEqual(summary["evaluations"], {})
+        self.assertEqual(fakes.evaluated, [])
+        self.assertEqual(summary["result"], "incomplete")
+
+    def test_report_without_fights_is_invalid(self):
+        fakes = _Fakes(decisions_per_segment=4096)
+        original = fakes.evaluate
+
+        def no_fights(config, **kwargs):
+            original(config, **kwargs)
+            return SimpleNamespace(exit_code=0, run_dir=None, summary={"status": "complete"})
+
+        fakes.evaluate = no_fights
+        summary, _, _ = _run(fakes)
+        self.assertEqual(summary["evaluations"]["final"]["status"], "invalid_report")
+        self.assertEqual(len(fakes.evaluated), 1)
+        self.assertEqual(summary["result"], "incomplete")
+        self.assertNotIn("paired_fresh_vs_final", summary)
+
+    def test_summary_error_keeps_result_incomplete(self):
+        fakes = _Fakes(decisions_per_segment=4096)
+
+        def broken_summary(panel, reports):
+            raise ValueError("healthy development report is missing fight metrics")
+
+        fakes.summarize = broken_summary
+        summary, _, _ = _run(fakes)
+        self.assertEqual(summary["evaluations"]["final"]["status"], "summary_error")
+        self.assertEqual(summary["result"], "incomplete")
+
+    def test_censored_cases_are_excluded_from_pairing(self):
+        fakes = _Fakes(decisions_per_segment=4096, panel_cases=3)
+        # Final: win, win, censored; fresh: loss, loss, loss.
+        fakes.outcome = lambda n: {1: "win", 2: "win", 3: "incomplete"}.get(n, "loss")
+        summary, _, _ = _run(fakes)
+        paired = summary["paired_fresh_vs_final"]
+        self.assertEqual(paired["paired_cases"], 2)
+        self.assertEqual(paired["excluded_censored"], 1)
+        self.assertEqual(paired["final_only_win"], 2)
+
+    def test_exception_mid_panel_preserves_partial_rows(self):
+        fakes = _Fakes(decisions_per_segment=4096)
+        original = fakes.evaluate
+
+        def explode_second(config, **kwargs):
+            if len(fakes.evaluated) == 1:
+                fakes.evaluated.append(config.path)
+                raise RuntimeError("case exploded")
+            return original(config, **kwargs)
+
+        fakes.evaluate = explode_second
+        summary, _, written = _run(fakes)
+        self.assertEqual(written["evaluation_fault"]["type"], "RuntimeError")
+        self.assertEqual(list(written["evaluations"]["final"]["cases"]), ["dev-0"])
+        self.assertEqual(written["evaluations"]["final"]["status"], "fault")
+        self.assertEqual(written["result"], "incomplete")
+
+    def test_fresh_roundtrip_mismatch_stops_before_training(self):
+        fakes = _Fakes()
+        fakes.corrupt_fresh = True
+        summary, _, _ = _run(fakes)
+        self.assertEqual(summary["stop_reason"], "fresh_initial_roundtrip_mismatch")
+        self.assertEqual(fakes.segments, [])
 
 
 class TemplatePreparationTests(unittest.TestCase):

@@ -28,7 +28,7 @@ _EVALUATION_ORDER = ('final', 'fresh-initial', 'near-135168', 'near-270336')
 
 
 def _default_dependencies() -> dict[str, Callable]:
-    from spire_learn.neural.checkpoint import preflight_checkpoint
+    from spire_learn.neural.checkpoint import load_checkpoint, preflight_checkpoint
     from spire_learn.neural.config import load_neural_config
     from spire_learn.neural.runner import create_runtime, evaluate_policy
     from spire_learn.neural.scenario_stream import load_scenario_recipe
@@ -41,7 +41,18 @@ def _default_dependencies() -> dict[str, Callable]:
         preflight=preflight_checkpoint, load_recipe=load_scenario_recipe,
         build_panel=build_development_panel, summarize=summarize_development_reports,
         disk_free=lambda path: shutil.disk_usage(path).free, tree_bytes=_tree_bytes,
+        load_checkpoint=load_checkpoint, weights_snapshot=_weights_snapshot, weights_equal=_weights_equal,
     )
+
+
+def _weights_snapshot(runtime) -> dict:
+    return {name: value.detach().cpu().clone() for name, value in runtime.policy.state_dict().items()}
+
+
+def _weights_equal(before: Mapping, after: Mapping) -> bool:
+    import torch
+    return set(before) == set(after) and all(
+        torch.equal(before[name], after[name].detach().cpu()) for name in before)
 
 
 def _tree_bytes(path: Path) -> int:
@@ -189,6 +200,9 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
                 # An evaluation fault never rewrites training results; it is reported, not retried.
                 summary['evaluation_fault'] = {'type': type(error).__name__, 'message': str(error)[:2000]}
                 journal.write('evaluation_fault', **summary['evaluation_fault'])
+                for evaluation in summary['evaluations'].values():
+                    if evaluation.get('status') == 'running':
+                        evaluation['status'] = 'fault'  # partial rows kept; panel not complete
         else:
             summary['evaluation_skipped'] = summary['stop_reason']
         evaluated = summary['evaluations']
@@ -221,11 +235,17 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, deadline, clock
     fresh_path = output / 'fresh-initial'
     runtime = deps['create_runtime'](config, purpose='train')
     try:
+        before = deps['weights_snapshot'](runtime)
         runtime.save(fresh_path, 'final')
     finally:
         runtime.close()
-    # The saved fresh weights must load as an evaluable checkpoint before anything trains on them.
+    # The saved fresh weights must load back exactly, untrained, before anything trains on them.
     deps['preflight'](fresh_path, config.accepted_identities[0], purpose='evaluate')
+    loaded = deps['load_checkpoint'](fresh_path, config.accepted_identities[0], purpose='resume', device='cpu')
+    state = loaded.metadata['training_state']
+    if (not deps['weights_equal'](before, loaded.model_tensors)
+            or state['optimizer_step'] != 0 or state['behavior_policy_version'] != 0):
+        raise _Stop('fresh_initial_roundtrip_mismatch')
     summary['checkpoints'].append({'label': 'fresh-initial', 'path': str(fresh_path), 'learned_decisions': 0})
     journal.write('fresh_initial_saved', checkpoint=fresh_path)
 
@@ -254,8 +274,13 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, deadline, clock
             operation_limits=_limits(prefix, plan['segment'], min(deadline, clock() + 900)))
         summary['segments'] += 1
         if result['checkpoint'] is None:
-            journal.write('segment_without_checkpoint', shard_index=shard_index,
-                          report=getattr(result['report'], 'summary', None))
+            report = result['report']
+            report_summary = getattr(report, 'summary', {}) or {}
+            journal.write('segment_without_checkpoint', shard_index=shard_index, report=report_summary)
+            if getattr(report, 'exit_code', 1) != 0 or report_summary.get('status') != 'incomplete':
+                # A failed segment is a training fault: earlier checkpoints are not evaluated as results.
+                summary['fault'] = {'type': 'SegmentFailure', 'message': str(report_summary.get('status'))}
+                raise _Stop('segment_fault')
             raise _Stop('segment_without_checkpoint')
         previous = (prefix or {}).get('learned_decisions', 0)
         prefix = result['saved_prefix']
@@ -279,7 +304,9 @@ def _case_outcome(report) -> str:
     summary = getattr(report, 'summary', {}) or {}
     if getattr(report, 'exit_code', 1) != 0 or summary.get('status') != 'complete':
         return 'failed'
-    fight = summary.get('fights', {}).get('standalone_fights') or {}
+    fight = (summary.get('fights') or {}).get('standalone_fights')
+    if not isinstance(fight, Mapping):
+        return 'invalid'  # a healthy report must carry its fight metrics
     if fight.get('victories'):
         return 'win'
     if fight.get('deaths'):
@@ -293,7 +320,10 @@ def _paired(fresh: Mapping[str, str], final: Mapping[str, str]) -> dict:
     """Fresh vs final on cases both evaluated healthily; exact two-sided McNemar test."""
     from math import comb
     shared = sorted(set(fresh) & set(final))
-    healthy = [c for c in shared if fresh[c] != 'failed' and final[c] != 'failed']
+    settled = ('win', 'loss', 'escaped')
+    healthy = [c for c in shared if fresh[c] in settled and final[c] in settled]
+    censored = [c for c in shared if c not in healthy
+                and {fresh[c], final[c]} <= {'win', 'loss', 'escaped', 'incomplete'}]
     both = sum(fresh[c] == 'win' and final[c] == 'win' for c in healthy)
     fresh_only = sum(fresh[c] == 'win' and final[c] != 'win' for c in healthy)
     final_only = sum(fresh[c] != 'win' and final[c] == 'win' for c in healthy)
@@ -301,7 +331,8 @@ def _paired(fresh: Mapping[str, str], final: Mapping[str, str]) -> dict:
     discordant = fresh_only + final_only
     tail = sum(comb(discordant, k) for k in range(min(fresh_only, final_only) + 1)) / 2**discordant \
         if discordant else 1.0
-    return {'paired_cases': len(healthy), 'excluded_failed_or_missing': 64 - len(healthy),
+    return {'paired_cases': len(healthy), 'excluded_censored': len(censored),
+            'excluded_failed_invalid_or_missing': 64 - len(healthy) - len(censored),
             'both_win': both, 'fresh_only_win': fresh_only, 'final_only_win': final_only,
             'neither_win': neither, 'fresh_wins': both + fresh_only, 'final_wins': both + final_only,
             'exact_mcnemar_two_sided_p': min(1.0, 2 * tail) if discordant else 1.0}
@@ -322,7 +353,10 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, deadline, cloc
             summary['evaluations'][label] = {'status': 'skipped_wall'}
             continue
         checkpoint = Path(labelled[label]['path'])
-        reports, cases, status = {}, {}, 'complete'
+        reports, cases, status = {}, {}, 'running'
+        # Registered before the first case so exceptional exits still publish partial rows.
+        evaluation = {'status': status, 'checkpoint': str(checkpoint), 'cases': cases, 'device': None}
+        summary['evaluations'][label] = evaluation
         for row in rows:
             if clock() >= deadline:
                 status = 'incomplete_wall'
@@ -343,21 +377,26 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, deadline, cloc
             # evaluate_policy owns and closes the runtime.
             report = deps['evaluate'](config, runtime=runtime, clock=clock, allow_final=False)
             reports[row['case_id']] = report
+            evaluation['device'] = getattr(config, 'device', None)
+            evaluation['cases_evaluated'] = len(reports)
             outcome = _case_outcome(report)
             cases[row['case_id']] = {
                 'outcome': outcome, 'config_sha256': getattr(config, 'config_sha256', None),
                 'run_dir': str(getattr(report, 'run_dir', None))}
-            if outcome == 'failed':
-                status = 'operational_failure'
+            if outcome in ('failed', 'invalid'):
+                status = 'operational_failure' if outcome == 'failed' else 'invalid_report'
                 break
+        else:
+            status = 'complete'
         outcomes[label] = {case: row['outcome'] for case, row in cases.items()}
-        evaluation = {'status': status, 'checkpoint': str(checkpoint), 'cases_evaluated': len(reports),
-                      'device': getattr(config, 'device', None) if reports else None, 'cases': cases}
+        evaluation['cases_evaluated'] = len(reports)
         try:
             evaluation['summary'] = deps['summarize'](panel, reports)
         except Exception as error:
             evaluation['summary_error'] = {'type': type(error).__name__, 'message': str(error)[:2000]}
-        summary['evaluations'][label] = evaluation
+            if status == 'complete':
+                status = 'summary_error'
+        evaluation['status'] = status
         journal.write('evaluation_complete', label=label, status=status, cases_evaluated=len(reports))
         if status != 'complete':
             break

@@ -29,7 +29,7 @@ LEDGER_PATH = (
     / "artifacts/development/neural-combat/diagnostic-sampled-row-ledger.jsonl"
 )
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
-_TASKS = frozenset({"task4", "task6"})
+_TASKS = frozenset({"task4", "task6", "gym-8726d467"})
 
 
 class SampleBudgetError(RuntimeError):
@@ -144,7 +144,7 @@ def reserve_rows(
 ) -> dict[str, int]:
     """Durably reserve rows before any protected test process can start."""
     if task not in _TASKS:
-        raise ValueError("task must be task4 or task6")
+        raise ValueError("task must be task4, task6, or gym-8726d467")
     if not isinstance(reservation_id, str) or _RUN_ID.fullmatch(reservation_id) is None:
         raise ValueError("reservation_id must be a unique 1..64 character run ID")
     if type(rows) is not int or not 1 <= rows <= MAX_INVOCATION_ROWS:
@@ -334,7 +334,7 @@ def activate_from_environment() -> SamplingGuard:
         raise RuntimeError("tensor test gate is not enabled")
     task = os.environ.get("SPIRE_LEARN_TENSOR_TASK")
     if task not in _TASKS:
-        raise RuntimeError("SPIRE_LEARN_TENSOR_TASK must be task4 or task6")
+        raise RuntimeError("SPIRE_LEARN_TENSOR_TASK must be task4, task6, or gym-8726d467")
     reservation_id = os.environ.get("SPIRE_LEARN_TENSOR_RESERVATION_ID", "")
     max_rows_text = os.environ.get("SPIRE_LEARN_TENSOR_MAX_SAMPLED_ROWS", "")
     evidence_path = os.environ.get("SPIRE_LEARN_TENSOR_EVIDENCE_PATH", "")

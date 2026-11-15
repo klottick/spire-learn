@@ -37,7 +37,7 @@ CREATE_TIMEOUT_SECONDS = 30.0
 CREATE_RECONCILE_SECONDS = CREATE_TIMEOUT_SECONDS
 RECONCILE_INTERVAL_SECONDS = 0.25
 ABSENCE_CONFIRMATIONS = 3
-HANDLED_SIGNALS = frozenset((signal.SIGINT, signal.SIGTERM, signal.SIGHUP))
+HANDLED_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 
 @dataclass(frozen=True)
@@ -383,8 +383,12 @@ def _termination_scope(finalize_signals=None):
         def handle(number, frame):
             if state["cleanup"]:
                 state["pending"].append(number)
+                callback = state.get("handoff_callback")
+                if callback is not None and not state.get("post_callback_active"):
+                    callback(state)
                 return
             raise KeyboardInterrupt(f"received signal {number}")
+        state["recording_handler"] = handle
         for number in HANDLED_SIGNALS:
             previous[number] = signal.signal(number, handle)
         state["handled"] = set(previous)
@@ -395,23 +399,49 @@ def _termination_scope(finalize_signals=None):
 
 
 def _restore_signal_handlers(previous, state, *, finalize_signals=None) -> None:
-    try:
+    state["handoff_callback"] = finalize_signals
+    for number in HANDLED_SIGNALS:
+        if number not in previous:
+            continue
+        try:
+            signal.signal(number, state["recording_handler"])
+        except BaseException as exc:
+            state["restore_errors"].append(
+                f"reinstall runner signal handler {number}: {type(exc).__name__}: {exc}")
+    if state["blocked"]:
+        try:
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, state["handled"])
+            state["blocked"] = False
+        except BaseException as exc:
+            state["restore_errors"].append(
+                f"unblock signals for handoff: {type(exc).__name__}: {exc}")
+    if finalize_signals is not None:
+        finalize_signals(state)
+        state["status_decided"] = True
+
+    # SIGTERM is restored last so a signal observed during earlier disposition
+    # handoffs is accounted for before its caller handler becomes active.
+    restore_order = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)
+    for number in restore_order:
+        if number not in previous:
+            continue
+        try:
+            signal.signal(number, previous[number])
+        except BaseException as exc:
+            state["restore_errors"].append(
+                f"restore signal {number}: {type(exc).__name__}: {exc}")
         if finalize_signals is not None:
             finalize_signals(state)
-        for number, handler in previous.items():
-            try:
-                signal.signal(number, handler)
-            except BaseException as exc:
-                state["restore_errors"].append(f"restore signal {number}: {type(exc).__name__}: {exc}")
-        if finalize_signals is not None:
-            finalize_signals(state)
-    finally:
-        if state["blocked"]:
-            try:
-                signal.pthread_sigmask(signal.SIG_SETMASK, state["old_mask"])
-            except BaseException as exc:
-                state["restore_errors"].append(
-                    f"restore signal mask: {type(exc).__name__}: {exc}")
+            state["status_decided"] = True
+
+    # From this point, signals belong to the caller. In the CLI the caller's
+    # default disposition terminates the process with a non-zero signal status.
+    if state["old_mask"] is not None:
+        try:
+            signal.pthread_sigmask(signal.SIG_SETMASK, state["old_mask"])
+        except BaseException as exc:
+            state["restore_errors"].append(
+                f"restore signal mask: {type(exc).__name__}: {exc}")
 
 
 def _block_finalization_signals(state) -> None:
@@ -434,21 +464,6 @@ def _pending_handled_signals(state) -> set[int]:
         state["restore_errors"].append(
             f"inspect pending signals: {type(exc).__name__}: {exc}")
         return set()
-
-
-def _consume_pending_signals(handled) -> set[int]:
-    consumed = set()
-    if not handled or not hasattr(signal, "sigtimedwait"):
-        return consumed
-    while True:
-        try:
-            info = signal.sigtimedwait(handled, 0)
-        except (OSError, ValueError):
-            break
-        if info is None:
-            break
-        consumed.add(info.si_signo)
-    return consumed
 
 
 def run(profile_path: Path, *, entry: str, args: Sequence[str], output: Path,
@@ -496,32 +511,39 @@ def run(profile_path: Path, *, entry: str, args: Sequence[str], output: Path,
 
     def write_post_manifest(termination):
         nonlocal status
-        post_signals = set(termination["pending"][published_signal_count:])
-        post_signals.update(_pending_handled_signals(termination))
-        post_signals.update(_consume_pending_signals(termination["handled"]))
-        restore_errors = termination["restore_errors"]
-        if not post_signals and not restore_errors:
+        if termination.get("post_callback_active"):
             return
-        if termination.get("post_manifest_failed"):
-            status = 75
-            return
-        status = 130 if post_signals else 1
-        if termination.get("post_manifest_written"):
-            return
-        post = {"schema": "spire-learn-runtime-container-post-v1",
-            "final_manifest_sha256": _sha256(output / "manifest-final.json"),
-            "signals": sorted(post_signals), "handler_restore_errors": restore_errors,
-            "exit_status": status,
-            "failure": "termination signal pending after final manifest publication" if post_signals else
-                       "signal handler restoration failed"}
+        termination["post_callback_active"] = True
         try:
-            write_exclusive(output / "manifest-post.json", post)
-            termination["post_manifest_written"] = True
-        except BaseException as exc:
-            status = 75
-            termination["post_manifest_failed"] = True
-            print(f"run is not successful: could not write manifest-post.json: "
-                  f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+            post_signals = set(termination["pending"][published_signal_count:])
+            restore_errors = termination["restore_errors"]
+            if not post_signals and not restore_errors:
+                return
+            if termination.get("post_manifest_failed"):
+                status = 75
+                return
+            status = 130 if post_signals else 1
+            if termination.get("post_manifest_written"):
+                return
+            post = {"schema": "spire-learn-runtime-container-post-v1",
+                "final_manifest_sha256": _sha256(output / "manifest-final.json"),
+                "signals": sorted(post_signals), "handler_restore_errors": restore_errors,
+                "exit_status": status,
+                "failure": "termination signal pending after final manifest publication" if post_signals else
+                           "signal handler restoration failed"}
+            try:
+                write_exclusive(output / "manifest-post.json", post)
+                termination["post_manifest_written"] = True
+            except BaseException as exc:
+                status = 75
+                termination["post_manifest_failed"] = True
+                print(f"run is not successful: could not write manifest-post.json: "
+                      f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+            if termination["pending"][published_signal_count:]:
+                status = 130 if not termination.get("post_manifest_failed") else 75
+        finally:
+            termination["post_callback_active"] = False
+            termination["status_decided"] = True
 
     with _termination_scope(finalize_signals=write_post_manifest) as termination:
         try:

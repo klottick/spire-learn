@@ -497,6 +497,99 @@ class RuntimeContainerTests(unittest.TestCase):
         self.assertIn("process to exit 0", final["success_contract"])
         self.assertFalse((self.output / "manifest-post.json").exists())
 
+    def test_signal_right_before_unblock_is_recorded_before_caller_handler_restore(self):
+        docker = FakeDocker()
+        original_signal = signal.signal
+        original_mask = signal.pthread_sigmask
+        previous_sigterm = signal.getsignal(signal.SIGTERM)
+        caller_handler = lambda number, frame: None
+        original_signal(signal.SIGTERM, caller_handler)
+        injected = [False]
+        def mask_hook(how, signals):
+            if how == signal.SIG_UNBLOCK and signal.SIGTERM in signals and not injected[0]:
+                injected[0] = True
+                signal.raise_signal(signal.SIGTERM)
+            return original_mask(how, signals)
+        try:
+            with patch.object(runner.signal, "pthread_sigmask", side_effect=mask_hook):
+                status = self.run_runner(docker)
+        finally:
+            original_signal(signal.SIGTERM, previous_sigterm)
+        self.assertTrue(injected[0])
+        self.assertNotEqual(status, 0)
+        post = json.loads((self.output / "manifest-post.json").read_text())
+        self.assertIn(signal.SIGTERM, post["signals"])
+
+    def test_signal_right_after_unblock_is_recorded_before_caller_handler_restore(self):
+        docker = FakeDocker()
+        original_signal = signal.signal
+        original_mask = signal.pthread_sigmask
+        previous_sigterm = signal.getsignal(signal.SIGTERM)
+        caller_handler = lambda number, frame: None
+        original_signal(signal.SIGTERM, caller_handler)
+        injected = [False]
+        def mask_hook(how, signals):
+            result = original_mask(how, signals)
+            if how == signal.SIG_UNBLOCK and signal.SIGTERM in signals and not injected[0]:
+                injected[0] = True
+                signal.raise_signal(signal.SIGTERM)
+            return result
+        try:
+            with patch.object(runner.signal, "pthread_sigmask", side_effect=mask_hook):
+                status = self.run_runner(docker)
+        finally:
+            original_signal(signal.SIGTERM, previous_sigterm)
+        self.assertTrue(injected[0])
+        self.assertNotEqual(status, 0)
+        post = json.loads((self.output / "manifest-post.json").read_text())
+        self.assertIn(signal.SIGTERM, post["signals"])
+
+    def test_signal_before_handler_restore_is_recorded_before_term_handler_is_returned(self):
+        docker = FakeDocker()
+        original_signal = signal.signal
+        previous = {number: signal.getsignal(number) for number in runner.HANDLED_SIGNALS}
+        previous_sigterm = previous[signal.SIGTERM]
+        caller_term = lambda number, frame: None
+        original_signal(signal.SIGTERM, caller_term)
+        previous[signal.SIGTERM] = caller_term
+        injected = [False]
+        def signal_hook(number, handler):
+            if handler is previous[number] and not injected[0]:
+                injected[0] = True
+                signal.raise_signal(signal.SIGTERM)
+                post = self.output / "manifest-post.json"
+                self.assertTrue(post.is_file())
+                self.assertNotEqual(json.loads(post.read_text())["exit_status"], 0)
+            if number == signal.SIGTERM and handler is caller_term:
+                self.assertTrue((self.output / "manifest-post.json").is_file())
+            return original_signal(number, handler)
+        try:
+            with patch.object(runner.signal, "signal", side_effect=signal_hook):
+                status = self.run_runner(docker)
+        finally:
+            original_signal(signal.SIGTERM, previous_sigterm)
+        self.assertTrue(injected[0])
+        self.assertNotEqual(status, 0)
+        post = json.loads((self.output / "manifest-post.json").read_text())
+        self.assertIn(signal.SIGTERM, post["signals"])
+
+    def test_caller_handlers_are_restored_after_final_status_is_published(self):
+        docker = FakeDocker()
+        original_signal = signal.signal
+        previous = {number: signal.getsignal(number) for number in runner.HANDLED_SIGNALS}
+        restored = []
+        def signal_hook(number, handler):
+            if handler is previous[number]:
+                final = json.loads((self.output / "manifest-final.json").read_text())
+                self.assertEqual(final["exit_status"], 0)
+                self.assertFalse((self.output / "manifest-post.json").exists())
+                restored.append(number)
+            return original_signal(number, handler)
+        with patch.object(runner.signal, "signal", side_effect=signal_hook):
+            status = self.run_runner(docker)
+        self.assertEqual(status, 0)
+        self.assertEqual(set(restored), set(previous))
+
     def test_sigterm_during_handler_restoration_writes_post_manifest(self):
         docker = FakeDocker()
         original_signal = signal.signal

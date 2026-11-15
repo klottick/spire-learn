@@ -8,6 +8,11 @@
   },
   "gym_revision": "8726d467ad8579730ddf4fa236b24aeb2206b71a",
   "max_new_output_bytes": 12884901888,
+  "notes": [
+    "runner_timeout_seconds exceeds wall_seconds.total so the entry always publishes summary.json before the outer kill",
+    "retention labels checkpoints; nothing is deleted",
+    "panel evaluation runs on cuda:0, unlike the CPU campaign panel; record this when comparing"
+  ],
   "qualification": {
     "max_environment_actions": 512,
     "max_updates": 1
@@ -25,6 +30,7 @@
     135168,
     270336
   ],
+  "runner_timeout_seconds": 15600,
   "schema": "spire-learn-baseline-plan-v1",
   "segment": {
     "max_environment_actions": 4096,

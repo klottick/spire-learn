@@ -43,6 +43,9 @@ class _Fakes:
     def __init__(self, *, decisions_per_segment=4096, missing_checkpoint_at=None, fault_at=None,
                  qualification_checkpoint=True, disk_free=10**12, tree_bytes=0, panel_cases=3):
         self.log, self.segments, self.decisions = [], [], 0
+        self.env_attempts = self.updates = 0
+        self.outcome = "win"
+        self.fail_evaluation_at = None
         self.decisions_per_segment = decisions_per_segment
         self.missing_checkpoint_at, self.fault_at = missing_checkpoint_at, fault_at
         self.qualification_checkpoint = qualification_checkpoint
@@ -80,14 +83,31 @@ class _Fakes:
         if self.missing_checkpoint_at == training_index:
             return {"checkpoint": None, "saved_prefix": None, "next_shard": None,
                     "report": SimpleNamespace(summary={"status": "incomplete"})}
-        self.decisions += self.decisions_per_segment
+        # Like runner._collection_budget_stop: limits are cumulative, including the restored prefix.
+        restored_env = 0 if purpose == "warm_start" else self.env_attempts
+        restored_updates = 0 if purpose == "warm_start" else self.updates
+        if purpose == "warm_start":
+            self.decisions = self.env_attempts = self.updates = 0
+        env_room = max(0, operation_limits.max_environment_actions - restored_env)
+        update_room = max(0, operation_limits.max_updates - restored_updates)
+        work = min(self.decisions_per_segment, env_room) if update_room else 0
+        self.decisions += work
+        self.env_attempts += work
+        self.updates += min(update_room, 8) if work else 0
         path = Path(config.path).parent / "checkpoint-final"
-        return {"checkpoint": path, "saved_prefix": {"learned_decisions": self.decisions},
+        prefix = {"learned_decisions": self.decisions, "attempted_environment_slots": self.env_attempts,
+                  "update_count": self.updates}
+        return {"checkpoint": path, "saved_prefix": prefix,
                 "next_shard": {"shard_index": training_index}, "report": SimpleNamespace(summary={})}
 
     def evaluate(self, config, *, runtime, clock, allow_final):
         self.evaluated.append(config.path)
-        return SimpleNamespace(summary={"status": "complete"})
+        if self.fail_evaluation_at is not None and len(self.evaluated) == self.fail_evaluation_at:
+            return SimpleNamespace(exit_code=1, run_dir=None, summary={"status": "operational_failure"})
+        outcome = self.outcome(len(self.evaluated)) if callable(self.outcome) else self.outcome
+        fight = {"victories": int(outcome == "win"), "deaths": int(outcome == "loss"), "escaped": 0}
+        return SimpleNamespace(exit_code=0, run_dir=None,
+                               summary={"status": "complete", "fights": {"standalone_fights": fight}})
 
     def preflight(self, checkpoint, identity, *, purpose):
         assert purpose == "evaluate"
@@ -132,12 +152,13 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertIn('device = "cuda:0"', template)
 
     def test_fresh_qualification_then_warm_start_and_resume_until_target(self):
-        fakes = _Fakes(decisions_per_segment=135168)
+        fakes = _Fakes(decisions_per_segment=4096)
         summary, events, written = _run(fakes)
         self.assertEqual(summary["stop_reason"], "target_reached")
         self.assertEqual(summary["learned_decisions"], 405504)
         purposes = [call["purpose"] for call in fakes.segments]
-        self.assertEqual(purposes, ["warm_start", "warm_start", "resume", "resume"])
+        self.assertEqual(purposes, ["warm_start", "warm_start"] + ["resume"] * 98)
+        self.assertEqual(summary["result"], "complete")
         fresh = summary["checkpoints"][0]["path"]
         self.assertEqual(fakes.segments[0]["parent"], fresh)  # qualification from fresh weights
         self.assertEqual(fakes.segments[1]["parent"], fresh)  # training starts from fresh weights
@@ -145,16 +166,34 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertEqual(fakes.segments[0]["max_env"], 512)
         self.assertEqual(fakes.segments[1]["max_env"], 4096)
         self.assertEqual(fakes.segments[1]["max_updates"], 8)
+        # Resumed limits are the parent's cumulative counters plus one segment's allowance.
+        self.assertEqual(fakes.segments[2]["max_env"], 8192)
+        self.assertEqual(fakes.segments[2]["max_updates"], 16)
+        self.assertEqual(fakes.segments[-1]["max_env"], 405504)
         self.assertIn("qualification_passed", events)
         self.assertEqual(written["stop_reason"], "target_reached")
         templates = {entry[4] for entry in fakes.log if entry[0] == "prepare"}
         self.assertEqual(templates, {"template.toml"})
 
     def test_decisions_counted_from_saved_prefix_not_segment_count(self):
-        fakes = _Fakes(decisions_per_segment=100000)
+        fakes = _Fakes(decisions_per_segment=3000)  # fewer decisions than the 4,096 allowance
         summary, _, _ = _run(fakes)
-        self.assertEqual(summary["segments"], 5)  # 500,000 >= 405,504 after the fifth segment
-        self.assertEqual(summary["learned_decisions"], 500000)
+        self.assertEqual(summary["segments"], 136)  # 136 * 3000 = 408,000 >= 405,504
+        self.assertEqual(summary["learned_decisions"], 408000)
+
+    def test_fixed_limits_would_stall_and_are_stopped(self):
+        fakes = _Fakes(decisions_per_segment=4096)
+        original = baseline_entry._limits
+        baseline_entry._limits = lambda prefix, allowance, deadline: original(None, allowance, deadline)
+        try:
+            summary, events, _ = _run(fakes)
+        finally:
+            baseline_entry._limits = original
+        self.assertEqual(summary["stop_reason"], "segment_without_progress")
+        self.assertEqual(summary["segments"], 2)
+        self.assertEqual(summary["learned_decisions"], 4096)
+        self.assertEqual(summary["evaluations"]["final"]["status"], "complete")  # stalled run is still measured
+        self.assertEqual(summary["result"], "incomplete")
 
     def test_missing_checkpoint_stops_without_restart(self):
         fakes = _Fakes(decisions_per_segment=4096, missing_checkpoint_at=3)
@@ -171,7 +210,9 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertEqual(summary["stop_reason"], "qualification_without_checkpoint")
         self.assertEqual(len(fakes.segments), 1)
         self.assertEqual(summary["learned_decisions"], 0)
-        self.assertIn("fresh-initial", summary["evaluations"])
+        self.assertEqual(summary["evaluations"], {})
+        self.assertEqual(summary["evaluation_skipped"], "qualification_without_checkpoint")
+        self.assertEqual(summary["result"], "incomplete")
 
     def test_fault_is_recorded_not_retried(self):
         fakes = _Fakes(fault_at=2)
@@ -190,16 +231,18 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertEqual(summary["stop_reason"], "output_byte_cap")
 
     def test_retention_and_panel_evaluation(self):
-        fakes = _Fakes(decisions_per_segment=45056)
+        fakes = _Fakes(decisions_per_segment=4096)
         summary, _, _ = _run(fakes)
         labels = {row["label"]: row["learned_decisions"] for row in summary["checkpoints"]}
         self.assertEqual(labels["fresh-initial"], 0)
         self.assertGreaterEqual(labels["final"], 405504)
-        self.assertEqual(labels["near-135168"], 135168)
-        self.assertEqual(labels["near-270336"], 270336)
+        self.assertEqual(labels["near-135168"], 135168)  # 33 segments * 4096
+        self.assertEqual(labels["near-270336"], 270336)  # 66 segments * 4096
         self.assertEqual(set(summary["evaluations"]), {"fresh-initial", "final", "near-135168", "near-270336"})
         self.assertEqual(summary["evaluations"]["final"]["cases_evaluated"], 3)
         self.assertEqual(len(fakes.evaluated), 12)
+        self.assertEqual(fakes.evaluated[0].split("/")[-1], "config-0.toml")
+        self.assertEqual(summary["evaluations"]["final"]["cases"]["dev-0"]["outcome"], "win")
         evaluate_calls = [entry[1] for entry in fakes.log
                           if entry[0] == "create_runtime" and entry[1].get("purpose") == "evaluate"]
         self.assertTrue(all(call["action_selection"] == "deterministic" for call in evaluate_calls))
@@ -215,6 +258,60 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertEqual(summary["stop_reason"], "target_reached")
         self.assertEqual(written["evaluation_fault"]["type"], "ValueError")
         self.assertIn("evaluation_fault", events)
+
+    def test_final_is_evaluated_first_and_paired_with_fresh(self):
+        fakes = _Fakes(decisions_per_segment=4096, panel_cases=3)
+        # Final evaluates cases 1-3 first, fresh-initial cases 4-6: final wins all, fresh wins only the first.
+        fakes.outcome = lambda n: "win" if n <= 3 or n == 4 else "loss"
+        summary, _, _ = _run(fakes)
+        paired = summary["paired_fresh_vs_final"]
+        self.assertEqual((paired["both_win"], paired["final_only_win"], paired["fresh_only_win"]), (1, 2, 0))
+        self.assertEqual(paired["paired_cases"], 3)
+        self.assertAlmostEqual(paired["exact_mcnemar_two_sided_p"], 0.5)
+
+    def test_returned_evaluation_fault_stops_further_evaluation(self):
+        fakes = _Fakes(decisions_per_segment=4096)
+        fakes.fail_evaluation_at = 2
+        summary, events, _ = _run(fakes)
+        self.assertEqual(summary["evaluations"]["final"]["status"], "operational_failure")
+        self.assertEqual(len(fakes.evaluated), 2)
+        self.assertNotIn("fresh-initial", summary["evaluations"])
+        self.assertEqual(summary["result"], "incomplete")
+
+    def test_storage_stop_during_evaluation(self):
+        fakes = _Fakes(decisions_per_segment=4096)
+        calls = {"n": 0}
+
+        def free(path):
+            calls["n"] += 1
+            # 1 initial + 99 per-segment checks reach 405,504; the first evaluation check is exhausted.
+            return 10**12 if calls["n"] <= 100 else 1
+
+        deps = fakes.deps()
+        deps["disk_free"] = free
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "out"
+            output.mkdir()
+            summary = baseline_entry.run_baseline(ROOT, PLAN, output, dependencies=deps, clock=_Clock())
+        self.assertEqual(summary["stop_reason"], "target_reached")
+        self.assertEqual(summary["evaluations"]["final"]["status"], "stopped_disk_free_below_minimum")
+        self.assertEqual(fakes.evaluated, [])
+
+    def test_interrupt_still_writes_summary(self):
+        fakes = _Fakes()
+
+        def interrupt(*args, **kwargs):
+            raise KeyboardInterrupt
+
+        fakes.run_stream_segment = interrupt
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "out"
+            output.mkdir()
+            with self.assertRaises(KeyboardInterrupt):
+                baseline_entry.run_baseline(ROOT, PLAN, output, dependencies=fakes.deps(), clock=_Clock())
+            written = json.loads((output / "summary.json").read_text())
+        self.assertEqual(written["result"], "interrupted")
+        self.assertEqual(written["interrupted"], "KeyboardInterrupt")
 
 
 class TemplatePreparationTests(unittest.TestCase):

@@ -1,9 +1,11 @@
-"""Profile-driven runtime container tests use temporary trees and a fake Docker CLI."""
+"""Runtime container lifecycle tests use a temporary profile tree and fake Docker CLI."""
 import hashlib
 import json
 import os
 from pathlib import Path
 import signal
+import shutil
+import subprocess
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -12,42 +14,81 @@ from unittest.mock import patch
 from scripts.neural import runtime_container as runner
 
 
+CID = "a" * 64
+GPU = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"
+
+
 class FakeDocker:
-    def __init__(self, *, failure=None):
+    """Stateful fake for Docker CLI outcomes; no external daemon is contacted."""
+    def __init__(self, *, failure=None, logs_size=0):
         self.failure = failure
+        self.logs_size = logs_size
         self.calls = []
+        self.name = None
+        self.container_id = CID
+        self.exists = False
         self.created = False
-        self.removed = False
-        self.killed = False
+        self.rm_targets = []
+        self.inspect_targets = []
 
     def run(self, argv, **kwargs):
         argv = list(argv)
-        self.calls.append(argv)
+        self.calls.append((argv, kwargs))
         operation = argv[1]
+        if operation == "image":
+            return SimpleNamespace(returncode=0, stdout="sha256:image-id\n", stderr="")
+        if operation == "version":
+            return SimpleNamespace(returncode=0, stdout="Docker version 99.0.0\n", stderr="")
         if operation == "create":
+            self.name = argv[argv.index("--name") + 1]
             if self.failure == "create":
                 return SimpleNamespace(returncode=125, stdout="", stderr="create failed")
             self.created = True
-            return SimpleNamespace(returncode=0, stdout="fake-id\n", stderr="")
+            self.exists = True
+            if self.failure == "create_timeout":
+                raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+            if self.failure == "empty_create":
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            return SimpleNamespace(returncode=0, stdout=self.container_id + "\n", stderr="")
         if operation == "start":
+            if self.failure == "start":
+                return SimpleNamespace(returncode=1, stdout="", stderr="start failed")
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if operation == "wait":
             if self.failure == "timeout":
-                raise TimeoutError("wait exceeded")
-            if self.failure == "signal":
+                raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+            if self.failure == "sigterm":
                 signal.raise_signal(signal.SIGTERM)
-            return SimpleNamespace(returncode=0, stdout="7\n" if self.failure == "nonzero" else "0\n", stderr="")
+            if self.failure == "sighup":
+                signal.raise_signal(signal.SIGHUP)
+            return SimpleNamespace(returncode=0,
+                stdout="7\n" if self.failure == "nonzero" else "0\n", stderr="")
         if operation == "kill":
-            self.killed = True
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if operation == "logs":
-            return SimpleNamespace(returncode=0, stdout="captured out", stderr="captured err")
+            if self.failure == "logs":
+                return SimpleNamespace(returncode=1, stdout="partial", stderr="logs failed")
+            stdout = "x" * self.logs_size if self.logs_size else "captured out"
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="captured err")
         if operation == "rm":
-            self.removed = True
-            return SimpleNamespace(returncode=0, stdout="fake-id\n", stderr="")
+            targets = [item for item in argv[2:] if not item.startswith("-")]
+            self.rm_targets.extend(targets)
+            if self.failure == "rm_exception":
+                raise RuntimeError("rm transport failed")
+            if self.failure == "rm_timeout":
+                raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+            self.exists = False
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
         if operation == "inspect":
-            return SimpleNamespace(returncode=1, stdout="", stderr="Error: No such object: fake-id")
-        raise AssertionError(f"unexpected docker operation: {operation}")
+            target = argv[-1]
+            self.inspect_targets.append(target)
+            if self.exists:
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"Id": self.container_id}), stderr="")
+            return SimpleNamespace(returncode=1, stdout="", stderr=f"Error: No such object: {target}")
+        raise AssertionError(f"unexpected docker operation: {argv}")
+
+    def operations(self):
+        return [call[0][1] for call in self.calls]
 
 
 class RuntimeContainerTests(unittest.TestCase):
@@ -62,36 +103,42 @@ class RuntimeContainerTests(unittest.TestCase):
         self.overlay = self.root / "artifacts/site"
         native_dir = self.overlay / "spire_lab"
         native_dir.mkdir(parents=True)
-        native = native_dir / "_native.cpython-312-x86_64-linux-gnu.so"
-        native.write_bytes(b"native payload")
+        self.native = native_dir / "_native.cpython-312-x86_64-linux-gnu.so"
+        self.native.write_bytes(b"native payload")
         self.venv = self.root / "artifacts/runtime/install-work/venv-cuda"
         self.venv.mkdir(parents=True)
         (self.venv / "bin").mkdir()
         (self.venv / "bin/python").touch()
-        lock = self.root / "artifacts/runtime/resolve-work/requirements-cuda.lock"
-        lock.parent.mkdir(parents=True)
-        lock.write_bytes(b"lock payload")
+        self.lock = self.root / "artifacts/runtime/resolve-work/requirements-cuda.lock"
+        self.lock.parent.mkdir(parents=True)
+        self.lock.write_bytes(b"lock payload")
         self.profile_data = {
             "schema": "spire-learn-gym-runtime-profile-v2",
             "gym_revision": "a" * 40,
-            "native_sha256": hashlib.sha256(native.read_bytes()).hexdigest(),
-            "wheel_sha256": hashlib.sha256(self.wheel.read_bytes()).hexdigest(),
+            "native_sha256": self.sha(self.native),
+            "wheel_sha256": self.sha(self.wheel),
             "wheel_path": self.wheel.relative_to(self.root).as_posix(),
             "package_overlay": self.overlay.relative_to(self.root).as_posix(),
             "dependency_venv": self.venv.relative_to(self.root).as_posix(),
-            "dependency_lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+            "dependency_lock_sha256": self.sha(self.lock),
             "build_identity": {"revision": "a" * 40, "dirty": False},
         }
         self.write_profile()
+        entry_dir = self.root / "scripts/neural"
+        entry_dir.mkdir(parents=True)
+        (entry_dir / "gated_tests_entry.py").write_text("pass\n", encoding="utf-8")
+        (entry_dir / "entry.py").write_text("pass\n", encoding="utf-8")
         self.output = self.root / "artifacts/development/neural-combat/test-run"
         self.output.parent.mkdir(parents=True)
-        # The profile verifier requires an immutable overlay, including directories.
         for path in sorted(self.overlay.rglob("*"), reverse=True):
             path.chmod(0o555 if path.is_dir() else 0o444)
         self.overlay.chmod(0o555)
 
+    @staticmethod
+    def sha(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
     def tearDown(self):
-        # Restore permissions so TemporaryDirectory can clean its contents.
         for path in self.overlay.rglob("*"):
             try:
                 path.chmod(0o755 if path.is_dir() else 0o644)
@@ -103,21 +150,28 @@ class RuntimeContainerTests(unittest.TestCase):
     def write_profile(self):
         self.profile_path.write_text(json.dumps(self.profile_data), encoding="utf-8")
 
+    def fake_git(self, *, late_signal=False):
+        calls = []
+        def state(root):
+            calls.append("state")
+            if late_signal and len(calls) == 2:
+                signal.raise_signal(signal.SIGTERM)
+            return {"head": "1" * 40, "dirty": []}
+        return state
+
     def run_runner(self, docker, **overrides):
-        git = overrides.pop("_git_state", {"head": "1" * 40, "dirty": []})
         values = dict(entry="gated_tests_entry.py", args=["--smoke"], output=self.output,
                       authority="approved unit fixture", gpu_uuid=None, timeout_seconds=10,
                       cpus=2.0, memory="4g", env={})
         values.update(overrides)
-        with patch.object(runner, "git_state", return_value=git):
+        with patch.object(runner, "git_state", side_effect=self.fake_git()):
             return runner.run(self.profile_path, root=self.root, docker=docker, **values)
 
-    def test_command_is_offline_readonly_and_has_exactly_one_writable_mount(self):
+    def test_command_contains_network_mount_and_runtime_bootstrap_contract(self):
         profile = runner.load_profile(self.profile_path)
         command = runner.docker_command(profile, root=self.root, entry="gated_tests_entry.py",
             args=["--smoke"], output=self.output, name="owned", gpu_uuid=None, cpus=2,
             memory="4g", env={"MODE": "test"})
-        self.assertIn("--network", command)
         self.assertEqual(command[command.index("--network") + 1], "none")
         self.assertIn("--read-only", command)
         mounts = [command[i + 1] for i, value in enumerate(command[:-1]) if value == "-v"]
@@ -125,26 +179,85 @@ class RuntimeContainerTests(unittest.TestCase):
         self.assertTrue(mounts[0].endswith(":ro"))
         self.assertFalse(mounts[1].endswith(":ro"))
         self.assertEqual(mounts[1].split(":")[0], str(self.output))
-        self.assertFalse(any("--gpus" in value for value in command))
-        self.assertIn("spire-learn/task8-python:cuda-setup-20261028-a", command)
         self.assertIn("-I", command)
         self.assertIn("-B", command)
         self.assertIn("runpy.run_path", command[-1])
 
-    def test_gpu_uuid_adds_device_flag_and_preserves_cuda_visibility(self):
+    def test_command_applies_container_hardening_and_host_identity(self):
         profile = runner.load_profile(self.profile_path)
         command = runner.docker_command(profile, root=self.root, entry="entry.py", args=[],
-            output=self.output, name="owned", gpu_uuid="GPU-abc", cpus=1, memory="2g", env={})
-        self.assertEqual(command[command.index("--gpus") + 1], "device=GPU-abc")
+            output=self.output, name="owned", gpu_uuid=None, cpus=1, memory="2g", env={})
+        self.assertEqual(command[command.index("--cap-drop") + 1], "ALL")
+        self.assertEqual(command[command.index("--security-opt") + 1], "no-new-privileges")
+        self.assertEqual(command[command.index("--pids-limit") + 1], "512")
+        self.assertEqual(command[command.index("--tmpfs") + 1], "/tmp:rw,noexec,nosuid,size=64m")
+        self.assertEqual(command[command.index("--user") + 1], f"{os.getuid()}:{os.getgid()}")
+
+    def test_gpu_uuid_selects_only_one_canonical_device(self):
+        profile = runner.load_profile(self.profile_path)
+        command = runner.docker_command(profile, root=self.root, entry="entry.py", args=[],
+            output=self.output, name="owned", gpu_uuid=GPU, cpus=1, memory="2g", env={})
+        self.assertEqual(command[command.index("--gpus") + 1], f"device={GPU}")
         self.assertNotIn("CUDA_VISIBLE_DEVICES=", command)
 
-    def test_profile_hash_mismatch_is_rejected_before_docker(self):
-        self.profile_data["wheel_sha256"] = "0" * 64
+    def test_invalid_gpu_selectors_are_rejected_before_any_docker_call(self):
+        for selector in ('GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,GPU-ffffffff-1111-2222-3333-444444444444',
+                         '"GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"',
+                         'GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,capabilities=compute'):
+            with self.subTest(selector=selector):
+                docker = FakeDocker()
+                with self.assertRaises(ValueError):
+                    self.run_runner(docker, gpu_uuid=selector)
+                self.assertEqual(docker.calls, [])
+                if self.output.exists():
+                    shutil.rmtree(self.output)
+                self.assertFalse(self.output.exists())
+
+    def test_invalid_and_missing_entry_paths_are_rejected_before_docker(self):
+        for entry in (".hidden.py", "../entry.py", "sub/entry.py", "entry", "missing.py"):
+            with self.subTest(entry=entry):
+                docker = FakeDocker()
+                with self.assertRaises(ValueError):
+                    self.run_runner(docker, entry=entry)
+                self.assertEqual(docker.calls, [])
+                if self.output.exists():
+                    shutil.rmtree(self.output)
+                self.assertFalse(self.output.exists())
+
+    def test_symlink_entry_is_rejected_before_docker(self):
+        link = self.root / "scripts/neural/link.py"
+        link.symlink_to(self.root / "scripts/neural/entry.py")
+        docker = FakeDocker()
+        with self.assertRaises(ValueError):
+            self.run_runner(docker, entry="link.py")
+        self.assertEqual(docker.calls, [])
+
+    def test_wheel_native_lock_and_overlay_verification_rejects_mismatch(self):
+        mutations = (
+            ("native_sha256", "0" * 64),
+            ("dependency_lock_sha256", "0" * 64),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                self.profile_data[field] = value
+                self.write_profile()
+                docker = FakeDocker()
+                with self.assertRaises(ValueError):
+                    self.run_runner(docker)
+                self.assertEqual(docker.calls, [])
+                self.profile_data[field] = self.sha(self.native if field == "native_sha256" else self.lock)
         self.write_profile()
+        self.overlay.chmod(0o755)
+        (self.overlay / "writable.py").write_text("pass\n", encoding="utf-8")
+        (self.overlay / "writable.py").chmod(0o644)
+        self.overlay.chmod(0o555)
         docker = FakeDocker()
         with self.assertRaises(ValueError):
             self.run_runner(docker)
         self.assertEqual(docker.calls, [])
+        self.overlay.chmod(0o755)
+        (self.overlay / "writable.py").unlink()
+        self.overlay.chmod(0o555)
 
     def test_existing_output_directory_is_rejected(self):
         self.output.mkdir()
@@ -153,57 +266,160 @@ class RuntimeContainerTests(unittest.TestCase):
             self.run_runner(docker)
         self.assertEqual(docker.calls, [])
 
-    def test_timeout_kills_removes_and_verifies_absence(self):
+    def test_timeout_kills_removes_verifies_absence_and_collects_logs(self):
         docker = FakeDocker(failure="timeout")
         status = self.run_runner(docker)
         self.assertNotEqual(status, 0)
-        operations = [call[1] for call in docker.calls]
-        self.assertIn("kill", operations)
-        self.assertIn("rm", operations)
-        self.assertEqual(operations[-1], "inspect")
-        self.assertTrue(docker.killed and docker.removed)
+        self.assertIn("kill", docker.operations())
+        self.assertIn("logs", docker.operations())
+        self.assertTrue(docker.exists is False)
         final = json.loads((self.output / "manifest-final.json").read_text())
         self.assertTrue(final["timed_out"])
-        self.assertNotEqual(final["exit_status"], 0)
         self.assertTrue(final["container_removed"])
+        self.assertNotEqual(final["exit_status"], 0)
 
-    def test_termination_signal_removes_container_and_records_failure(self):
-        docker = FakeDocker(failure="signal")
+    def test_create_timeout_removes_by_owned_name_and_rechecks_absence(self):
+        docker = FakeDocker(failure="create_timeout")
         status = self.run_runner(docker)
         self.assertNotEqual(status, 0)
-        self.assertTrue(docker.removed)
+        self.assertTrue(docker.name in docker.rm_targets)
+        self.assertGreaterEqual(len(docker.inspect_targets), 1)
         final = json.loads((self.output / "manifest-final.json").read_text())
+        self.assertTrue(final["container_removed"])
+        self.assertTrue(final["timed_out"])
+        self.assertIsNone(final["container_created"])
+
+    def test_empty_create_output_keeps_owned_name_as_cleanup_target(self):
+        docker = FakeDocker(failure="empty_create")
+        status = self.run_runner(docker)
+        self.assertNotEqual(status, 0)
+        self.assertIn(docker.name, docker.rm_targets)
+        self.assertNotIn("", docker.rm_targets)
+        final = json.loads((self.output / "manifest-final.json").read_text())
+        self.assertTrue(final["container_removed"])
+        self.assertIsNone(final["container_created"])
+
+    def test_start_failure_still_collects_logs_and_removes(self):
+        docker = FakeDocker(failure="start")
+        status = self.run_runner(docker)
+        self.assertNotEqual(status, 0)
+        self.assertIn("logs", docker.operations())
+        self.assertTrue(json.loads((self.output / "manifest-final.json").read_text())["container_removed"])
+
+    def test_logs_failure_is_recorded_as_nonzero(self):
+        docker = FakeDocker(failure="logs")
+        status = self.run_runner(docker)
+        self.assertNotEqual(status, 0)
+        final = json.loads((self.output / "manifest-final.json").read_text())
+        self.assertIn("logs failed", final["failure"])
+        self.assertTrue(final["container_removed"])
+
+    def test_saved_logs_are_bounded(self):
+        docker = FakeDocker(logs_size=9 * 1024 * 1024)
+        self.run_runner(docker)
+        self.assertLessEqual((self.output / "stdout.txt").stat().st_size, 8 * 1024 * 1024)
+
+    def test_rm_exception_still_inspects_and_persisting_container_is_failure(self):
+        docker = FakeDocker(failure="rm_exception")
+        status = self.run_runner(docker)
+        self.assertNotEqual(status, 0)
+        self.assertGreaterEqual(len(docker.inspect_targets), 1)
+        final = json.loads((self.output / "manifest-final.json").read_text())
+        self.assertFalse(final["container_removed"])
+        self.assertNotEqual(final["exit_status"], 0)
+        self.assertTrue(final["cleanup_errors"]["rm"])
+        self.assertTrue(final["cleanup_errors"]["inspect"])
+        self.assertIn(docker.name, docker.rm_targets)
+        self.assertIn(docker.container_id, docker.rm_targets)
+
+    def test_rm_timeout_still_inspects_container(self):
+        docker = FakeDocker(failure="rm_timeout")
+        self.run_runner(docker)
+        self.assertGreaterEqual(len(docker.inspect_targets), 1)
+
+    def test_sigterm_during_final_git_state_cannot_be_recorded_as_success(self):
+        docker = FakeDocker()
+        with patch.object(runner, "git_state", side_effect=self.fake_git(late_signal=True)):
+            status = runner.run(self.profile_path, root=self.root, docker=docker,
+                entry="gated_tests_entry.py", args=[], output=self.output,
+                authority="approved unit fixture")
+        final = json.loads((self.output / "manifest-final.json").read_text())
+        self.assertNotEqual(status, 0)
+        self.assertNotEqual(final["exit_status"], 0)
+        self.assertIsNotNone(final["failure"])
+
+    def test_signal_during_manifest_publish_forces_nonzero_exit_and_failure(self):
+        docker = FakeDocker()
+        original_write = runner.write_exclusive
+        signaled = [False]
+        def write(path, value):
+            if Path(path).name == "manifest-final.json" and not signaled[0]:
+                signaled[0] = True
+                signal.raise_signal(signal.SIGTERM)
+            return original_write(path, value)
+        with patch.object(runner, "git_state", side_effect=self.fake_git()), \
+             patch.object(runner, "write_exclusive", side_effect=write):
+            status = runner.run(self.profile_path, root=self.root, docker=docker,
+                entry="gated_tests_entry.py", args=[], output=self.output,
+                authority="approved unit fixture")
+        final = json.loads((self.output / "manifest-final.json").read_text())
+        self.assertNotEqual(status, 0)
+        self.assertNotEqual(final["exit_status"], 0)
+        self.assertIn("signal", final["failure"])
+
+    def test_signal_during_end_time_capture_forces_failure_manifest(self):
+        docker = FakeDocker()
+        original_now = runner._now
+        calls = []
+        def clock():
+            calls.append(True)
+            if len(calls) == 2:
+                signal.raise_signal(signal.SIGTERM)
+            return original_now()
+        with patch.object(runner, "git_state", side_effect=self.fake_git()), \
+             patch.object(runner, "_now", side_effect=clock):
+            status = runner.run(self.profile_path, root=self.root, docker=docker,
+                entry="gated_tests_entry.py", args=[], output=self.output,
+                authority="approved unit fixture")
+        final = json.loads((self.output / "manifest-final.json").read_text())
+        self.assertNotEqual(status, 0)
+        self.assertNotEqual(final["exit_status"], 0)
+        self.assertIn("signal", final["failure"])
+
+    def test_sighup_during_wait_cleans_container_and_records_failure(self):
+        docker = FakeDocker(failure="sighup")
+        status = self.run_runner(docker)
+        final = json.loads((self.output / "manifest-final.json").read_text())
+        self.assertNotEqual(status, 0)
+        self.assertIn("logs", docker.operations())
         self.assertTrue(final["container_removed"])
         self.assertIn("KeyboardInterrupt", final["failure"])
 
-    def test_create_failure_publishes_final_manifest_without_container(self):
-        docker = FakeDocker(failure="create")
-        status = self.run_runner(docker)
-        self.assertNotEqual(status, 0)
-        self.assertFalse(docker.created)
-        final = json.loads((self.output / "manifest-final.json").read_text())
-        self.assertFalse(final["container_created"])
-        self.assertTrue(final["container_removed"])
-
     def test_nonzero_exit_is_not_retried_and_dirty_state_is_recorded(self):
         docker = FakeDocker(failure="nonzero")
-        status = self.run_runner(docker, _git_state={"head": "1" * 40, "dirty": [" M file.py"]})
+        status = self.run_runner(docker)
         self.assertEqual(status, 7)
-        self.assertEqual(sum(call[1] == "create" for call in docker.calls), 1)
+        self.assertEqual(docker.operations().count("create"), 1)
         manifest = json.loads((self.output / "manifest.json").read_text())
         final = json.loads((self.output / "manifest-final.json").read_text())
-        self.assertEqual(manifest["learner"]["dirty"], [" M file.py"])
-        self.assertEqual(final["learner"]["dirty"], [" M file.py"])
+        self.assertEqual(manifest["learner"]["dirty"], [])
+        self.assertEqual(final["learner"]["dirty"], [])
         self.assertEqual((self.output / "stdout.txt").read_text(), "captured out")
         self.assertEqual((self.output / "stderr.txt").read_text(), "captured err")
+        self.assertEqual(manifest["runtime"]["image_id"], "sha256:image-id")
+        self.assertEqual(manifest["runtime"]["docker_version"], "Docker version 99.0.0")
 
-    def test_manifest_publication_is_exclusive(self):
+    def test_manifests_are_exclusive_and_existing_file_is_not_overwritten(self):
         docker = FakeDocker()
         self.run_runner(docker)
+        manifest = self.output / "manifest.json"
+        original = manifest.read_bytes()
         with self.assertRaises(FileExistsError):
-            runner.write_exclusive(self.output / "manifest.json", {})
+            runner.write_exclusive(manifest, {"replacement": True})
+        self.assertEqual(manifest.read_bytes(), original)
         with self.assertRaises(FileExistsError):
             runner.write_exclusive(self.output / "manifest-final.json", {})
+        self.assertEqual(list(self.output.glob(".manifest*.tmp")), [])
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import chdir, redirect_stderr, redirect_stdout
 from pathlib import Path
 import tempfile
 import unittest
@@ -343,6 +343,34 @@ class GatedTestsEntryTests(unittest.TestCase):
             self.assertNotEqual(status, 0)
             self.assertFalse(evidence.exists())
             self.assertFalse(runner.called)
+
+    def test_relative_ledger_and_evidence_paths_are_refused_before_claim(self):
+        from scripts.neural import gated_tests_entry as entry
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index, (ledger_relative, evidence_relative, expected) in enumerate((
+                (True, False, "--ledger must be an absolute path"),
+                (False, True, "--evidence must be an absolute path"),
+            )):
+                case = root / str(index)
+                case.mkdir()
+                ledger = case / "ledger.jsonl"
+                _sample_guard.initialize_ledger(ledger)
+                evidence = case / "evidence"
+                ledger_arg = "relative-ledger.jsonl" if ledger_relative else str(ledger)
+                evidence_arg = "relative-evidence" if evidence_relative else str(evidence)
+                with self.subTest(expected=expected):
+                    stderr = io.StringIO()
+                    with chdir(case), \
+                         patch.object(entry.unittest, "TextTestRunner") as runner, \
+                         redirect_stderr(stderr):
+                        status = entry.main(["--run-id", f"relative-path-{index}", "--ledger", ledger_arg,
+                                             "--evidence", evidence_arg])
+                    self.assertNotEqual(status, 0)
+                    self.assertIn(expected, stderr.getvalue())
+                    self.assertFalse(evidence.exists())
+                    self.assertFalse(runner.called)
+                self.assertEqual(len(self._ledger(ledger)), 1)
 
     def test_support_loads_the_8726d467_run_template(self):
         from spire_learn.neural import config

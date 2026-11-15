@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import io
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from contextlib import redirect_stderr
+from unittest.mock import patch
 
 from scripts.neural import baseline_entry
 
@@ -209,6 +213,19 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertEqual(summary["evaluations"]["final"]["status"], "complete")  # stalled run is still measured
         self.assertEqual(summary["result"], "incomplete")
 
+    def test_no_progress_after_training_deadline_is_training_wall(self):
+        fakes = _Fakes(decisions_per_segment=0)
+        clock = _Clock()
+        run_segment = fakes.run_stream_segment
+        def expire_after_training_segment(config, **kwargs):
+            result = run_segment(config, **kwargs)
+            if "train-0-" in str(config.path):
+                clock.now = 12602
+            return result
+        fakes.run_stream_segment = expire_after_training_segment
+        summary, _, _ = _run(fakes, clock=clock)
+        self.assertEqual(summary["stop_reason"], "training_wall")
+
     def test_missing_checkpoint_stops_without_restart(self):
         fakes = _Fakes(decisions_per_segment=4096, missing_checkpoint_at=3)
         summary, events, _ = _run(fakes)
@@ -326,6 +343,79 @@ class BaselineEntryTests(unittest.TestCase):
             written = json.loads((output / "summary.json").read_text())
         self.assertEqual(written["result"], "interrupted")
         self.assertEqual(written["interrupted"], "KeyboardInterrupt")
+
+    def test_prepared_directory_failure_still_writes_summary(self):
+        fakes = _Fakes()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "out"
+            output.mkdir()
+            (output / "prepared").mkdir()
+            with self.assertRaises(FileExistsError):
+                baseline_entry.run_baseline(ROOT, PLAN, output, dependencies=fakes.deps(), clock=_Clock())
+            summary = json.loads((output / "summary.json").read_text())
+        self.assertEqual(summary["result"], "interrupted")
+        self.assertEqual(summary["interrupted"], "FileExistsError")
+
+    def test_baseline_requires_absolute_root_and_output_and_runner_output_match(self):
+        fakes = _Fakes()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "out"
+            output.mkdir()
+            with self.assertRaisesRegex(ValueError, "root must be absolute"):
+                baseline_entry.run_baseline(Path("relative-root"), PLAN, output,
+                                            dependencies=fakes.deps(), clock=_Clock())
+            with self.assertRaisesRegex(ValueError, "output must be absolute"):
+                baseline_entry.run_baseline(ROOT, PLAN, Path("relative-output"),
+                                            dependencies=fakes.deps(), clock=_Clock())
+            with patch.dict(os.environ, {"SPIRE_LEARN_RUNNER_OUTPUT": str(output / "other")}):
+                with self.assertRaisesRegex(ValueError, "must match SPIRE_LEARN_RUNNER_OUTPUT"):
+                    baseline_entry.run_baseline(ROOT, PLAN, output,
+                                                dependencies=fakes.deps(), clock=_Clock())
+
+    def test_baseline_requires_runner_timeout_at_least_plan_timeout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "out"
+            output.mkdir()
+            with patch.dict(os.environ, {"SPIRE_LEARN_RUNNER_TIMEOUT_SECONDS": "15599"}):
+                with self.assertRaisesRegex(ValueError, "at least 15600"):
+                    baseline_entry.run_baseline(ROOT, PLAN, output, dependencies=_Fakes().deps(),
+                                                clock=_Clock())
+
+    def test_cli_rejects_mismatched_runner_output_before_starting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "out"
+            output.mkdir()
+            stderr = io.StringIO()
+            with patch.dict(os.environ, {"SPIRE_LEARN_RUNNER_OUTPUT": str(output / "other"),
+                                         "SPIRE_LEARN_RUNNER_TIMEOUT_SECONDS": "15600"}), \
+                 patch.object(baseline_entry, "run_baseline", return_value={
+                     "result": "complete", "stop_reason": "target_reached",
+                     "learned_decisions": 1, "segments": 1,
+                 }) as run_baseline, \
+                 redirect_stderr(stderr):
+                status = baseline_entry.main(["--plan", str(PLAN), "--output", str(output),
+                                              "--root", str(ROOT)])
+            self.assertEqual(status, 2)
+            self.assertFalse(run_baseline.called)
+            self.assertIn("must match SPIRE_LEARN_RUNNER_OUTPUT", stderr.getvalue())
+
+    def test_cli_rejects_runner_timeout_shorter_than_plan_before_starting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "out"
+            output.mkdir()
+            stderr = io.StringIO()
+            with patch.dict(os.environ, {"SPIRE_LEARN_RUNNER_OUTPUT": str(output),
+                                         "SPIRE_LEARN_RUNNER_TIMEOUT_SECONDS": "15599"}), \
+                 patch.object(baseline_entry, "run_baseline", return_value={
+                     "result": "complete", "stop_reason": "target_reached",
+                     "learned_decisions": 1, "segments": 1,
+                 }) as run_baseline, \
+                 redirect_stderr(stderr):
+                status = baseline_entry.main(["--plan", str(PLAN), "--output", str(output),
+                                              "--root", str(ROOT)])
+            self.assertEqual(status, 2)
+            self.assertFalse(run_baseline.called)
+            self.assertIn("at least 15600", stderr.getvalue())
 
     def test_returned_segment_fault_is_not_evaluated(self):
         fakes = _Fakes(decisions_per_segment=4096)

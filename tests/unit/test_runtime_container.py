@@ -19,6 +19,7 @@ from scripts.neural import runtime_container as runner
 
 
 CID = "a" * 64
+IMAGE_ID = "sha256:" + "1" * 64
 GPU = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"
 
 
@@ -43,7 +44,7 @@ class FakeDocker:
         self.calls.append((argv, kwargs))
         operation = argv[1]
         if operation == "image":
-            return SimpleNamespace(returncode=0, stdout="sha256:image-id\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout=IMAGE_ID + "\n", stderr="")
         if operation == "version":
             return SimpleNamespace(returncode=0, stdout="Docker version 99.0.0\n", stderr="")
         if operation == "create":
@@ -159,6 +160,8 @@ class RuntimeContainerTests(unittest.TestCase):
         (entry_dir / "entry.py").write_text("pass\n", encoding="utf-8")
         self.output = self.root / "artifacts/development/neural-combat/test-run"
         self.output.parent.mkdir(parents=True)
+        self.ledger = self.root / "artifacts/development/neural-combat/diagnostic-sampled-row-ledger.jsonl"
+        self.ledger.write_text('{"event":"ledger_initialized","ledger_version":1,"lifetime_cap":4096}\n')
         for path in sorted(self.overlay.rglob("*"), reverse=True):
             path.chmod(0o555 if path.is_dir() else 0o444)
         self.overlay.chmod(0o555)
@@ -190,19 +193,19 @@ class RuntimeContainerTests(unittest.TestCase):
 
     def run_runner(self, docker, **overrides):
         values = dict(entry="gated_tests_entry.py", args=["--smoke"], output=self.output,
-                      authority="approved unit fixture", gpu_uuid=None, timeout_seconds=10,
-                      cpus=2.0, memory="4g", env={})
+                      authority="approved unit fixture", gpu_uuid=None, timeout_seconds=15600,
+                      cpus=2.0, memory="4g", env={}, ledger_bind=None, root=self.root)
         values.update(overrides)
         with patch.object(runner, "git_state", side_effect=self.fake_git()), \
              patch.object(runner, "CREATE_RECONCILE_SECONDS", 0.05, create=True), \
              patch.object(runner, "RECONCILE_INTERVAL_SECONDS", 0.005, create=True):
-            return runner.run(self.profile_path, root=self.root, docker=docker, **values)
+            return runner.run(self.profile_path, docker=docker, **values)
 
     def test_command_contains_network_mount_and_runtime_bootstrap_contract(self):
         profile = runner.load_profile(self.profile_path)
         command = runner.docker_command(profile, root=self.root, entry="gated_tests_entry.py",
             args=["--smoke"], output=self.output, name="owned", gpu_uuid=None, cpus=2,
-            memory="4g", env={"MODE": "test"})
+            memory="4g", env={"MODE": "test"}, image_id=IMAGE_ID, timeout_seconds=15600)
         self.assertEqual(command[command.index("--network") + 1], "none")
         self.assertIn("--read-only", command)
         mounts = [command[i + 1] for i, value in enumerate(command[:-1]) if value == "-v"]
@@ -213,11 +216,16 @@ class RuntimeContainerTests(unittest.TestCase):
         self.assertIn("-I", command)
         self.assertIn("-B", command)
         self.assertIn("runpy.run_path", command[-1])
+        self.assertIn("--pull=never", command)
+        self.assertEqual(command[command.index("--memory-swap") + 1], "4g")
+        self.assertIn(IMAGE_ID, command)
+        self.assertNotIn(runner.IMAGE, command)
 
     def test_command_applies_container_hardening_and_host_identity(self):
         profile = runner.load_profile(self.profile_path)
         command = runner.docker_command(profile, root=self.root, entry="entry.py", args=[],
-            output=self.output, name="owned", gpu_uuid=None, cpus=1, memory="2g", env={})
+            output=self.output, name="owned", gpu_uuid=None, cpus=1, memory="2g", env={},
+            image_id=IMAGE_ID, timeout_seconds=15600)
         self.assertEqual(command[command.index("--cap-drop") + 1], "ALL")
         self.assertEqual(command[command.index("--security-opt") + 1], "no-new-privileges")
         self.assertEqual(command[command.index("--pids-limit") + 1], "512")
@@ -227,9 +235,12 @@ class RuntimeContainerTests(unittest.TestCase):
     def test_gpu_uuid_selects_only_one_canonical_device(self):
         profile = runner.load_profile(self.profile_path)
         command = runner.docker_command(profile, root=self.root, entry="entry.py", args=[],
-            output=self.output, name="owned", gpu_uuid=GPU, cpus=1, memory="2g", env={})
+            output=self.output, name="owned", gpu_uuid=GPU, cpus=1, memory="2g", env={},
+            image_id=IMAGE_ID, timeout_seconds=15600)
         self.assertEqual(command[command.index("--gpus") + 1], f"device={GPU}")
         self.assertNotIn("CUDA_VISIBLE_DEVICES=", command)
+        self.assertIn("SPIRE_LEARN_RUN_NEURAL_GPU_RUNTIME=1", command)
+        self.assertIn(f"SPIRE_LEARN_NEURAL_GPU_UUID={GPU}", command)
 
     def test_invalid_gpu_selectors_are_rejected_before_any_docker_call(self):
         for selector in ('GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,GPU-ffffffff-1111-2222-3333-444444444444',
@@ -243,6 +254,70 @@ class RuntimeContainerTests(unittest.TestCase):
                 if self.output.exists():
                     shutil.rmtree(self.output)
                 self.assertFalse(self.output.exists())
+
+    def test_cpu_mode_hides_all_gpus_and_protects_runtime_environment(self):
+        docker = FakeDocker()
+        self.run_runner(docker)
+        create = next(argv for argv, _kwargs in docker.calls if argv[1] == "create")
+        environment = [create[index + 1] for index, value in enumerate(create[:-1]) if value == "-e"]
+        self.assertIn("NVIDIA_VISIBLE_DEVICES=none", environment)
+        self.assertIn("CUDA_VISIBLE_DEVICES=", environment)
+        self.assertIn(f"SPIRE_LEARN_RUNNER_OUTPUT={self.output}", environment)
+        self.assertIn("SPIRE_LEARN_RUNNER_TIMEOUT_SECONDS=15600", environment)
+        self.assertTrue((self.output / ".runtime/home").is_dir())
+        self.assertTrue((self.output / ".runtime/cache").is_dir())
+        self.assertTrue((self.output / ".runtime/tmp").is_dir())
+        self.assertTrue((self.output / ".runtime/cuda-cache").is_dir())
+        for key in ("HOME", "XDG_CACHE_HOME", "TMPDIR", "CUDA_CACHE_PATH"):
+            self.assertTrue(any(value.startswith(f"{key}={self.output}/.runtime/") for value in environment))
+
+    def test_gpu_environment_overrides_are_rejected(self):
+        for gpu_uuid, key, value in (
+            (GPU, "SPIRE_LEARN_RUN_NEURAL_GPU_RUNTIME", "0"),
+            (GPU, "SPIRE_LEARN_NEURAL_GPU_UUID", "GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            (None, "NVIDIA_VISIBLE_DEVICES", "0"),
+            (None, "CUDA_VISIBLE_DEVICES", "0"),
+        ):
+            with self.subTest(key=key):
+                docker = FakeDocker()
+                with self.assertRaises(ValueError):
+                    self.run_runner(docker, gpu_uuid=gpu_uuid, env={key: value})
+                self.assertEqual(docker.calls, [])
+
+    def test_ledger_bind_adds_exactly_one_writable_canonical_file_mount(self):
+        docker = FakeDocker()
+        status = self.run_runner(docker, ledger_bind=self.ledger)
+        self.assertEqual(status, 0)
+        create = next(argv for argv, _kwargs in docker.calls if argv[1] == "create")
+        mounts = [create[index + 1] for index, value in enumerate(create[:-1]) if value == "-v"]
+        self.assertEqual(len(mounts), 3)
+        self.assertEqual(mounts.count(f"{self.ledger}:{self.ledger}:rw"), 1)
+        self.assertEqual(mounts[2], f"{self.ledger}:{self.ledger}:rw")
+        manifest = json.loads((self.output / "manifest.json").read_text())
+        self.assertEqual(manifest["ledger_bind"], str(self.ledger))
+
+    def test_invalid_ledger_binds_are_refused_before_any_docker_call(self):
+        other = self.root / "artifacts/development/neural-combat/other.jsonl"
+        other.write_text("ledger\n")
+        link = self.root / "artifacts/development/neural-combat/ledger-link.jsonl"
+        link.symlink_to(self.ledger)
+        missing = self.root / "artifacts/development/neural-combat/missing.jsonl"
+        outside = Path(tempfile.gettempdir()) / "other-ledger.jsonl"
+        for candidate in (other, link, missing, outside):
+            with self.subTest(candidate=candidate):
+                docker = FakeDocker()
+                with self.assertRaises(ValueError):
+                    self.run_runner(docker, ledger_bind=candidate)
+                self.assertEqual(docker.calls, [])
+
+    def test_relative_output_root_and_ledger_bind_are_rejected(self):
+        for kwargs in ({"output": Path("relative-output")}, {"root": Path("relative-root")},
+                       {"ledger_bind": Path("relative-ledger")}):
+            with self.subTest(kwargs=kwargs):
+                docker = FakeDocker()
+                with self.assertRaises(ValueError):
+                    self.run_runner(docker, **kwargs)
+                self.assertEqual(docker.calls, [])
 
     def test_invalid_and_missing_entry_paths_are_rejected_before_docker(self):
         for entry in (".hidden.py", "../entry.py", "sub/entry.py", "entry", "missing.py"):
@@ -351,6 +426,7 @@ class RuntimeContainerTests(unittest.TestCase):
         docker = FakeDocker(logs_size=9 * 1024 * 1024)
         self.run_runner(docker)
         self.assertEqual(len(docker.popen_calls), 1)
+        self.assertNotIn("--tail", docker.popen_calls[0])
         self.assertLessEqual((self.output / "stdout.txt").stat().st_size, 8 * 1024 * 1024)
 
     def test_delayed_create_after_first_absence_is_reconciled(self):
@@ -651,7 +727,7 @@ class RuntimeContainerTests(unittest.TestCase):
         self.assertEqual(final["learner"]["dirty"], [])
         self.assertEqual((self.output / "stdout.txt").read_text(), "captured out")
         self.assertEqual((self.output / "stderr.txt").read_text(), "captured err")
-        self.assertEqual(manifest["runtime"]["image_id"], "sha256:image-id")
+        self.assertEqual(manifest["runtime"]["image_id"], IMAGE_ID)
         self.assertEqual(manifest["runtime"]["docker_version"], "Docker version 99.0.0")
 
     def test_manifests_are_exclusive_and_existing_file_is_not_overwritten(self):

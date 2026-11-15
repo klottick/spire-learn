@@ -1,5 +1,11 @@
 #!/usr/bin/env python3.12
-"""Run a learner entry point in the pinned, offline Spire Gym runtime."""
+"""Run a learner entry point in the pinned, offline Spire Gym runtime.
+
+An outer timeout removes the container with ``docker rm --force``; that sends
+SIGKILL, so the entry cannot write its final summary (``progress.jsonl`` still
+survives). Python as PID 1 ignores SIGTERM, so the runner owns timeout and kill
+handling rather than relying on Docker's default stop signal.
+"""
 from __future__ import annotations
 
 import argparse
@@ -15,6 +21,7 @@ from pathlib import Path
 import re
 import selectors
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -26,9 +33,11 @@ from collections.abc import Mapping, Sequence
 
 
 IMAGE = "spire-learn/task8-python:cuda-setup-20261028-a"
+CANONICAL_LEDGER = Path("artifacts/development/neural-combat/diagnostic-sampled-row-ledger.jsonl")
 SCHEMA = "spire-learn-gym-runtime-profile-v2"
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 CONTAINER_ID = re.compile(r"[0-9a-f]{64}\Z")
+IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 GPU_UUID = re.compile(r"GPU-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z")
 ENTRY = re.compile(r"[-A-Za-z0-9_][A-Za-z0-9_.-]*\.py\Z")
 MAX_LOG_BYTES = 8 * 1024 * 1024
@@ -38,6 +47,13 @@ CREATE_RECONCILE_SECONDS = CREATE_TIMEOUT_SECONDS
 RECONCILE_INTERVAL_SECONDS = 0.25
 ABSENCE_CONFIRMATIONS = 3
 HANDLED_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+DEFAULT_RUNNER_TIMEOUT_SECONDS = 15600.0
+MANAGED_ENVIRONMENT = frozenset({
+    "HOME", "XDG_CACHE_HOME", "TMPDIR", "CUDA_CACHE_PATH",
+    "CUDA_VISIBLE_DEVICES", "NVIDIA_VISIBLE_DEVICES",
+    "SPIRE_LEARN_RUNNER_OUTPUT", "SPIRE_LEARN_RUNNER_TIMEOUT_SECONDS",
+    "SPIRE_LEARN_RUN_NEURAL_GPU_RUNTIME", "SPIRE_LEARN_NEURAL_GPU_UUID",
+})
 
 
 @dataclass(frozen=True)
@@ -125,9 +141,11 @@ def _repo_path(root: Path, relative: Path, *, exists=False) -> Path:
 def _output_path(root: Path, value: Path) -> Path:
     root = Path(root).resolve(strict=True)
     raw = Path(value)
+    if not raw.is_absolute():
+        raise ValueError("output must be an absolute path")
     if ".." in raw.parts:
         raise ValueError("output path traversal is forbidden")
-    candidate = raw if raw.is_absolute() else root / raw
+    candidate = raw
     try:
         relative = candidate.relative_to(root)
     except ValueError as exc:
@@ -140,6 +158,66 @@ def _output_path(root: Path, value: Path) -> Path:
     result = root / relative
     if not result.is_relative_to(root / "artifacts/development/neural-combat"):
         raise ValueError("writable output must be under artifacts/development/neural-combat")
+    return result
+
+
+def _ledger_bind_path(root: Path, value: Path | None) -> Path | None:
+    if value is None:
+        return None
+    root = Path(root).resolve(strict=True)
+    path = Path(value)
+    if not path.is_absolute():
+        raise ValueError("ledger-bind must be an absolute path")
+    try:
+        relative = path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("ledger-bind must be inside the repository") from exc
+    if ".." in relative.parts:
+        raise ValueError("ledger-bind path traversal is forbidden")
+    expected = root / CANONICAL_LEDGER
+    current = root
+    for component in relative.parts:
+        current /= component
+        if current.is_symlink():
+            raise ValueError(f"ledger-bind may not contain symlinks: {current}")
+    try:
+        canonical = expected.resolve(strict=True)
+        resolved = path.resolve(strict=True)
+        mode = path.stat().st_mode
+    except OSError as exc:
+        raise ValueError(f"ledger-bind must be an existing regular file: {path}") from exc
+    if resolved != canonical or relative != CANONICAL_LEDGER:
+        raise ValueError("ledger-bind must equal the canonical _sample_guard ledger path")
+    if path.is_symlink() or not stat.S_ISREG(mode):
+        raise ValueError("ledger-bind must be a regular non-symlink file")
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("ledger-bind must resolve inside the repository") from exc
+    return resolved
+
+
+def _runtime_environment(output: Path, *, gpu_uuid: str | None, timeout_seconds: float,
+                         env: Mapping[str, str]) -> dict[str, str]:
+    result = {
+        "HOME": str(output / ".runtime/home"),
+        "XDG_CACHE_HOME": str(output / ".runtime/cache"),
+        "TMPDIR": str(output / ".runtime/tmp"),
+        "CUDA_CACHE_PATH": str(output / ".runtime/cuda-cache"),
+        "SPIRE_LEARN_RUNNER_OUTPUT": str(output),
+        "SPIRE_LEARN_RUNNER_TIMEOUT_SECONDS": str(timeout_seconds),
+    }
+    if gpu_uuid is None:
+        result.update({"NVIDIA_VISIBLE_DEVICES": "none", "CUDA_VISIBLE_DEVICES": ""})
+    else:
+        result.update({"SPIRE_LEARN_RUN_NEURAL_GPU_RUNTIME": "1",
+                       "SPIRE_LEARN_NEURAL_GPU_UUID": gpu_uuid})
+    for key, value in env.items():
+        if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) or not isinstance(value, str):
+            raise ValueError("environment entries must have simple names and string values")
+        if key in MANAGED_ENVIRONMENT:
+            raise ValueError(f"{key} is controlled by the runtime runner")
+        result[key] = value
     return result
 
 
@@ -180,8 +258,12 @@ def verify_profile(profile: RuntimeProfile, root: Path) -> dict:
 
 def docker_command(profile: RuntimeProfile, *, root: Path, entry: str, args: Sequence[str],
                    output: Path, name: str, gpu_uuid: str | None, cpus: float,
-                   memory: str, env: Mapping[str, str]) -> list[str]:
-    root = Path(root).resolve(strict=True)
+                   memory: str, env: Mapping[str, str], image_id: str,
+                   timeout_seconds: float, ledger_bind: Path | None = None) -> list[str]:
+    root = Path(root)
+    if not root.is_absolute():
+        raise ValueError("root must be an absolute path")
+    root = root.resolve(strict=True)
     if not isinstance(entry, str) or ENTRY.fullmatch(entry) is None or "\\" in entry:
         raise ValueError("entry must be a simple <name>.py filename")
     entry_path = root / "scripts/neural" / entry
@@ -192,12 +274,17 @@ def docker_command(profile: RuntimeProfile, *, root: Path, entry: str, args: Seq
     if not name or any(char.isspace() for char in name):
         raise ValueError("invalid owned container name")
     output = _output_path(root, output)
+    ledger_path = _ledger_bind_path(root, ledger_bind)
     if not math.isfinite(cpus) or cpus <= 0:
         raise ValueError("cpus must be positive")
     if not isinstance(memory, str) or not memory:
         raise ValueError("memory limit is required")
-    for host_path in (root, output):
-        if any(char in str(host_path) for char in (",", "\n", "\r", "\x00")):
+    if not isinstance(timeout_seconds, (int, float)) or not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be positive and finite")
+    if not isinstance(image_id, str) or IMAGE_ID.fullmatch(image_id) is None:
+        raise ValueError("image_id must be a canonical Docker SHA-256 image ID")
+    for host_path in (root, output, *(() if ledger_path is None else (ledger_path,))):
+        if any(char in str(host_path) for char in (",", ":", "\n", "\r", "\x00")):
             raise ValueError("Docker bind path contains an unsafe character")
     guest_entry = entry_path
     python = root / profile.dependency_venv / "bin/python"
@@ -207,22 +294,21 @@ def docker_command(profile: RuntimeProfile, *, root: Path, entry: str, args: Seq
         f"sys.argv=['entry',{','.join(repr(str(arg)) for arg in args)}]; "
         f"runpy.run_path({str(guest_entry)!r},run_name='__main__')"
     )
-    command = ["docker", "create", "--name", name, "--network", "none", "--read-only",
+    command = ["docker", "create", "--pull=never", "--name", name, "--network", "none", "--read-only",
                "--user", f"{os.getuid()}:{os.getgid()}", "--cap-drop", "ALL",
                "--security-opt", "no-new-privileges", "--pids-limit", "512",
                "--tmpfs", TMPFS_SPEC, "--cpus", str(cpus), "--memory", memory,
+               "--memory-swap", memory,
                "-v", f"{root}:{root}:ro", "-v", f"{output}:{output}", "-w", "/tmp"]
+    if ledger_path is not None:
+        command.extend(("-v", f"{ledger_path}:{ledger_path}:rw"))
     if gpu_uuid:
         command.extend(("--gpus", f"device={gpu_uuid}"))
-    else:
-        command.extend(("-e", "CUDA_VISIBLE_DEVICES="))
-    for key, value in env.items():
-        if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) or not isinstance(value, str):
-            raise ValueError("environment entries must have simple names and string values")
-        if key == "CUDA_VISIBLE_DEVICES":
-            raise ValueError("CUDA_VISIBLE_DEVICES is controlled by runner device selection")
+    runtime_env = _runtime_environment(output, gpu_uuid=gpu_uuid,
+                                      timeout_seconds=timeout_seconds, env=env)
+    for key, value in runtime_env.items():
         command.extend(("-e", f"{key}={value}"))
-    command.extend((IMAGE, str(python), "-I", "-B", "-c", bootstrap))
+    command.extend((image_id, str(python), "-I", "-B", "-c", bootstrap))
     return command
 
 
@@ -286,7 +372,7 @@ def _invoke(docker, argv, *, timeout=None):
 
 def _docker_metadata(docker) -> dict:
     image = _invoke(docker, ["docker", "image", "inspect", "--format", "{{.Id}}", IMAGE], timeout=30)
-    if image.returncode != 0 or not image.stdout.strip():
+    if image.returncode != 0 or IMAGE_ID.fullmatch(image.stdout.strip()) is None:
         raise RuntimeError(f"could not identify Docker image: {(image.stderr or '').strip()}")
     version = _invoke(docker, ["docker", "version", "--format", "{{json .}}"], timeout=30)
     if version.returncode != 0 or not version.stdout.strip():
@@ -306,7 +392,7 @@ def _error_text(operation: str, result=None, exception: BaseException | None = N
 
 
 def _collect_logs(docker, target: str, output: Path) -> tuple[str | None, bool]:
-    argv = ["docker", "logs", "--tail", "10000", target]
+    argv = ["docker", "logs", target]
     popen = getattr(docker, "Popen", subprocess.Popen)
     total_bytes = {"stdout": 0, "stderr": 0}
     truncated = False
@@ -467,10 +553,14 @@ def _pending_handled_signals(state) -> set[int]:
 
 
 def run(profile_path: Path, *, entry: str, args: Sequence[str], output: Path,
-        authority: str, gpu_uuid: str | None = None, timeout_seconds: float = 14400,
+        authority: str, gpu_uuid: str | None = None,
+        timeout_seconds: float = DEFAULT_RUNNER_TIMEOUT_SECONDS,
         cpus: float = 4, memory: str = "16g", env: Mapping[str, str] | None = None,
-        docker=subprocess, root: Path | None = None) -> int:
-    root = Path(root or Path(__file__).resolve().parents[2]).resolve(strict=True)
+        docker=subprocess, root: Path | None = None, ledger_bind: Path | None = None) -> int:
+    root = Path(root or Path(__file__).resolve().parents[2])
+    if not root.is_absolute():
+        raise ValueError("root must be an absolute path")
+    root = root.resolve(strict=True)
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive and finite")
     profile_path = Path(profile_path)
@@ -481,19 +571,29 @@ def run(profile_path: Path, *, entry: str, args: Sequence[str], output: Path,
     learner = git_state(root)
     output = _output_path(root, Path(output))
     name = "spire-learn-runtime-" + uuid.uuid4().hex[:20]
-    create_command = docker_command(profile, root=root, entry=entry, args=args, output=output,
-        name=name, gpu_uuid=gpu_uuid, cpus=cpus, memory=memory, env=env or {})
     if output.exists():
         raise FileExistsError(output)
+    # Validate all user-controlled options before making any Docker CLI calls.
+    docker_command(profile, root=root, entry=entry, args=args, output=output,
+        name=name, gpu_uuid=gpu_uuid, cpus=cpus, memory=memory, env=env or {},
+        image_id="sha256:" + "0" * 64, timeout_seconds=timeout_seconds,
+        ledger_bind=ledger_bind)
     runtime = _docker_metadata(docker)
+    create_command = docker_command(profile, root=root, entry=entry, args=args, output=output,
+        name=name, gpu_uuid=gpu_uuid, cpus=cpus, memory=memory, env=env or {},
+        image_id=runtime["image_id"], timeout_seconds=timeout_seconds,
+        ledger_bind=ledger_bind)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.mkdir(exist_ok=False)
+    for directory in ("home", "cache", "tmp", "cuda-cache"):
+        (output / ".runtime" / directory).mkdir(parents=True, exist_ok=True)
     started = _now()
     manifest = {"schema": "spire-learn-runtime-container-manifest-v1", "authority": authority,
         "date": started[:10], "profile": {"path": str(profile.path), "sha256": profile.sha256,
         "gym_revision": profile.gym_revision, "build_identity": profile.build_identity},
         "learner": learner, "verification": verification, "runtime": runtime, "container_name": name,
-        "command": create_command, "limits": {"timeout_seconds": timeout_seconds, "cpus": cpus,
+        "command": create_command, "ledger_bind": str(ledger_bind) if ledger_bind is not None else None,
+        "limits": {"timeout_seconds": timeout_seconds, "cpus": cpus,
         "memory": memory, "gpu_uuid": gpu_uuid}, "started_at": started}
     write_exclusive(output / "manifest.json", manifest)
     created = False
@@ -726,13 +826,19 @@ def main(argv=None) -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--authority", required=True)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument("--ledger-bind", type=Path)
     parser.add_argument("--gpu")
-    parser.add_argument("--timeout", type=float, default=14400)
+    parser.add_argument("--timeout", type=float, default=DEFAULT_RUNNER_TIMEOUT_SECONDS)
     parser.add_argument("--cpus", type=float, default=4)
     parser.add_argument("--memory", default="16g")
     parser.add_argument("--env", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument("entry_args", nargs=argparse.REMAINDER)
     values = parser.parse_args(argv)
+    for name, path in (("--root", values.root), ("--output", Path(values.output))):
+        if not path.is_absolute():
+            parser.error(f"{name} must be an absolute path")
+    if values.ledger_bind is not None and not values.ledger_bind.is_absolute():
+        parser.error("--ledger-bind must be an absolute path")
     entry_args = values.entry_args[1:] if values.entry_args[:1] == ["--"] else values.entry_args
     env = {}
     for item in values.env:
@@ -742,7 +848,8 @@ def main(argv=None) -> int:
         env[key] = value
     return run(values.profile, entry=values.entry, args=entry_args, output=values.output,
         authority=values.authority, gpu_uuid=values.gpu, timeout_seconds=values.timeout,
-        cpus=values.cpus, memory=values.memory, env=env, root=values.root)
+        cpus=values.cpus, memory=values.memory, env=env, root=values.root,
+        ledger_bind=values.ledger_bind)
 
 
 if __name__ == "__main__":

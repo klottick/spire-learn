@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Mapping
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -133,6 +134,36 @@ def _limits(prefix: Mapping | None, allowance: Mapping, deadline: float):
         monotonic_deadline=deadline)
 
 
+def _validate_runner_contract(root: Path, output: Path, plan: Mapping, *, require_environment: bool) -> None:
+    if not root.is_absolute():
+        raise ValueError('root must be absolute')
+    if not output.is_absolute():
+        raise ValueError('output must be absolute')
+    expected_output = os.environ.get('SPIRE_LEARN_RUNNER_OUTPUT')
+    if expected_output is None:
+        if require_environment:
+            raise ValueError('SPIRE_LEARN_RUNNER_OUTPUT is required')
+    else:
+        runner_output = Path(expected_output)
+        if not runner_output.is_absolute():
+            raise ValueError('SPIRE_LEARN_RUNNER_OUTPUT must be an absolute path')
+        if runner_output.resolve() != output.resolve():
+            raise ValueError('output must match SPIRE_LEARN_RUNNER_OUTPUT')
+    timeout_text = os.environ.get('SPIRE_LEARN_RUNNER_TIMEOUT_SECONDS')
+    if timeout_text is None:
+        if require_environment:
+            raise ValueError('SPIRE_LEARN_RUNNER_TIMEOUT_SECONDS is required')
+    else:
+        try:
+            timeout = float(timeout_text)
+        except ValueError as error:
+            raise ValueError('SPIRE_LEARN_RUNNER_TIMEOUT_SECONDS must be numeric') from error
+        minimum = plan.get('runner_timeout_seconds')
+        if (not math.isfinite(timeout) or type(minimum) not in (int, float)
+                or not math.isfinite(float(minimum)) or timeout < minimum):
+            raise ValueError(f'SPIRE_LEARN_RUNNER_TIMEOUT_SECONDS must be at least {minimum}')
+
+
 # Training stops after which evaluating the reached checkpoints is meaningful.
 _EVALUABLE_STOPS = frozenset({'target_reached', 'training_wall', 'stream_exhausted',
                               'segment_without_progress', 'segment_without_checkpoint'})
@@ -143,14 +174,20 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
                  clock: Callable[[], float] = time.monotonic) -> dict:
     deps = dict(_default_dependencies() if dependencies is None else dependencies)
     root, output = Path(root), Path(output)
-    plan = load_plan(root / plan_path)
+    if not root.is_absolute():
+        raise ValueError('root must be absolute')
+    if not output.is_absolute():
+        raise ValueError('output must be absolute')
+    root = root.resolve(strict=True)
+    plan_path = Path(plan_path)
+    plan = load_plan(plan_path if plan_path.is_absolute() else root / plan_path)
+    _validate_runner_contract(root, output, plan, require_environment=False)
     started = clock()
     training_deadline = started + plan['wall_seconds']['training']
     total_deadline = started + plan['wall_seconds']['total']
     template = root / plan['template']
     recipe_path = root / plan['recipe']
     prepared = output / 'prepared'
-    prepared.mkdir()
     journal = _Journal(output / 'progress.jsonl', clock, started)
     summary: dict = {'schema': 'spire-learn-baseline-summary-v1', 'plan': plan, 'stop_reason': None,
                      'checkpoints': [], 'segments': 0, 'learned_decisions': 0, 'evaluations': {},
@@ -172,6 +209,7 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
     fresh_path = None
     recorded: list[dict] = []
     try:
+        prepared.mkdir()
         try:
             _train(summary, deps, plan, prepare, storage_stop, recorded, training_deadline, clock,
                    journal, output)
@@ -291,7 +329,7 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, deadline, clock
         summary['learned_decisions'] = decisions
         journal.write('segment_complete', **row, prefix=prefix)
         if decisions <= previous:
-            raise _Stop('segment_without_progress')
+            raise _Stop('training_wall' if clock() >= deadline else 'segment_without_progress')
         parent, purpose = result['checkpoint'], 'resume'
         if decisions >= plan['target_learned_decisions']:
             raise _Stop('target_reached')
@@ -416,6 +454,19 @@ def main(argv=None) -> int:
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[2])
     arguments = parser.parse_args(argv)
+    if not arguments.root.is_absolute():
+        print('--root must be an absolute path', file=sys.stderr)
+        return 2
+    if not arguments.output.is_absolute():
+        print('--output must be an absolute path', file=sys.stderr)
+        return 2
+    plan_path = arguments.plan if arguments.plan.is_absolute() else arguments.root / arguments.plan
+    try:
+        plan = load_plan(plan_path)
+        _validate_runner_contract(arguments.root, arguments.output, plan, require_environment=True)
+    except (OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
     summary = run_baseline(arguments.root, arguments.plan, arguments.output)
     print(json.dumps({'result': summary['result'], 'stop_reason': summary['stop_reason'],
                       'learned_decisions': summary['learned_decisions'],

@@ -185,6 +185,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if _RUN_ID.fullmatch(args.run_id) is None:
         parser.error("--run-id must be 1..51 safe filename characters and start with a letter or digit")
+    if not args.ledger.is_absolute():
+        print("--ledger must be an absolute path", file=sys.stderr)
+        return 2
+    if not args.evidence.is_absolute():
+        print("--evidence must be an absolute path", file=sys.stderr)
+        return 2
     evidence_dir = args.evidence
     evidence_path = evidence_dir / _EVIDENCE_FILE
     metrics_path = evidence_dir / _METRICS_FILE

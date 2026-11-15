@@ -15,7 +15,14 @@ from spire_learn.neural import envs
 from spire_learn.neural.cases import load_neural_cases
 from spire_learn.neural.config import load_neural_config
 from tests.unit.test_neural_envs import _DType, _Flags, _NumpyStub
-from tests.unit.test_neural_envs_standard import FakeStandardVector, _Array
+from tests.unit.test_neural_envs_standard import (
+    FakeStandardVector,
+    _Array,
+    FakeNativeValueError,
+    _secret_error,
+    assert_driver_fault_redacted,
+    assert_no_secret_error_chain,
+)
 from tests.unit.test_neural_gym_v1 import PUBLISHED_BUILD, V1
 from tests.unit.test_neural_schema import _api
 
@@ -85,6 +92,8 @@ class FakeStandardRun:
         self.combat_descriptor = _fixture("standard-combat")
         self.schema = None
         self.next_error = None
+        self.next_close_error = None
+        self.next_combat_view_error = None
         # Each boundary: (combat_info, run_legal, reward, terminated)
         self.script = [
             (_combat_info(active=False), (5, 2047), 0.0, False),
@@ -120,6 +129,9 @@ class FakeStandardRun:
         return info, {"action_mask": _Mask(legal)}, reward, terminated
 
     def reset(self, *, seed=None, options=None):
+        if self.next_error is not None:
+            error, self.next_error = self.next_error, None
+            raise error
         self.calls.append(("reset", seed))
         self.cursor = 0
         info, run_obs, _reward, _terminated = self._boundary()
@@ -135,11 +147,17 @@ class FakeStandardRun:
         return run_obs, reward, terminated, False, {"reward_events": [], "effective_seed": 1}
 
     def combat_view(self):
+        if self.next_combat_view_error is not None:
+            error, self.next_combat_view_error = self.next_combat_view_error, None
+            raise error
         info, _run_obs, _reward, _terminated = self._boundary()
         return {"obs": self._combat_obs(info["active"]), "token": object(), "info": info}
 
     def close(self):
         self.closed = True
+        if self.next_close_error is not None:
+            error, self.next_close_error = self.next_close_error, None
+            raise error
 
     def _forbidden(self, *args, **kwargs):
         raise AssertionError("privileged method must never be called")
@@ -222,35 +240,96 @@ class StandardRunEnvTests(unittest.TestCase):
     def test_standard_run_fault_is_redacted(self):
         driver, fake = self._factory()
         driver.reset(seeds=[3], entry_ids=[None])
-        native = FakeRunFaultError("SECRET native Run detail")
-        native.args = ("SECRET native args",)
-        native.secret = "SECRET native attribute"
-        fake.next_error = native
+        fake.next_error = _secret_error(FakeRunFaultError, "step fault")
 
         with self.assertRaises(envs.DriverFault) as caught:
             driver.step([5])
 
-        self.assertEqual(caught.exception.evidence.exception_type, "FakeRunFaultError")
-        self.assertNotIn("SECRET", repr(caught.exception.evidence))
-        self.assertNotIn("SECRET", repr(caught.exception))
+        assert_driver_fault_redacted(self, caught, "FakeRunFaultError")
         redacted = caught.exception.__cause__
         self.assertIsInstance(redacted, envs._StandardNativeFault)
         self.assertIsNone(redacted.__cause__)
         self.assertIsNone(redacted.__context__)
-        pending = [caught.exception]
-        seen = set()
-        while pending:
-            error = pending.pop()
-            if id(error) in seen:
-                continue
-            seen.add(id(error))
-            self.assertNotIn("SECRET", repr(error))
-            self.assertNotIn("SECRET", str(error))
-            self.assertNotIn("SECRET", repr(getattr(error, "__dict__", {})))
-            if error.__cause__ is not None:
-                pending.append(error.__cause__)
-            if error.__context__ is not None:
-                pending.append(error.__context__)
+
+    def test_standard_run_reset_fault_is_redacted(self):
+        driver, fake = self._factory()
+        fake.next_error = _secret_error(FakeRunFaultError, "reset fault")
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.reset(seeds=[3], entry_ids=[None])
+
+        assert_driver_fault_redacted(self, caught, "FakeRunFaultError")
+
+    def test_standard_run_combat_view_failures_after_reset_and_step_are_redacted(self):
+        for phase in ("reset", "step"):
+            with self.subTest(phase=phase):
+                driver, fake = self._factory()
+                if phase == "step":
+                    driver.reset(seeds=[3], entry_ids=[None])
+                fake.next_combat_view_error = _secret_error(
+                    FakeNativeValueError, f"combat_view after {phase}",
+                )
+
+                with self.assertRaises(envs.DriverFault) as caught:
+                    if phase == "reset":
+                        driver.reset(seeds=[3], entry_ids=[None])
+                    else:
+                        driver.step([5])
+
+                assert_driver_fault_redacted(
+                    self, caught, "FakeNativeValueError", delivery="returned",
+                )
+                self.assertEqual(caught.exception.evidence.phase, f"{phase}-export")
+
+    def test_standard_run_input_error_is_recoverable_and_redacted(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[3], entry_ids=[None])
+        fake.next_error = _secret_error(FakeRunInputError, "input error")
+
+        with self.assertRaises(envs._StandardNativeRecoverable) as caught:
+            driver.step([5])
+
+        self.assertEqual(caught.exception.native_type, "FakeRunInputError")
+        assert_no_secret_error_chain(self, caught.exception)
+        self.assertFalse(driver._failed)
+        self.assertTrue(driver.step([5])[0].successor.lifecycle.active)
+        driver.close()
+
+    def test_standard_run_stale_state_error_is_recoverable_and_redacted(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[3], entry_ids=[None])
+        fake.next_error = _secret_error(FakeRunStateError, "stale state")
+
+        with self.assertRaises(envs._StandardNativeRecoverable) as caught:
+            driver.step([5])
+
+        self.assertEqual(caught.exception.native_type, "FakeRunStateError")
+        assert_no_secret_error_chain(self, caught.exception)
+        self.assertFalse(driver._failed)
+        self.assertTrue(driver.step([5])[0].successor.lifecycle.active)
+        driver.close()
+
+    def test_standard_run_explicit_close_failure_is_redacted(self):
+        driver, fake = self._factory()
+        fake.next_close_error = _secret_error(FakeNativeValueError, "close failure")
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.close()
+
+        assert_driver_fault_redacted(self, caught, "FakeNativeValueError")
+
+    def test_standard_run_cleanup_close_failure_is_redacted(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[3], entry_ids=[None])
+        fake.next_error = _secret_error(FakeRunFaultError, "primary fault")
+        fake.next_close_error = _secret_error(FakeNativeValueError, "cleanup failure")
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([5])
+
+        assert_driver_fault_redacted(self, caught, "FakeRunFaultError")
+        self.assertIn("FakeNativeValueError", caught.exception.evidence.close_error)
+        self.assertNotIn("SECRET", repr(caught.exception.evidence))
 
     def test_legacy_run_error_message_unchanged(self):
         _standard_driver, fake = self._factory()
@@ -266,17 +345,18 @@ class StandardRunEnvTests(unittest.TestCase):
 
         self.assertIn("native Run fault detail", caught.exception.evidence.message)
 
-    def test_standard_run_input_error_recoverable(self):
-        driver, fake = self._factory()
-        driver.reset(seeds=[3], entry_ids=[None])
-        fake.next_error = FakeRunInputError("invalid Run input")
+    def test_legacy_run_close_error_message_unchanged(self):
+        _standard_driver, fake = self._factory()
+        provider = envs._RunProvider(
+            fake, self._runtime(type(fake)), RUN_ACTIONS, self.schema,
+        )
+        driver = envs.CombatDriver(provider, self.schema)
+        fake.next_close_error = RuntimeError("native Run close detail")
 
-        with self.assertRaises(FakeRunInputError):
-            driver.step([5])
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.close()
 
-        self.assertFalse(driver._failed)
-        self.assertEqual(driver.step([5])[0].successor.lifecycle.active, True)
-        driver.close()
+        self.assertIn("native Run close detail", caught.exception.evidence.message)
 
     def test_escape_in_run_continues(self):
         def script(fake):

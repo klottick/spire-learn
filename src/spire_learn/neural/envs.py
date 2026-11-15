@@ -11,6 +11,7 @@ from spire_learn.neural.profiling import observed, span
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import wraps
 import hashlib
 import json
 import math
@@ -400,24 +401,86 @@ def _settle_standard_terminal(
     }
 
 
-class _StandardNativeFault(RuntimeError):
-    """Redacted Standard native fault retaining only status-by-slot evidence."""
+class _StandardNativeError(RuntimeError):
+    """Redacted Standard provider error with no retained native exception."""
 
-    def __init__(self, error: BaseException):
-        super().__init__("Spire Gym Standard combat fault; native details omitted")
-        self.native_type = type(error).__name__
-        raw_slots = getattr(error, "slots", ())
-        if isinstance(raw_slots, Sequence) and not isinstance(
-            raw_slots, (str, bytes, bytearray)
-        ):
-            self.slots = tuple(
-                {"status": record["status"]}
-                if isinstance(record, Mapping) and isinstance(record.get("status"), str)
-                else {}
-                for record in raw_slots
-            )
-        else:
-            self.slots = ()
+    def __init__(self, native_type: str):
+        self.native_type = native_type
+        super().__init__("Spire Gym Standard provider error; native details omitted")
+
+
+class _StandardNativeRecoverable(_StandardNativeError):
+    """Redacted native input/stale-state error that leaves the driver usable."""
+
+
+class _StandardNativeFault(_StandardNativeError):
+    """Redacted Standard native fault retaining only the original class name."""
+
+    def __init__(self, native_type: str):
+        super().__init__(native_type)
+        self.args = ("Spire Gym Standard combat fault; native details omitted",)
+
+
+class _StandardNativeProcessControl(BaseException):
+    """Redacted process-control failure preserving fatal classification."""
+
+    def __init__(self, native_type: str):
+        self.native_type = native_type
+        super().__init__("Spire Gym Standard provider error; native details omitted")
+
+
+def _standard_error_type(error: BaseException) -> str:
+    if isinstance(error, (_StandardNativeError, _StandardNativeProcessControl)):
+        return error.native_type
+    return type(error).__name__
+
+
+def _standard_native_recoverable(error: BaseException, provider: object) -> bool:
+    if isinstance(error, getattr(provider, "input_errors", ())):
+        return True
+    if isinstance(error, getattr(provider, "state_errors", ())):
+        try:
+            if getattr(error, "reason", None) == "stale_token":
+                return True
+            return "stale" in str(error).lower()
+        except BaseException:
+            return False
+    return False
+
+
+def _redact_standard_error(error: BaseException, provider: object) -> BaseException:
+    """Keep Learn-authored validation errors; replace every other boundary error."""
+    if isinstance(error, (ContractError, DriverInputError, DriverStateError,
+                          _StandardNativeError, _StandardNativeProcessControl)):
+        return error
+    if not isinstance(error, Exception):
+        return _StandardNativeProcessControl(type(error).__name__)
+    if _standard_native_recoverable(error, provider):
+        return _StandardNativeRecoverable(type(error).__name__)
+    if isinstance(error, getattr(provider, "fault_errors", ())):
+        return _StandardNativeFault(type(error).__name__)
+    return _StandardNativeError(type(error).__name__)
+
+
+def _standard_provider_boundary(method):
+    """Redact all non-Learn exceptions at a Standard provider method boundary."""
+    @wraps(method)
+    def wrapped(provider, *args, **kwargs):
+        if not getattr(provider, "_redact_native_errors", False):
+            return method(provider, *args, **kwargs)
+        try:
+            return method(provider, *args, **kwargs)
+        except _PostReturnFailure as failure:
+            error = _redact_standard_error(failure.error, provider)
+            if error is failure.error:
+                raise
+            replacement = _PostReturnFailure(error)
+        except BaseException as failure:
+            replacement = _redact_standard_error(failure, provider)
+            if replacement is failure:
+                raise
+        raise replacement
+    return wrapped
 
 
 def _standard_info_value(value: object) -> object:
@@ -493,6 +556,7 @@ class _StandardCombatProvider:
         self._env = env
         self._numpy = runtime.numpy
         self.batch_size = batch_size
+        self._redact_native_errors = True
         # Public catalog encounter per entry id, for settling terminal visits.
         self._encounters = dict(encounters)
         self.input_errors = _error_types(
@@ -509,6 +573,7 @@ class _StandardCombatProvider:
             runtime.native, ("RunFaultError", "BatchFaultError")
         )
 
+    @_standard_provider_boundary
     def reset(
         self,
         seeds: tuple[int, ...],
@@ -517,17 +582,11 @@ class _StandardCombatProvider:
     ) -> tuple[_RawBoundary, ...]:
         np = self._numpy
         mask = np.asarray(reset_mask, dtype=np.dtype("bool"))  # type: ignore[attr-defined]
-        native_fault = None
-        try:
-            with span("native_reset_public_export"):
-                observations, info = self._env.reset(  # type: ignore[attr-defined]
-                    seed=list(seeds),
-                    options={"reset_mask": mask, "entry_ids": list(entry_ids)},
-                )
-        except self.fault_errors as error:
-            native_fault = _StandardNativeFault(error)
-        if native_fault is not None:
-            raise native_fault
+        with span("native_reset_public_export"):
+            observations, info = self._env.reset(  # type: ignore[attr-defined]
+                seed=list(seeds),
+                options={"reset_mask": mask, "entry_ids": list(entry_ids)},
+            )
         try:
             rows = []
             for slot in range(self.batch_size):
@@ -539,19 +598,14 @@ class _StandardCombatProvider:
         except BaseException as error:
             raise _PostReturnFailure(error) from error
 
+    @_standard_provider_boundary
     def step(self, actions: tuple[int, ...]) -> tuple[_RawTransition, ...]:
         np = self._numpy
         native_actions = np.asarray(actions, dtype=np.dtype("=i8"))  # type: ignore[attr-defined]
-        native_fault = None
-        try:
-            with span("native_step_public_export"):
-                observations, rewards, terminated, truncated, info = self._env.step(  # type: ignore[attr-defined]
-                    native_actions
-                )
-        except self.fault_errors as error:
-            native_fault = _StandardNativeFault(error)
-        if native_fault is not None:
-            raise native_fault
+        with span("native_step_public_export"):
+            observations, rewards, terminated, truncated, info = self._env.step(  # type: ignore[attr-defined]
+                native_actions
+            )
         try:
             rows = []
             for slot in range(self.batch_size):
@@ -584,6 +638,7 @@ class _StandardCombatProvider:
         except BaseException as error:
             raise _PostReturnFailure(error) from error
 
+    @_standard_provider_boundary
     def close(self) -> None:
         self._env.close()  # type: ignore[attr-defined]
 
@@ -602,6 +657,7 @@ class _RunProvider:
         self.dispatch_action_count = run_action_count
         self.schema = schema
         self.redact_native_errors = redact_native_errors
+        self._redact_native_errors = redact_native_errors
         self.input_errors = _error_types(runtime.native, ("RunInputError",))
         self.state_errors = _error_types(runtime.native, ("RunStateError",))
         self.fault_errors = (
@@ -630,6 +686,7 @@ class _RunProvider:
             noncombat_indices = _legal_indices(mask, self._run_action_count)
         return _RawBoundary(observation, info, noncombat_indices)
 
+    @_standard_provider_boundary
     def reset(
         self,
         seeds: tuple[int, ...],
@@ -638,17 +695,8 @@ class _RunProvider:
     ) -> tuple[_RawBoundary | None, ...]:
         if len(seeds) != 1 or len(entry_ids) != 1 or len(reset_mask) != 1 or reset_mask != (True,):
             raise DriverInputError("Run reset requires one selected row")
-        native_fault = None
         with span("native_reset_public_export"):
-            if self.redact_native_errors:
-                try:
-                    result = self._env.reset(seed=seeds[0])  # type: ignore[attr-defined]
-                except self.fault_errors as error:
-                    native_fault = _StandardNativeFault(error)
-            else:
-                result = self._env.reset(seed=seeds[0])  # type: ignore[attr-defined]
-        if native_fault is not None:
-            raise native_fault
+            result = self._env.reset(seed=seeds[0])  # type: ignore[attr-defined]
         try:
             # The common sidecar and its token are valid only for this decision.
             with span("run_combat_public_export"):
@@ -658,18 +706,10 @@ class _RunProvider:
         except BaseException as error:
             raise _PostReturnFailure(error) from error
 
+    @_standard_provider_boundary
     def step(self, actions: tuple[int, ...]) -> tuple[_RawTransition, ...]:
-        native_fault = None
         with span("native_step_public_export"):
-            if self.redact_native_errors:
-                try:
-                    result = self._env.step(actions[0])  # type: ignore[attr-defined]
-                except self.fault_errors as error:
-                    native_fault = _StandardNativeFault(error)
-            else:
-                result = self._env.step(actions[0])  # type: ignore[attr-defined]
-        if native_fault is not None:
-            raise native_fault
+            result = self._env.step(actions[0])  # type: ignore[attr-defined]
         try:
             # Read the sidecar before inspecting or dispatching another decision.
             with span("run_combat_public_export"):
@@ -691,6 +731,7 @@ class _RunProvider:
         except BaseException as error:
             raise _PostReturnFailure(error) from error
 
+    @_standard_provider_boundary
     def close(self) -> None:
         self._env.close()  # type: ignore[attr-defined]
 
@@ -778,6 +819,8 @@ class CombatDriver:
             raise DriverStateError("driver is faulted; accepted actions cannot be retried")
 
     def _is_recoverable(self, error: BaseException) -> bool:
+        if isinstance(error, _StandardNativeRecoverable):
+            return True
         if isinstance(error, self._provider.input_errors):
             return True
         if isinstance(error, self._provider.state_errors):
@@ -898,7 +941,7 @@ class CombatDriver:
                         f"with the primary failure context: {context}"
                     )
                 raise close_failure from error
-            close_error = f"{type(close_failure).__name__}: {_clean_error(close_failure)}"
+            close_error = f"{_standard_error_type(close_failure)}: {_clean_error(close_failure)}"
         operation_slots = min(max(operation_slots, 0), _MAX_FAULT_PREFIX)
         public_operation_slots = tuple(
             slot for slot in operation_slot_indices

@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 _ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_PROFILE_DIR = Path("configs/neural/gym-8726d467")
 _MODES = ("standalone", "run", "standard-standalone", "standard-run")
 _CHARACTERS = ("ironclad", "silent", "defect", "watcher")
 
@@ -78,7 +79,7 @@ def _drive(driver: Any, *, mode: str, steps: int, rng: random.Random,
 
 
 def run(output: Path, *, steps: int, characters: bool = False,
-        root: Path = _ROOT) -> dict[str, object]:
+        root: Path = _ROOT, profile_dir: Path = _DEFAULT_PROFILE_DIR) -> dict[str, object]:
     """Run the four configured modes and optionally eight Standard Run variants."""
     guard = _NoTrainingImports()
     sys.meta_path.insert(0, guard)
@@ -86,11 +87,14 @@ def run(output: Path, *, steps: int, characters: bool = False,
         from spire_learn.neural import envs
         from spire_learn.neural.config import load_neural_config
 
+        config_dir = Path(profile_dir)
+        if not config_dir.is_absolute():
+            config_dir = Path(root) / config_dir
         result: dict[str, object] = {"schema": "spire-learn-gym-v1-soak-v1", "steps_per_mode": steps,
                                     "modes": {}, "standard_runs": {}}
         runtime = envs._load_native_runtime() if characters else None
         for mode in _MODES:
-            config = load_neural_config(root / "configs/neural/gym-v1.0.0" / f"{mode}.toml")
+            config = load_neural_config(config_dir / f"{mode}.toml")
             if config.mode != mode:
                 raise ValueError(f"{mode} template selects {config.mode}")
             driver = envs.make_driver(config, config.cases)
@@ -104,7 +108,7 @@ def run(output: Path, *, steps: int, characters: bool = False,
                 driver.close()
         if characters:
             assert runtime is not None
-            config = load_neural_config(root / "configs/neural/gym-v1.0.0/standard-run.toml")
+            config = load_neural_config(config_dir / "standard-run.toml")
             for character in _CHARACTERS:
                 for ascension in (0, 20):
                     label = f"{character}-a{ascension}"
@@ -131,11 +135,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--steps", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--profile-dir", type=Path, default=_DEFAULT_PROFILE_DIR,
+                        help="directory containing the four authored mode configs")
     parser.add_argument("--characters", action="store_true")
     args = parser.parse_args(argv)
     if args.steps <= 0:
         parser.error("--steps must be positive")
-    run(args.output, steps=args.steps, characters=args.characters)
+    run(args.output, steps=args.steps, characters=args.characters, profile_dir=args.profile_dir)
     return 0
 
 

@@ -1,6 +1,6 @@
 # Spire Gym 1.0.0 and Standard adoption
 
-Updated **2026-11-12**. Spire Learn now selects Gym by the configured revision
+Updated **2026-11-15** (current build `8726d467`; see the re-pin section). Originally written 2026-11-12 for build `1929e18b`. Spire Learn now selects Gym by the configured revision
 and supports the Gym 1.0.0 common, Standard combat and Standard Run contracts.
 The native extension revision is
 `1929e18b9f44372e020877bd62f2a5c9dee3e64e` (tag `v1.0.0` is `fc3c0118`,
@@ -8,6 +8,68 @@ documentation/data only). The release build identity is `release`, clean, with
 feature `spire-python/extension`, source digest
 `d4b3121226cfbb030b89731ed7ea3773f5c2b44988c9ec01c2355d53f2dfa9b2` and file
 digest `dce682976f221f5686d16beda7ced03f0221624da0a9b83e8b5969f7300f60ce`.
+
+## Re-pin to build 8726d467 (2026-11-15)
+
+Learn's current templates are `configs/neural/gym-8726d467/`. They pin Gym
+revision `8726d467ad8579730ddf4fa236b24aeb2206b71a`, still version 1.0.0, from
+Gym PR 112. The `1929e18b` contract and its `configs/neural/gym-v1.0.0/`
+templates stay valid for that revision.
+
+| Item | Value |
+| --- | --- |
+| Wheel SHA-256 | `96321606aa43ef73d50af4e6ed8d401aee26b88bc1044b16132935fd9c379fb7` |
+| `_native` SHA-256 | `7019351538ae567abc2ffd7f40cc98d5c83419065685fcae12e13dd83867c86d` |
+| `source_digest` / `file_digest` | `73f554e2a9a2cb20c23efff0daba83e4ff6a6bcd90e0fbd33b48f8534bce1d7a` / `98db0a9ac92e05c45424fb5658485ed16ee92a0cfcd49063728c2d9a905a6ccf` |
+| Rules IDs | Standard `spire-gym-native-standard-rules-v5`; M10/Gym66 `spire-gym-native-m10-rules-v2` (`1929e18b`: `v3` / `v1`) |
+| Fingerprints | Unchanged: every descriptor is byte-identical to the `1929e18b` fixtures |
+| `rules_epoch` | `gym-1.0.0+8726d467` |
+
+**Learn changes.** Each `GymContract` now carries its own `m10_rules_id` and
+`standard_rules_id`. The drivers and run metadata read these from the
+configured revision instead of hard-coded literals. A config therefore always
+expects its own release's rules IDs, and a mismatched build fails closed.
+`scripts/neural/qualify_gym_v1.py` and `soak_gym_v1.py` take `--profile-dir`,
+defaulting to the current templates.
+
+**Gym changes in this build** (see the packet's `DELIVERY.md`):
+- **Speed.** Batch steps are faster, with byte-identical observations.
+- **Compact observations.** `observation="compact"` is new and opt-in. Learn
+  does not use it yet: its parser assumes the dense int64 layout.
+- **Former fault paths fixed** (spire-3xq, Standard rules v4):
+  - Berserk grants stacks above four;
+  - queued Fire Breathing hits keep their damage;
+  - post-victory cleanup opens no player choice;
+  - a choice between a finished card and its queued repeat resolves before the
+    repeat;
+  - the 999 generated-card bound reports a typed `Unsupported`;
+  - inconsistent offered choices keep an `Invariant` fault.
+- **Shops** (spire-0kr, Standard rules v5). The Courier restocks each bought
+  row in place, and Circlet costs 400 in a shop.
+
+Rules changed while fingerprints did not. The new `rules_epoch` therefore
+rejects `1929e18b` checkpoints and mappings, and vice versa. Results from the
+two builds are not interchangeable.
+
+**Verification** (2026-11-15). All runs used the offline runtime container
+described below.
+- **Packet.** All 84 `MANIFEST.sha256` entries verify. `build_info()` matches
+  the table above, with `dirty=false`.
+- **Descriptors.** Captured descriptors and the Standard catalog are
+  byte-identical to the `1929e18b` fixtures. The Standard environment specs
+  differ only in `rules_id`.
+- **Qualification.** `qualify_gym_v1.py` reports `qualified_one_reset_per_mode`:
+  four adapters, four resets, zero steps and one close each.
+- **Soak.** `soak_gym_v1.py --steps 3000 --characters` passed with no contract
+  fault: 3,000 steps in each of the four modes, plus 3,000-step Standard Runs
+  for every character at A0 and A20.
+  - The counts equal the `1929e18b` soak's under the same seeds, so these
+    random rollouts did not reach the changed gameplay paths.
+  - The soak therefore establishes adapter acceptance of the new build, not
+    coverage of those fixes.
+
+Outputs are under `artifacts/development/neural-combat/gym-8726d467/`, which
+Git ignores.
 
 ## Contract identities
 

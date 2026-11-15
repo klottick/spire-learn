@@ -33,6 +33,8 @@ class GymContract:
     # Gym may change rules without changing descriptor fingerprints; the epoch
     # keeps checkpoint mappings from crossing such a change.
     rules_epoch: str | None = None
+    m10_rules_id: str = "spire-gym-native-m10-rules-v1"
+    standard_rules_id: str | None = None
 
     @property
     def raw_mode_mappings(self) -> Mapping[str, str]:
@@ -81,8 +83,28 @@ GYM_V1_CONTRACT = GymContract(
     standard_combat_fingerprint="5d8147e13ded030c7faa501a8202eb2588915c2e1330b30cac5b06afc9f9916e",
     standard_run_fingerprint="bf8e1d111bbf2171594231b99d8d6b701244249abfbb90a11e86c4b4a405f7ae",
     rules_epoch="gym-1.0.0",
+    standard_rules_id="spire-gym-native-standard-rules-v3",
 )
-CONTRACTS = (LEGACY_CONTRACT, CURRENT_CONTRACT, GYM_V1_CONTRACT)
+GYM_8726D467_CONTRACT = GymContract(
+    "8726d467ad8579730ddf4fa236b24aeb2206b71a",
+    ("8726d467ad8579730ddf4fa236b24aeb2206b71a",),
+    "4c73f7de04d7b2875f473f8034c1cbacf984ea2d52d0a9428289c30cf1dff463",
+    "28d92d89c437eea7fdc260240585bca466dee1fd74b9b3eb38513d2b34b0be64",
+    "effbb810d345e906f6e20b47bd972e35d72ef48141378d54bd28b54afac5f406",
+    BuildIdentity(
+        "8726d467ad8579730ddf4fa236b24aeb2206b71a",
+        "73f554e2a9a2cb20c23efff0daba83e4ff6a6bcd90e0fbd33b48f8534bce1d7a",
+        "98db0a9ac92e05c45424fb5658485ed16ee92a0cfcd49063728c2d9a905a6ccf",
+        "release",
+        ("spire-python/extension",),
+    ),
+    standard_combat_fingerprint="5d8147e13ded030c7faa501a8202eb2588915c2e1330b30cac5b06afc9f9916e",
+    standard_run_fingerprint="bf8e1d111bbf2171594231b99d8d6b701244249abfbb90a11e86c4b4a405f7ae",
+    rules_epoch="gym-1.0.0+8726d467",
+    m10_rules_id="spire-gym-native-m10-rules-v2",
+    standard_rules_id="spire-gym-native-standard-rules-v5",
+)
+CONTRACTS = (LEGACY_CONTRACT, CURRENT_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT)
 RUNTIME_REVISIONS = frozenset(revision for item in CONTRACTS for revision in item.runtime_revisions)
 COMMON_FINGERPRINTS = frozenset(item.common_fingerprint for item in CONTRACTS)
 

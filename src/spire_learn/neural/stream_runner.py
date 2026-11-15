@@ -142,7 +142,7 @@ def _toml(document: Mapping[str, object]) -> str:
 
 
 def _preparation(recipe_path: Path, destination: Path, *, arm: str, split: str,
-                 shard_index: int) -> tuple[dict[str, bytes], dict[str, object]]:
+                 shard_index: int, template: Path | None = None) -> tuple[dict[str, bytes], dict[str, object]]:
     destination = Path(destination).absolute()
     if destination.exists() or destination.is_symlink():
         raise ValueError('destination must be absent')
@@ -178,7 +178,8 @@ def _preparation(recipe_path: Path, destination: Path, *, arm: str, split: str,
     put('development-panel.json', panel)
     put('development.json', panel['manifest'])
     put('pilot-plan.json', pilot_plan(recipe))
-    document = tomllib.loads((_CONFIGS / 'pilot.toml').read_text())
+    # The template supplies runtime, model and rollout settings; scenarios come from the recipe.
+    document = tomllib.loads(Path(template if template is not None else _CONFIGS / 'pilot.toml').read_text())
     document.update(manifest_path=f'shard-{shard_index}.json', output_root='runs',
                     operation='train' if split == 'train' else 'evaluate', split=split, partition=split)
     if split == 'train':
@@ -212,10 +213,11 @@ def _preparation(recipe_path: Path, destination: Path, *, arm: str, split: str,
 
 
 def prepare_stream(recipe_path: Path, destination: Path, *, arm: str, split: str,
-                   shard_index: int) -> Mapping[str, object]:
+                   shard_index: int, template: Path | None = None) -> Mapping[str, object]:
     """Exclusively publish bounded preparation under an absent artifact destination."""
     from .config import load_neural_config
-    files, result = _preparation(recipe_path, destination, arm=arm, split=split, shard_index=shard_index)
+    files, result = _preparation(recipe_path, destination, arm=arm, split=split,
+                                 shard_index=shard_index, template=template)
     destination = Path(destination).absolute()
     destination.mkdir()
     for name, data in files.items():

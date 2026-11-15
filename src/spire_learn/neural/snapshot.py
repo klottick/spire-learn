@@ -50,7 +50,12 @@ def _snapshot_array(value: object, *, key: str, dtype: str, shape: tuple[int, ..
         raise ContractError(f"runtime tensor {key} byte length does not match its shape") from error
 
 
-def snapshot_common(raw: Mapping[str, object], schema: CombatSchema) -> CombatFrame:
+def snapshot_common(
+    raw: Mapping[str, object],
+    schema: CombatSchema,
+    *,
+    redact_native_names: bool = False,
+) -> CombatFrame:
     """Copy and validate exactly the descriptor tensors into immutable learner bytes."""
     if not isinstance(schema, CombatSchema):
         raise ContractError("schema must be a CombatSchema")
@@ -59,6 +64,8 @@ def snapshot_common(raw: Mapping[str, object], schema: CombatSchema) -> CombatFr
     expected = set(schema.tensors)
     actual = set(raw)
     if actual != expected:
+        if redact_native_names:
+            raise ContractError("runtime observation tensor keys do not match the schema")
         missing = expected - actual
         unexpected = actual - expected
         raise ContractError(

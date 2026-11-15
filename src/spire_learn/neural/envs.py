@@ -42,6 +42,7 @@ from spire_learn.neural.modes import NEURAL_MODES
 
 _MAX_ERROR_TEXT = 512
 _MAX_FAULT_PREFIX = 1_000_000
+_MAX_STANDARD_ERROR_CHAIN_LINKS = 32
 
 
 class DriverInputError(ValueError):
@@ -412,6 +413,14 @@ class _StandardNativeRecoverable(_StandardNativeError):
     """Redacted native input/stale-state error that leaves the driver usable."""
 
 
+class _StandardNativeChainTruncated(_StandardNativeError):
+    """Safe sentinel for cause/context links omitted at the chain depth limit."""
+
+    def __init__(self):
+        super().__init__("chain truncated")
+        self.args = ("Spire Gym Standard error chain truncated",)
+
+
 class _StandardNativeFault(_StandardNativeError):
     """Redacted Standard native fault retaining only the original class name."""
 
@@ -694,8 +703,11 @@ def _row_from_raw(
     schema: CombatSchema,
     *,
     dispatch_action_count: int | None = None,
+    redact_native_names: bool = False,
 ) -> DriverRow:
-    frame = snapshot_common(raw.observation, schema)
+    frame = snapshot_common(
+        raw.observation, schema, redact_native_names=redact_native_names
+    )
     lifecycle = parse_lifecycle(raw.info, view=schema.view)
     validate_frame(frame, schema)
     if lifecycle.active:
@@ -766,51 +778,184 @@ class CombatDriver:
     def _is_recoverable(self, error: BaseException) -> bool:
         if isinstance(error, _StandardNativeRecoverable):
             return True
-        if isinstance(error, self._provider.input_errors):
-            return True
-        if isinstance(error, self._provider.state_errors):
-            reason = getattr(error, "reason", None)
-            return reason == "stale_token" or "stale" in str(error).lower()
+        if not getattr(self._provider, "redacts_native_errors", False):
+            if isinstance(error, self._provider.input_errors):
+                return True
+            if isinstance(error, self._provider.state_errors):
+                reason = getattr(error, "reason", None)
+                return reason == "stale_token" or "stale" in str(error).lower()
+            return False
+        try:
+            if isinstance(error, self._provider.input_errors):
+                return True
+            if isinstance(error, self._provider.state_errors):
+                try:
+                    reason = getattr(error, "reason", None)
+                except BaseException:
+                    return False
+                if type(reason) is str:
+                    return reason == "stale_token"
+                return False
+        except BaseException:
+            return False
         return False
 
     def _sanitize_error_chain(self, error: BaseException) -> BaseException:
-        """Copy an error chain without native attributes, notes, or text."""
+        """Copy a bounded error graph without native attributes, notes, or text."""
         if not getattr(self._provider, "redacts_native_errors", False):
             return error
 
-        copied: dict[int, BaseException] = {}
+        learn_error_types = (ContractError, DriverInputError, DriverStateError)
 
-        def copy(current: BaseException) -> BaseException:
-            previous = copied.get(id(current))
-            if previous is not None:
-                return previous
-            if isinstance(current, (ContractError, DriverInputError, DriverStateError)):
-                safe = type(current)(str(current))
-            elif isinstance(current, _StandardNativeRecoverable):
-                safe = _StandardNativeRecoverable(current.native_type)
-            elif isinstance(current, _StandardNativeFault):
-                safe = _StandardNativeFault(current.native_type)
-            elif isinstance(current, _StandardNativeProcessControl):
-                safe = _StandardNativeProcessControl(current.native_type)
-            elif isinstance(current, _StandardNativeError):
-                safe = _StandardNativeError(current.native_type)
-            elif not isinstance(current, Exception):
-                safe = _StandardNativeProcessControl(type(current).__name__)
-            elif current is error and self._is_recoverable(current):
-                safe = _StandardNativeRecoverable(type(current).__name__)
-            elif current is error and isinstance(current, self._provider.fault_errors):
-                safe = _StandardNativeFault(type(current).__name__)
-            else:
-                safe = _StandardNativeError(type(current).__name__)
-            copied[id(current)] = safe
-            cause = current.__cause__
-            context = current.__context__
-            safe.__cause__ = copy(cause) if cause is not None else None
-            safe.__context__ = copy(context) if context is not None else None
-            safe.__suppress_context__ = current.__suppress_context__
-            return safe
+        def native_texts(root: BaseException) -> tuple[str, ...]:
+            texts: set[str] = set()
+            errors = [root]
+            seen_errors: set[int] = set()
+            while errors and len(seen_errors) < _MAX_STANDARD_ERROR_CHAIN_LINKS:
+                current = errors.pop()
+                current_id = id(current)
+                if current_id in seen_errors:
+                    continue
+                seen_errors.add(current_id)
+                if not isinstance(current, (*learn_error_types, _StandardNativeError,
+                                            _StandardNativeProcessControl)):
+                    values = [
+                        BaseException.__getattribute__(current, "args"),
+                        BaseException.__getattribute__(current, "__dict__"),
+                    ]
+                    try:
+                        values.append(BaseException.__getattribute__(current, "__notes__"))
+                    except AttributeError:
+                        pass
+                    pending_values = list(values)
+                    visited_values: set[int] = set()
+                    inspected = 0
+                    while pending_values and inspected < 256:
+                        value = pending_values.pop()
+                        inspected += 1
+                        if type(value) is str:
+                            if value:
+                                texts.add(value)
+                        elif type(value) is bytes:
+                            decoded = value.decode("utf-8", errors="replace")
+                            if decoded:
+                                texts.add(decoded)
+                        elif type(value) in (tuple, list, set, frozenset):
+                            value_id = id(value)
+                            if value_id not in visited_values:
+                                visited_values.add(value_id)
+                                pending_values.extend(value)
+                        elif type(value) is dict:
+                            value_id = id(value)
+                            if value_id not in visited_values:
+                                visited_values.add(value_id)
+                                for key, item in dict.items(value):
+                                    pending_values.append(key)
+                                    pending_values.append(item)
+                cause = BaseException.__getattribute__(current, "__cause__")
+                context = BaseException.__getattribute__(current, "__context__")
+                if cause is not None:
+                    errors.append(cause)
+                if context is not None:
+                    errors.append(context)
+            return tuple(sorted(texts, key=len, reverse=True))
 
-        return copy(error)
+        try:
+            sensitive_texts = native_texts(error)
+        except BaseException as sanitation_error:
+            return _StandardNativeError(type(sanitation_error).__name__)
+
+        def make_safe(current: BaseException, *, is_root: bool) -> BaseException:
+            if isinstance(current, learn_error_types):
+                error_type = type(current)
+                # A subclass that customizes formatting can surface arbitrary state
+                # even after its args have been replaced. Keep its class name only.
+                if (error_type.__str__ is not BaseException.__str__
+                        or error_type.__repr__ is not BaseException.__repr__):
+                    return _StandardNativeError(error_type.__name__)
+                try:
+                    message = BaseException.__str__(current)
+                    for sensitive in sensitive_texts:
+                        message = message.replace(sensitive, "<native details omitted>")
+                    safe = BaseException.__new__(error_type)
+                    BaseException.__init__(safe, message)
+                    BaseException.__getattribute__(safe, "__dict__").clear()
+                    return safe
+                except BaseException:
+                    return _StandardNativeError(error_type.__name__)
+
+            if isinstance(current, _StandardNativeRecoverable):
+                return _StandardNativeRecoverable(current.native_type)
+            if isinstance(current, _StandardNativeChainTruncated):
+                return _StandardNativeChainTruncated()
+            if isinstance(current, _StandardNativeFault):
+                return _StandardNativeFault(current.native_type)
+            if isinstance(current, _StandardNativeProcessControl):
+                return _StandardNativeProcessControl(current.native_type)
+            if isinstance(current, _StandardNativeError):
+                return _StandardNativeError(current.native_type)
+            if not isinstance(current, Exception):
+                return _StandardNativeProcessControl(type(current).__name__)
+            if is_root:
+                try:
+                    if isinstance(current, self._provider.input_errors):
+                        return _StandardNativeRecoverable(type(current).__name__)
+                    if isinstance(current, self._provider.state_errors):
+                        try:
+                            reason = getattr(current, "reason", None)
+                        except BaseException as classification_error:
+                            return _StandardNativeError(type(classification_error).__name__)
+                        if type(reason) is str and reason == "stale_token":
+                            return _StandardNativeRecoverable(type(current).__name__)
+                    if isinstance(current, self._provider.fault_errors):
+                        return _StandardNativeFault(type(current).__name__)
+                except BaseException as classification_error:
+                    return _StandardNativeError(type(classification_error).__name__)
+            return _StandardNativeError(type(current).__name__)
+
+        try:
+            copied: dict[int, BaseException] = {id(error): make_safe(error, is_root=True)}
+            originals: dict[int, BaseException] = {id(error): error}
+            pending = [id(error)]
+            truncated = None
+
+            while pending:
+                current_id = pending.pop()
+                current = originals[current_id]
+                safe = copied[current_id]
+                try:
+                    cause = BaseException.__getattribute__(current, "__cause__")
+                    context = BaseException.__getattribute__(current, "__context__")
+                    suppress_context = BaseException.__getattribute__(
+                        current, "__suppress_context__"
+                    )
+                except BaseException as sanitation_error:
+                    # The malformed exception itself is contained as a fatal marker.
+                    return _StandardNativeError(type(sanitation_error).__name__)
+
+                for link_name, target in (("__cause__", cause), ("__context__", context)):
+                    if target is None:
+                        linked = None
+                    else:
+                        target_id = id(target)
+                        linked = copied.get(target_id)
+                        if linked is None:
+                            if len(copied) >= _MAX_STANDARD_ERROR_CHAIN_LINKS:
+                                if truncated is None:
+                                    truncated = _StandardNativeChainTruncated()
+                                linked = truncated
+                            else:
+                                linked = make_safe(target, is_root=False)
+                                copied[target_id] = linked
+                                originals[target_id] = target
+                                pending.append(target_id)
+                    BaseException.__setattr__(safe, link_name, linked)
+                BaseException.__setattr__(safe, "__suppress_context__", suppress_context)
+
+            return copied[id(error)]
+        except BaseException as sanitation_error:
+            # Sanitizer failures are fatal Standard faults, never raw exceptions.
+            return _StandardNativeError(type(sanitation_error).__name__)
 
     def _raise_fault(
         self, error: BaseException, *, sanitized: bool = False, **kwargs,
@@ -1132,7 +1277,12 @@ class CombatDriver:
                     if raw is None:
                         raise ContractError("provider omitted a selected reset row")
                     updated[slot] = _row_from_raw(
-                        raw, self.schema, dispatch_action_count=self._dispatch_action_count
+                        raw,
+                        self.schema,
+                        dispatch_action_count=self._dispatch_action_count,
+                        redact_native_names=getattr(
+                            self._provider, "redacts_native_errors", False
+                        ),
                     )
                     terminal[slot] = False
                 else:
@@ -1144,7 +1294,12 @@ class CombatDriver:
                             )
                         continue
                     observed = _row_from_raw(
-                        raw, self.schema, dispatch_action_count=self._dispatch_action_count
+                        raw,
+                        self.schema,
+                        dispatch_action_count=self._dispatch_action_count,
+                        redact_native_names=getattr(
+                            self._provider, "redacts_native_errors", False
+                        ),
                     )
                     current = self._rows[slot]
                     if current is None:
@@ -1259,6 +1414,9 @@ class CombatDriver:
                     raw.boundary,
                     self.schema,
                     dispatch_action_count=self._dispatch_action_count,
+                    redact_native_names=getattr(
+                        self._provider, "redacts_native_errors", False
+                    ),
                 )
                 transitions.append(DriverTransition(
                     source=source,

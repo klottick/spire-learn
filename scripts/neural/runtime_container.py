@@ -13,6 +13,7 @@ import math
 import os
 from pathlib import Path
 import re
+import selectors
 import signal
 import subprocess
 import sys
@@ -32,6 +33,10 @@ GPU_UUID = re.compile(r"GPU-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z")
 ENTRY = re.compile(r"[-A-Za-z0-9_][A-Za-z0-9_.-]*\.py\Z")
 MAX_LOG_BYTES = 8 * 1024 * 1024
 TMPFS_SPEC = "/tmp:rw,noexec,nosuid,size=64m"
+CREATE_TIMEOUT_SECONDS = 30.0
+CREATE_RECONCILE_SECONDS = CREATE_TIMEOUT_SECONDS
+RECONCILE_INTERVAL_SECONDS = 0.25
+ABSENCE_CONFIRMATIONS = 3
 
 
 @dataclass(frozen=True)
@@ -266,25 +271,6 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _write_atomic_replace(path: Path, value: Mapping[str, object]) -> None:
-    path = Path(path)
-    encoded = json.dumps(value, sort_keys=True, indent=2, allow_nan=False) + "\n"
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            stream.write(encoded)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
-    finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
-
-
 def git_state(root: Path) -> dict:
     head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True,
                           text=True, check=True).stdout.strip()
@@ -319,13 +305,67 @@ def _error_text(operation: str, result=None, exception: BaseException | None = N
 
 
 def _collect_logs(docker, target: str, output: Path) -> tuple[str | None, bool]:
-    result = _invoke(docker, ["docker", "logs", "--tail", "10000", target], timeout=30)
-    stdout = (result.stdout or "").encode("utf-8", errors="replace")
-    stderr = (result.stderr or "").encode("utf-8", errors="replace")
-    truncated = len(stdout) > MAX_LOG_BYTES or len(stderr) > MAX_LOG_BYTES
-    (output / "stdout.txt").write_bytes(stdout[:MAX_LOG_BYTES])
-    (output / "stderr.txt").write_bytes(stderr[:MAX_LOG_BYTES])
-    error = None if result.returncode == 0 else _error_text("docker logs", result=result)
+    argv = ["docker", "logs", "--tail", "10000", target]
+    popen = getattr(docker, "Popen", subprocess.Popen)
+    total_bytes = {"stdout": 0, "stderr": 0}
+    truncated = False
+    stderr_tail = bytearray()
+    error = None
+    process = None
+    with (output / "stdout.txt").open("wb") as stdout_file, \
+         (output / "stderr.txt").open("wb") as stderr_file:
+        process = popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        selector = selectors.DefaultSelector()
+        files = {"stdout": stdout_file, "stderr": stderr_file}
+        try:
+            selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+            selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+            deadline = time.monotonic() + 30.0
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    error = "docker logs timed out"
+                    process.kill()
+                    break
+                events = selector.select(remaining)
+                if not events:
+                    error = "docker logs timed out"
+                    process.kill()
+                    break
+                for key, _ in events:
+                    stream = key.data
+                    chunk = os.read(key.fd, 64 * 1024)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    available = max(0, MAX_LOG_BYTES - total_bytes[stream])
+                    if available:
+                        files[stream].write(chunk[:available])
+                        total_bytes[stream] += min(available, len(chunk))
+                    if len(chunk) > available:
+                        truncated = True
+                    if stream == "stderr":
+                        stderr_tail.extend(chunk)
+                        if len(stderr_tail) > 4096:
+                            del stderr_tail[:-4096]
+            try:
+                returncode = process.wait(timeout=max(0.1, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                error = error or "docker logs timed out waiting for exit"
+                process.kill()
+                returncode = process.wait()
+        except BaseException:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            raise
+        finally:
+            selector.close()
+            process.stdout.close()
+            process.stderr.close()
+    if returncode != 0:
+        detail = stderr_tail.decode("utf-8", errors="replace").strip()
+        error = error or f"docker logs exited {returncode}: {detail}"
     return error, truncated
 
 
@@ -334,8 +374,8 @@ def _now():
 
 
 @contextmanager
-def _termination_scope():
-    state = {"cleanup": False, "pending": []}
+def _termination_scope(after_restore=None):
+    state = {"cleanup": False, "pending": [], "restore_errors": []}
     previous = {}
     if threading.current_thread() is threading.main_thread():
         def handle(number, frame):
@@ -348,8 +388,28 @@ def _termination_scope():
     try:
         yield state
     finally:
+        _restore_signal_handlers(previous, state, after_restore=after_restore)
+
+
+def _restore_signal_handlers(previous, state, *, after_restore=None) -> None:
+    handled = set(previous)
+    old_mask = None
+    if handled and hasattr(signal, "pthread_sigmask"):
+        old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled)
+    try:
         for number, handler in previous.items():
-            signal.signal(number, handler)
+            try:
+                signal.signal(number, handler)
+            except BaseException as exc:
+                state["restore_errors"].append(f"restore signal {number}: {type(exc).__name__}: {exc}")
+        if old_mask is not None:
+            for number in signal.sigpending() & handled:
+                state["pending"].append(number)
+        if after_restore is not None:
+            after_restore(state)
+    finally:
+        if old_mask is not None:
+            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
 
 
 def run(profile_path: Path, *, entry: str, args: Sequence[str], output: Path,
@@ -393,13 +453,34 @@ def run(profile_path: Path, *, entry: str, args: Sequence[str], output: Path,
     removed = False
     logs_truncated = False
     cleanup_errors = {"logs": [], "kill": [], "rm": [], "inspect": []}
-    with _termination_scope() as termination:
+    published_signal_count = 0
+
+    def write_post_manifest(termination):
+        nonlocal status
+        post_signals = termination["pending"][published_signal_count:]
+        restore_errors = termination["restore_errors"]
+        if not post_signals and not restore_errors:
+            return
+        status = 130 if post_signals else 1
+        post = {"schema": "spire-learn-runtime-container-post-v1",
+            "final_manifest_sha256": _sha256(output / "manifest-final.json"),
+            "signals": post_signals, "handler_restore_errors": restore_errors,
+            "exit_status": status,
+            "failure": "signal received after final manifest publication" if post_signals else
+                       "signal handler restoration failed"}
+        try:
+            write_exclusive(output / "manifest-post.json", post)
+        except BaseException:
+            status = 130 if post_signals else 1
+
+    with _termination_scope(after_restore=write_post_manifest) as termination:
         try:
             create_attempted = True
-            created_result = _invoke(docker, create_command, timeout=30)
+            created_result = _invoke(docker, create_command, timeout=CREATE_TIMEOUT_SECONDS)
             if created_result.returncode != 0:
                 failure = f"docker create failed: {created_result.stderr.strip()}"
                 status = 1
+                create_uncertain = True
             elif not CONTAINER_ID.fullmatch(created_result.stdout.strip()):
                 failure = "docker create returned an invalid or empty container ID"
                 status = 1
@@ -450,35 +531,74 @@ def run(profile_path: Path, *, entry: str, args: Sequence[str], output: Path,
                 except BaseException as log_exception:
                     cleanup_errors["logs"].append(_error_text("docker logs", exception=log_exception))
             else:
-                (output / "stdout.txt").write_bytes(b"")
-                (output / "stderr.txt").write_bytes(b"")
-            try:
-                rm_result = _invoke(docker, ["docker", "rm", "--force", name], timeout=30)
-                if rm_result.returncode != 0 and not _no_such_container(rm_result):
-                    cleanup_errors["rm"].append(_error_text("docker rm by name", result=rm_result))
-            except BaseException as rm_exception:
-                cleanup_errors["rm"].append(_error_text("docker rm by name", exception=rm_exception))
-            if container_id is not None and cleanup_errors["rm"]:
+                for filename in ("stdout.txt", "stderr.txt"):
+                    try:
+                        (output / filename).write_bytes(b"")
+                    except BaseException as log_exception:
+                        cleanup_errors["logs"].append(_error_text(f"write {filename}", exception=log_exception))
+
+            def remove_target(target: str, label: str) -> bool:
                 try:
-                    rm_result = _invoke(docker, ["docker", "rm", "--force", container_id], timeout=30)
-                    if rm_result.returncode != 0 and not _no_such_container(rm_result):
-                        cleanup_errors["rm"].append(_error_text("docker rm by ID", result=rm_result))
-                except BaseException as rm_exception:
-                    cleanup_errors["rm"].append(_error_text("docker rm by ID", exception=rm_exception))
-            for attempt in range(3):
+                    result = _invoke(docker, ["docker", "rm", "--force", target], timeout=30)
+                    if result.returncode != 0 and not _no_such_container(result):
+                        message = _error_text(f"docker rm {label}", result=result)
+                        if message not in cleanup_errors["rm"]:
+                            cleanup_errors["rm"].append(message)
+                        return False
+                    return True
+                except BaseException as exc:
+                    message = _error_text(f"docker rm {label}", exception=exc)
+                    if message not in cleanup_errors["rm"]:
+                        cleanup_errors["rm"].append(message)
+                    return False
+
+            remove_by_name_succeeded = remove_target(name, "by name")
+            if container_id is not None and not remove_by_name_succeeded:
+                remove_target(container_id, "by ID")
+
+            def inspect_once() -> bool | None:
                 try:
-                    inspect = _invoke(docker, ["docker", "inspect", name], timeout=10)
-                    if _no_such_container(inspect):
+                    result = _invoke(docker, ["docker", "inspect", name], timeout=10)
+                    if _no_such_container(result):
+                        return False
+                    if result.returncode == 0:
+                        return True
+                    message = _error_text("docker inspect", result=result)
+                except BaseException as exc:
+                    message = _error_text("docker inspect", exception=exc)
+                if message not in cleanup_errors["inspect"]:
+                    cleanup_errors["inspect"].append(message)
+                return None
+
+            if create_uncertain:
+                reconcile_deadline = time.monotonic() + CREATE_RECONCILE_SECONDS
+                absent_count = 0
+                while True:
+                    observed = inspect_once()
+                    if observed is False:
+                        absent_count += 1
+                    elif observed is True:
+                        absent_count = 0
+                        remove_target(name, "by name during create reconciliation")
+                    else:
+                        absent_count = 0
+                    remaining = reconcile_deadline - time.monotonic()
+                    if remaining <= 0:
+                        removed = absent_count >= ABSENCE_CONFIRMATIONS
+                        break
+                    time.sleep(min(RECONCILE_INTERVAL_SECONDS, remaining))
+            else:
+                for attempt in range(3):
+                    observed = inspect_once()
+                    if observed is False:
                         removed = True
                         break
-                    if inspect.returncode != 0:
-                        cleanup_errors["inspect"].append(_error_text("docker inspect", result=inspect))
-                    else:
-                        cleanup_errors["inspect"].append("docker inspect: owned container still exists")
-                except BaseException as inspect_exception:
-                    cleanup_errors["inspect"].append(_error_text("docker inspect", exception=inspect_exception))
-                if attempt < 2:
-                    time.sleep(0.05)
+                    if attempt < 2:
+                        if observed is True:
+                            remove_target(name, "by name during cleanup verification")
+                        time.sleep(0.05)
+            if not removed and "owned container still exists after cleanup" not in cleanup_errors["inspect"]:
+                cleanup_errors["inspect"].append("owned container still exists after cleanup")
             for kind in ("logs", "kill", "rm", "inspect"):
                 for error in cleanup_errors[kind]:
                     failure = (failure + "; " if failure else "") + error
@@ -507,13 +627,6 @@ def run(profile_path: Path, *, entry: str, args: Sequence[str], output: Path,
                 "learner": final_learner, "profile_verification": verification,
                 "cleanup_errors": cleanup_errors, "logs_truncated": logs_truncated, "failure": failure}
             write_exclusive(output / "manifest-final.json", final)
-            if len(termination["pending"]) > published_signal_count:
-                final["exit_status"] = 130
-                status = 130
-                signal_names = ",".join(str(item) for item in termination["pending"][published_signal_count:])
-                final["failure"] = (final["failure"] + "; " if final["failure"] else "") + \
-                    f"received signal(s) during final-manifest publication: {signal_names}"
-                _write_atomic_replace(output / "manifest-final.json", final)
     return status
 
 

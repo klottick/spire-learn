@@ -6,7 +6,9 @@ from pathlib import Path
 import signal
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -30,6 +32,9 @@ class FakeDocker:
         self.created = False
         self.rm_targets = []
         self.inspect_targets = []
+        self.inspect_count = 0
+        self.pending_create = False
+        self.popen_calls = []
 
     def run(self, argv, **kwargs):
         argv = list(argv)
@@ -46,6 +51,10 @@ class FakeDocker:
             self.created = True
             self.exists = True
             if self.failure == "create_timeout":
+                raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+            if self.failure == "delayed_create":
+                self.exists = False
+                self.pending_create = True
                 raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
             if self.failure == "empty_create":
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -82,10 +91,28 @@ class FakeDocker:
         if operation == "inspect":
             target = argv[-1]
             self.inspect_targets.append(target)
+            self.inspect_count += 1
+            if self.pending_create and self.inspect_count == 1:
+                self.pending_create = False
+                self.exists = True
+                return SimpleNamespace(returncode=1, stdout="", stderr=f"Error: No such object: {target}")
             if self.exists:
                 return SimpleNamespace(returncode=0, stdout=json.dumps({"Id": self.container_id}), stderr="")
             return SimpleNamespace(returncode=1, stdout="", stderr=f"Error: No such object: {target}")
         raise AssertionError(f"unexpected docker operation: {argv}")
+
+    def Popen(self, argv, **kwargs):
+        argv = list(argv)
+        self.popen_calls.append(argv)
+        self.calls.append((argv, kwargs))
+        if self.failure == "logs":
+            code = "import sys; sys.stdout.write('partial'); sys.stderr.write('logs failed'); sys.exit(1)"
+        elif self.logs_size:
+            code = f"import sys; sys.stdout.buffer.write(b'x' * {self.logs_size}); sys.stderr.write('captured err')"
+        else:
+            code = "import sys; sys.stdout.write('captured out'); sys.stderr.write('captured err')"
+        return subprocess.Popen([sys.executable, "-c", code], stdout=kwargs["stdout"],
+                                stderr=kwargs["stderr"], bufsize=0)
 
     def operations(self):
         return [call[0][1] for call in self.calls]
@@ -164,7 +191,9 @@ class RuntimeContainerTests(unittest.TestCase):
                       authority="approved unit fixture", gpu_uuid=None, timeout_seconds=10,
                       cpus=2.0, memory="4g", env={})
         values.update(overrides)
-        with patch.object(runner, "git_state", side_effect=self.fake_git()):
+        with patch.object(runner, "git_state", side_effect=self.fake_git()), \
+             patch.object(runner, "CREATE_RECONCILE_SECONDS", 0.05, create=True), \
+             patch.object(runner, "RECONCILE_INTERVAL_SECONDS", 0.005, create=True):
             return runner.run(self.profile_path, root=self.root, docker=docker, **values)
 
     def test_command_contains_network_mount_and_runtime_bootstrap_contract(self):
@@ -317,7 +346,33 @@ class RuntimeContainerTests(unittest.TestCase):
     def test_saved_logs_are_bounded(self):
         docker = FakeDocker(logs_size=9 * 1024 * 1024)
         self.run_runner(docker)
+        self.assertEqual(len(docker.popen_calls), 1)
         self.assertLessEqual((self.output / "stdout.txt").stat().st_size, 8 * 1024 * 1024)
+
+    def test_delayed_create_after_first_absence_is_reconciled(self):
+        docker = FakeDocker(failure="delayed_create")
+        status = self.run_runner(docker)
+        final = json.loads((self.output / "manifest-final.json").read_text())
+        self.assertNotEqual(status, 0)
+        self.assertFalse(final["container_removed"] and docker.exists)
+        self.assertFalse(docker.exists)
+        self.assertGreaterEqual(docker.inspect_count, 4)
+
+    def test_stdout_file_error_after_create_failure_still_cleans_and_publishes(self):
+        docker = FakeDocker(failure="create")
+        original_open = Path.open
+        def fail_stdout(path, *args, **kwargs):
+            if Path(path).name == "stdout.txt" and args[:1] == ("wb",):
+                raise OSError("disk full for stdout")
+            return original_open(path, *args, **kwargs)
+        with patch.object(Path, "open", fail_stdout):
+            status = self.run_runner(docker)
+        self.assertNotEqual(status, 0)
+        self.assertIn("rm", docker.operations())
+        self.assertIn("inspect", docker.operations())
+        self.assertTrue((self.output / "manifest-final.json").is_file())
+        final = json.loads((self.output / "manifest-final.json").read_text())
+        self.assertTrue(final["cleanup_errors"]["logs"])
 
     def test_rm_exception_still_inspects_and_persisting_container_is_failure(self):
         docker = FakeDocker(failure="rm_exception")
@@ -348,14 +403,18 @@ class RuntimeContainerTests(unittest.TestCase):
         self.assertNotEqual(final["exit_status"], 0)
         self.assertIsNotNone(final["failure"])
 
-    def test_signal_during_manifest_publish_forces_nonzero_exit_and_failure(self):
+    def test_signal_after_manifest_publication_leaves_it_unchanged_and_returns_nonzero(self):
         docker = FakeDocker()
         original_write = runner.write_exclusive
         signaled = [False]
+        published_bytes = []
         def write(path, value):
             if Path(path).name == "manifest-final.json" and not signaled[0]:
                 signaled[0] = True
+                original_write(path, value)
+                published_bytes.append(Path(path).read_bytes())
                 signal.raise_signal(signal.SIGTERM)
+                return None
             return original_write(path, value)
         with patch.object(runner, "git_state", side_effect=self.fake_git()), \
              patch.object(runner, "write_exclusive", side_effect=write):
@@ -364,8 +423,31 @@ class RuntimeContainerTests(unittest.TestCase):
                 authority="approved unit fixture")
         final = json.loads((self.output / "manifest-final.json").read_text())
         self.assertNotEqual(status, 0)
-        self.assertNotEqual(final["exit_status"], 0)
-        self.assertIn("signal", final["failure"])
+        self.assertEqual((self.output / "manifest-final.json").read_bytes(), published_bytes[0])
+        post = json.loads((self.output / "manifest-post.json").read_text())
+        self.assertIn(signal.SIGTERM, post["signals"])
+
+    def test_sigterm_during_handler_restoration_writes_post_manifest(self):
+        docker = FakeDocker()
+        original_signal = signal.signal
+        previous_sigterm = signal.getsignal(signal.SIGTERM)
+        original_signal(signal.SIGTERM, lambda number, frame: None)
+        calls = []
+        def restore_hook(number, handler):
+            calls.append((number, handler))
+            if len(calls) == 4:
+                signal.raise_signal(signal.SIGTERM)
+            return original_signal(number, handler)
+        try:
+            with patch.object(runner.signal, "signal", side_effect=restore_hook):
+                status = self.run_runner(docker)
+        finally:
+            original_signal(signal.SIGTERM, previous_sigterm)
+        final = json.loads((self.output / "manifest-final.json").read_text())
+        post = json.loads((self.output / "manifest-post.json").read_text())
+        self.assertNotEqual(status, 0)
+        self.assertEqual(final["exit_status"], 0)
+        self.assertIn(signal.SIGTERM, post["signals"])
 
     def test_signal_during_end_time_capture_forces_failure_manifest(self):
         docker = FakeDocker()

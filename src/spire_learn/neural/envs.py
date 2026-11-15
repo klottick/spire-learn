@@ -11,7 +11,6 @@ from spire_learn.neural.profiling import observed, span
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from functools import wraps
 import hashlib
 import json
 import math
@@ -435,54 +434,6 @@ def _standard_error_type(error: BaseException) -> str:
     return type(error).__name__
 
 
-def _standard_native_recoverable(error: BaseException, provider: object) -> bool:
-    if isinstance(error, getattr(provider, "input_errors", ())):
-        return True
-    if isinstance(error, getattr(provider, "state_errors", ())):
-        try:
-            if getattr(error, "reason", None) == "stale_token":
-                return True
-            return "stale" in str(error).lower()
-        except BaseException:
-            return False
-    return False
-
-
-def _redact_standard_error(error: BaseException, provider: object) -> BaseException:
-    """Keep Learn-authored validation errors; replace every other boundary error."""
-    if isinstance(error, (ContractError, DriverInputError, DriverStateError,
-                          _StandardNativeError, _StandardNativeProcessControl)):
-        return error
-    if not isinstance(error, Exception):
-        return _StandardNativeProcessControl(type(error).__name__)
-    if _standard_native_recoverable(error, provider):
-        return _StandardNativeRecoverable(type(error).__name__)
-    if isinstance(error, getattr(provider, "fault_errors", ())):
-        return _StandardNativeFault(type(error).__name__)
-    return _StandardNativeError(type(error).__name__)
-
-
-def _standard_provider_boundary(method):
-    """Redact all non-Learn exceptions at a Standard provider method boundary."""
-    @wraps(method)
-    def wrapped(provider, *args, **kwargs):
-        if not getattr(provider, "_redact_native_errors", False):
-            return method(provider, *args, **kwargs)
-        try:
-            return method(provider, *args, **kwargs)
-        except _PostReturnFailure as failure:
-            error = _redact_standard_error(failure.error, provider)
-            if error is failure.error:
-                raise
-            replacement = _PostReturnFailure(error)
-        except BaseException as failure:
-            replacement = _redact_standard_error(failure, provider)
-            if replacement is failure:
-                raise
-        raise replacement
-    return wrapped
-
-
 def _standard_info_value(value: object) -> object:
     """Own only public lifecycle values, converting NumPy scalars recursively."""
     item = getattr(value, "item", None)
@@ -556,7 +507,7 @@ class _StandardCombatProvider:
         self._env = env
         self._numpy = runtime.numpy
         self.batch_size = batch_size
-        self._redact_native_errors = True
+        self.redacts_native_errors = True
         # Public catalog encounter per entry id, for settling terminal visits.
         self._encounters = dict(encounters)
         self.input_errors = _error_types(
@@ -573,7 +524,6 @@ class _StandardCombatProvider:
             runtime.native, ("RunFaultError", "BatchFaultError")
         )
 
-    @_standard_provider_boundary
     def reset(
         self,
         seeds: tuple[int, ...],
@@ -598,7 +548,6 @@ class _StandardCombatProvider:
         except BaseException as error:
             raise _PostReturnFailure(error) from error
 
-    @_standard_provider_boundary
     def step(self, actions: tuple[int, ...]) -> tuple[_RawTransition, ...]:
         np = self._numpy
         native_actions = np.asarray(actions, dtype=np.dtype("=i8"))  # type: ignore[attr-defined]
@@ -638,7 +587,6 @@ class _StandardCombatProvider:
         except BaseException as error:
             raise _PostReturnFailure(error) from error
 
-    @_standard_provider_boundary
     def close(self) -> None:
         self._env.close()  # type: ignore[attr-defined]
 
@@ -657,7 +605,7 @@ class _RunProvider:
         self.dispatch_action_count = run_action_count
         self.schema = schema
         self.redact_native_errors = redact_native_errors
-        self._redact_native_errors = redact_native_errors
+        self.redacts_native_errors = redact_native_errors
         self.input_errors = _error_types(runtime.native, ("RunInputError",))
         self.state_errors = _error_types(runtime.native, ("RunStateError",))
         self.fault_errors = (
@@ -686,7 +634,6 @@ class _RunProvider:
             noncombat_indices = _legal_indices(mask, self._run_action_count)
         return _RawBoundary(observation, info, noncombat_indices)
 
-    @_standard_provider_boundary
     def reset(
         self,
         seeds: tuple[int, ...],
@@ -706,7 +653,6 @@ class _RunProvider:
         except BaseException as error:
             raise _PostReturnFailure(error) from error
 
-    @_standard_provider_boundary
     def step(self, actions: tuple[int, ...]) -> tuple[_RawTransition, ...]:
         with span("native_step_public_export"):
             result = self._env.step(actions[0])  # type: ignore[attr-defined]
@@ -731,7 +677,6 @@ class _RunProvider:
         except BaseException as error:
             raise _PostReturnFailure(error) from error
 
-    @_standard_provider_boundary
     def close(self) -> None:
         self._env.close()  # type: ignore[attr-defined]
 
@@ -828,6 +773,51 @@ class CombatDriver:
             return reason == "stale_token" or "stale" in str(error).lower()
         return False
 
+    def _sanitize_error_chain(self, error: BaseException) -> BaseException:
+        """Copy an error chain without native attributes, notes, or text."""
+        if not getattr(self._provider, "redacts_native_errors", False):
+            return error
+
+        copied: dict[int, BaseException] = {}
+
+        def copy(current: BaseException) -> BaseException:
+            previous = copied.get(id(current))
+            if previous is not None:
+                return previous
+            if isinstance(current, (ContractError, DriverInputError, DriverStateError)):
+                safe = type(current)(str(current))
+            elif isinstance(current, _StandardNativeRecoverable):
+                safe = _StandardNativeRecoverable(current.native_type)
+            elif isinstance(current, _StandardNativeFault):
+                safe = _StandardNativeFault(current.native_type)
+            elif isinstance(current, _StandardNativeProcessControl):
+                safe = _StandardNativeProcessControl(current.native_type)
+            elif isinstance(current, _StandardNativeError):
+                safe = _StandardNativeError(current.native_type)
+            elif not isinstance(current, Exception):
+                safe = _StandardNativeProcessControl(type(current).__name__)
+            elif current is error and self._is_recoverable(current):
+                safe = _StandardNativeRecoverable(type(current).__name__)
+            elif current is error and isinstance(current, self._provider.fault_errors):
+                safe = _StandardNativeFault(type(current).__name__)
+            else:
+                safe = _StandardNativeError(type(current).__name__)
+            copied[id(current)] = safe
+            cause = current.__cause__
+            context = current.__context__
+            safe.__cause__ = copy(cause) if cause is not None else None
+            safe.__context__ = copy(context) if context is not None else None
+            safe.__suppress_context__ = current.__suppress_context__
+            return safe
+
+        return copy(error)
+
+    def _raise_fault(
+        self, error: BaseException, *, sanitized: bool = False, **kwargs,
+    ) -> None:
+        safe_error = error if sanitized else self._sanitize_error_chain(error)
+        raise self._fault(safe_error, **kwargs) from safe_error
+
     def _close_after_failure(self) -> BaseException | None:
         if self._closed:
             return None
@@ -919,6 +909,8 @@ class CombatDriver:
     ) -> DriverFault:
         self._failed = True
         close_failure = self._close_after_failure()
+        if close_failure is not None:
+            close_failure = self._sanitize_error_chain(close_failure)
         known_current_delivery_slots = min(
             max(known_current_delivery_slots, 0), operation_slots
         )
@@ -935,7 +927,9 @@ class CombatDriver:
                     uncertain_current_slots=uncertain_current_slots,
                 )
                 add_note = getattr(close_failure, "add_note", None)
-                if callable(add_note):
+                if callable(add_note) and not getattr(
+                    self._provider, "redacts_native_errors", False
+                ):
                     add_note(
                         "provider close process-control failure; propagating close control "
                         f"with the primary failure context: {context}"
@@ -996,14 +990,18 @@ class CombatDriver:
             phase = f"{phase}-export"
             delivery = "returned"
             known_current_delivery_slots = operation_slots
+        error = self._sanitize_error_chain(error)
         if not post_return and self._is_recoverable(error):
             raise error
         if not isinstance(error, Exception):
             self._failed = True
             close_failure = self._close_after_failure()
             if close_failure is not None:
+                close_failure = self._sanitize_error_chain(close_failure)
                 add_note = getattr(error, "add_note", None)
-                if callable(add_note):
+                if callable(add_note) and not getattr(
+                    self._provider, "redacts_native_errors", False
+                ):
                     context = self._failure_context(
                         error,
                         phase=phase,
@@ -1018,12 +1016,13 @@ class CombatDriver:
                     )
                     add_note(
                         f"provider close after primary process-control failure also raised "
-                        f"{type(close_failure).__name__}: {_clean_error(close_failure)}; "
+                        f"{_standard_error_type(close_failure)}: {_clean_error(close_failure)}; "
                         f"primary exception remains primary. {context}"
                     )
             raise error
-        raise self._fault(
+        self._raise_fault(
             error,
+            sanitized=True,
             phase=phase,
             delivery=delivery,
             operation_slots=operation_slots,
@@ -1034,7 +1033,7 @@ class CombatDriver:
                 else (known_current_delivery_slots or 0)
             ),
             uncertain_current_slots=(operation_slots if delivery == "unknown" else 0),
-        ) from error
+        )
 
     def _validate_reset(
         self,
@@ -1081,11 +1080,14 @@ class CombatDriver:
         seed_values, entry_values, mask_values = self._validate_reset(
             seeds, entry_ids, reset_mask
         )
+        failure = None
         try:
             raw_rows = self._provider.reset(seed_values, entry_values, mask_values)
-        except BaseException as error:
+        except BaseException as caught:
+            failure = caught
+        if failure is not None:
             self._finish_failure(
-                error,
+                failure,
                 phase="reset",
                 delivery="unknown",
                 operation_slots=sum(mask_values),
@@ -1093,11 +1095,14 @@ class CombatDriver:
                     slot for slot, selected in enumerate(mask_values) if selected
                 ),
             )
+        failure = None
         try:
             reset_row_count = len(raw_rows)
-        except BaseException as error:
+        except BaseException as caught:
+            failure = caught
+        if failure is not None:
             self._finish_failure(
-                error,
+                failure,
                 phase="reset-export",
                 delivery="returned",
                 operation_slots=sum(mask_values),
@@ -1107,7 +1112,7 @@ class CombatDriver:
             )
         if reset_row_count != self.batch_size:
             error = ContractError("provider reset returned the wrong number of rows")
-            raise self._fault(
+            self._raise_fault(
                 error,
                 phase="reset-export",
                 delivery="returned",
@@ -1116,9 +1121,10 @@ class CombatDriver:
                     slot for slot, selected in enumerate(mask_values) if selected
                 ),
                 known_current_delivery_slots=sum(mask_values),
-            ) from error
+            )
         updated = list(self._rows)
         terminal = list(self._terminal)
+        failure = None
         try:
             for slot, selected in enumerate(mask_values):
                 if selected:
@@ -1148,9 +1154,11 @@ class CombatDriver:
                     if observed.lifecycle != current.lifecycle:
                         raise ContractError("unselected public lifecycle changed during masked reset")
                     updated[slot] = current
-        except BaseException as error:
+        except BaseException as caught:
+            failure = caught
+        if failure is not None:
             self._finish_failure(
-                error,
+                failure,
                 phase="reset-export",
                 delivery="returned",
                 operation_slots=sum(mask_values),
@@ -1195,21 +1203,27 @@ class CombatDriver:
         self._ensure_usable()
         action_values = self._validate_actions(actions)
         sources = tuple(self._rows)
+        failure = None
         try:
             raw_steps = self._provider.step(action_values)
-        except BaseException as error:
+        except BaseException as caught:
+            failure = caught
+        if failure is not None:
             self._finish_failure(
-                error,
+                failure,
                 phase="step",
                 delivery="unknown",
                 operation_slots=self.batch_size,
                 operation_slot_indices=tuple(range(self.batch_size)),
             )
+        failure = None
         try:
             step_row_count = len(raw_steps)
-        except BaseException as error:
+        except BaseException as caught:
+            failure = caught
+        if failure is not None:
             self._finish_failure(
-                error,
+                failure,
                 phase="step-export",
                 delivery="returned",
                 operation_slots=self.batch_size,
@@ -1217,17 +1231,18 @@ class CombatDriver:
             )
         if step_row_count != self.batch_size:
             error = ContractError("provider step returned the wrong number of rows")
-            raise self._fault(
+            self._raise_fault(
                 error,
                 phase="step-export",
                 delivery="returned",
                 operation_slots=self.batch_size,
                 operation_slot_indices=tuple(range(self.batch_size)),
                 known_current_delivery_slots=self.batch_size,
-            ) from error
+            )
         transitions: list[DriverTransition] = []
         successors: list[DriverRow] = []
         terminal: list[bool] = []
+        failure = None
         try:
             for slot, raw in enumerate(raw_steps):
                 source = sources[slot]
@@ -1254,9 +1269,11 @@ class CombatDriver:
                 ))
                 successors.append(successor)
                 terminal.append(raw.terminated or raw.truncated)
-        except BaseException as error:
+        except BaseException as caught:
+            failure = caught
+        if failure is not None:
             self._finish_failure(
-                error,
+                failure,
                 phase="step-export",
                 delivery="returned",
                 operation_slots=self.batch_size,
@@ -1273,26 +1290,30 @@ class CombatDriver:
         if self._closed:
             return
         self._closed = True
+        failure = None
         try:
             self._provider.close()
-        except BaseException as error:
-            self._failed = True
-            if not isinstance(error, Exception):
-                raise
-            evidence = DriverFaultEvidence(
-                phase="close",
-                accepted_prefix=min(self._accepted_steps, _MAX_FAULT_PREFIX),
-                failed_operation=min(self._accepted_operations + 1, _MAX_FAULT_PREFIX),
-                delivery="closed-with-error",
-                exception_type=getattr(error, "native_type", type(error).__name__),
-                message=_clean_error(error),
-                accepted_prefix_operations=min(self._accepted_operations, _MAX_FAULT_PREFIX),
-                accepted_prefix_slot_actions=min(
-                    self._accepted_steps * self.batch_size, _MAX_FAULT_PREFIX
-                ),
-            )
-            self._failed = True
-            raise DriverFault(evidence) from error
+        except BaseException as caught:
+            failure = caught
+        if failure is None:
+            return
+        error = self._sanitize_error_chain(failure)
+        self._failed = True
+        if not isinstance(error, Exception):
+            raise error
+        evidence = DriverFaultEvidence(
+            phase="close",
+            accepted_prefix=min(self._accepted_steps, _MAX_FAULT_PREFIX),
+            failed_operation=min(self._accepted_operations + 1, _MAX_FAULT_PREFIX),
+            delivery="closed-with-error",
+            exception_type=getattr(error, "native_type", type(error).__name__),
+            message=_clean_error(error),
+            accepted_prefix_operations=min(self._accepted_operations, _MAX_FAULT_PREFIX),
+            accepted_prefix_slot_actions=min(
+                self._accepted_steps * self.batch_size, _MAX_FAULT_PREFIX
+            ),
+        )
+        raise DriverFault(evidence) from error
 
 
 def _require_environment_identity(

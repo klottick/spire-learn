@@ -48,6 +48,11 @@ class _Mask:
         return iter(self.values)
 
 
+class _BadMask(_Mask):
+    def __iter__(self):
+        raise _secret_error(TypeError, "Run mask iteration")
+
+
 class FakeRunInputError(ValueError):
     pass
 
@@ -248,8 +253,9 @@ class StandardRunEnvTests(unittest.TestCase):
         assert_driver_fault_redacted(self, caught, "FakeRunFaultError")
         redacted = caught.exception.__cause__
         self.assertIsInstance(redacted, envs._StandardNativeFault)
-        self.assertIsNone(redacted.__cause__)
-        self.assertIsNone(redacted.__context__)
+        self.assertIsInstance(redacted.__cause__, envs._StandardNativeError)
+        self.assertEqual(redacted.__cause__.native_type, "RuntimeError")
+        assert_no_secret_error_chain(self, redacted)
 
     def test_standard_run_reset_fault_is_redacted(self):
         driver, fake = self._factory()
@@ -259,6 +265,49 @@ class StandardRunEnvTests(unittest.TestCase):
             driver.reset(seeds=[3], entry_ids=[None])
 
         assert_driver_fault_redacted(self, caught, "FakeRunFaultError")
+
+    def test_standard_run_learn_contract_error_keeps_message_and_sanitizes_native_cause(self):
+        driver, fake = self._factory()
+        info = _combat_info(active=False)
+        fake._boundary = lambda: (
+            info, {"action_mask": _BadMask((5, 2047))}, 0.0, False,
+        )
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.reset(seeds=[3], entry_ids=[None])
+
+        assert_driver_fault_redacted(self, caught, "ContractError", delivery="returned")
+        self.assertEqual(
+            caught.exception.evidence.message,
+            "Run legal-action mask is not iterable",
+        )
+        learned = caught.exception.__cause__
+        self.assertIsInstance(learned, ContractError)
+        self.assertEqual(learned.args, ("Run legal-action mask is not iterable",))
+        self.assertIsInstance(learned.__cause__, envs._StandardNativeError)
+        self.assertEqual(learned.__cause__.native_type, "TypeError")
+
+    def test_standard_run_snapshot_contract_error_sanitizes_native_tobytes_cause(self):
+        driver, fake = self._factory()
+        original_obs = fake._combat_obs
+
+        def bad_combat_obs(active):
+            observation = original_obs(active)
+            first = next(iter(observation.values()))
+            first.tobytes = lambda order="C": (_ for _ in ()).throw(
+                _secret_error(RuntimeError, "Run snapshot tobytes")
+            )
+            return observation
+
+        fake._combat_obs = bad_combat_obs
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.reset(seeds=[3], entry_ids=[None])
+
+        assert_driver_fault_redacted(self, caught, "ContractError", delivery="returned")
+        self.assertIn("runtime tensor", caught.exception.evidence.message)
+        self.assertIsInstance(caught.exception.__cause__, ContractError)
+        self.assertIsInstance(caught.exception.__cause__.__cause__, envs._StandardNativeError)
+        self.assertEqual(caught.exception.__cause__.__cause__.native_type, "RuntimeError")
 
     def test_standard_run_combat_view_failures_after_reset_and_step_are_redacted(self):
         for phase in ("reset", "step"):

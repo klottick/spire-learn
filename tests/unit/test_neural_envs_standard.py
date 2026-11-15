@@ -146,6 +146,11 @@ class _RaiseFromItem:
         raise self.error
 
 
+class _BadIndex:
+    def __getitem__(self, index):
+        raise _secret_error(TypeError, "presence mask indexing")
+
+
 class FakeStandardVector:
     def __init__(self, catalog, num_envs, *, records=None, partition="train", entry_ids=None,
                  workers=1, autoreset_mode="next_step", fault_policy="freeze",
@@ -409,6 +414,54 @@ class StandardEnvTests(unittest.TestCase):
             self, caught, "FakeNativeValueError", delivery="returned",
         )
 
+    def test_standard_learn_contract_error_keeps_message_and_sanitizes_native_cause(self):
+        driver, fake = self._factory()
+        original_info = fake._info
+
+        def bad_info():
+            info = original_info()
+            info["_active"] = _BadIndex()
+            return info
+
+        fake._info = bad_info
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+
+        assert_driver_fault_redacted(self, caught, "ContractError", delivery="returned")
+        self.assertEqual(
+            caught.exception.evidence.message,
+            "Standard vector info presence mask has the wrong batch width",
+        )
+        learned = caught.exception.__cause__
+        self.assertIsInstance(learned, ContractError)
+        self.assertEqual(learned.args, (
+            "Standard vector info presence mask has the wrong batch width",
+        ))
+        self.assertIsInstance(learned.__cause__, envs._StandardNativeError)
+        self.assertEqual(learned.__cause__.native_type, "TypeError")
+
+    def test_standard_snapshot_contract_error_sanitizes_native_tobytes_cause(self):
+        driver, fake = self._factory()
+        original_obs = fake._obs
+
+        def bad_obs():
+            observation = original_obs()
+            first = next(iter(observation.values()))
+            first.tobytes = lambda order="C": (_ for _ in ()).throw(
+                _secret_error(RuntimeError, "snapshot tobytes")
+            )
+            return observation
+
+        fake._obs = bad_obs
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+
+        assert_driver_fault_redacted(self, caught, "ContractError", delivery="returned")
+        self.assertIn("runtime tensor", caught.exception.evidence.message)
+        self.assertIsInstance(caught.exception.__cause__, ContractError)
+        self.assertIsInstance(caught.exception.__cause__.__cause__, envs._StandardNativeError)
+        self.assertEqual(caught.exception.__cause__.__cause__.native_type, "RuntimeError")
+
     def test_standard_input_error_is_redacted_and_recoverable(self):
         driver, fake = self._factory()
         driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
@@ -472,8 +525,9 @@ class StandardEnvTests(unittest.TestCase):
         assert_driver_fault_redacted(self, caught, "FakeBatchFaultError")
         redacted = caught.exception.__cause__
         self.assertIsInstance(redacted, envs._StandardNativeFault)
-        self.assertIsNone(redacted.__cause__)
-        self.assertIsNone(redacted.__context__)
+        self.assertIsInstance(redacted.__cause__, envs._StandardNativeError)
+        self.assertEqual(redacted.__cause__.native_type, "RuntimeError")
+        assert_no_secret_error_chain(self, redacted)
 
     def test_fault_slot_truncation_only_marks_omitted_fault_records(self):
         driver, _fake = self._factory()

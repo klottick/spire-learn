@@ -37,6 +37,7 @@ CREATE_TIMEOUT_SECONDS = 30.0
 CREATE_RECONCILE_SECONDS = CREATE_TIMEOUT_SECONDS
 RECONCILE_INTERVAL_SECONDS = 0.25
 ABSENCE_CONFIRMATIONS = 3
+HANDLED_SIGNALS = frozenset((signal.SIGINT, signal.SIGTERM, signal.SIGHUP))
 
 
 @dataclass(frozen=True)
@@ -374,8 +375,9 @@ def _now():
 
 
 @contextmanager
-def _termination_scope(after_restore=None):
-    state = {"cleanup": False, "pending": [], "restore_errors": []}
+def _termination_scope(finalize_signals=None):
+    state = {"cleanup": False, "pending": [], "restore_errors": [],
+             "handled": set(), "blocked": False, "old_mask": None}
     previous = {}
     if threading.current_thread() is threading.main_thread():
         def handle(number, frame):
@@ -383,33 +385,70 @@ def _termination_scope(after_restore=None):
                 state["pending"].append(number)
                 return
             raise KeyboardInterrupt(f"received signal {number}")
-        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        for number in HANDLED_SIGNALS:
             previous[number] = signal.signal(number, handle)
+        state["handled"] = set(previous)
     try:
         yield state
     finally:
-        _restore_signal_handlers(previous, state, after_restore=after_restore)
+        _restore_signal_handlers(previous, state, finalize_signals=finalize_signals)
 
 
-def _restore_signal_handlers(previous, state, *, after_restore=None) -> None:
-    handled = set(previous)
-    old_mask = None
-    if handled and hasattr(signal, "pthread_sigmask"):
-        old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled)
+def _restore_signal_handlers(previous, state, *, finalize_signals=None) -> None:
     try:
+        if finalize_signals is not None:
+            finalize_signals(state)
         for number, handler in previous.items():
             try:
                 signal.signal(number, handler)
             except BaseException as exc:
                 state["restore_errors"].append(f"restore signal {number}: {type(exc).__name__}: {exc}")
-        if old_mask is not None:
-            for number in signal.sigpending() & handled:
-                state["pending"].append(number)
-        if after_restore is not None:
-            after_restore(state)
+        if finalize_signals is not None:
+            finalize_signals(state)
     finally:
-        if old_mask is not None:
-            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+        if state["blocked"]:
+            try:
+                signal.pthread_sigmask(signal.SIG_SETMASK, state["old_mask"])
+            except BaseException as exc:
+                state["restore_errors"].append(
+                    f"restore signal mask: {type(exc).__name__}: {exc}")
+
+
+def _block_finalization_signals(state) -> None:
+    if not state["handled"] or not hasattr(signal, "pthread_sigmask"):
+        return
+    try:
+        state["old_mask"] = signal.pthread_sigmask(signal.SIG_BLOCK, state["handled"])
+        state["blocked"] = True
+    except BaseException as exc:
+        state["restore_errors"].append(
+            f"block signals for finalization: {type(exc).__name__}: {exc}")
+
+
+def _pending_handled_signals(state) -> set[int]:
+    if not state["handled"] or not hasattr(signal, "sigpending"):
+        return set()
+    try:
+        return set(signal.sigpending()) & state["handled"]
+    except BaseException as exc:
+        state["restore_errors"].append(
+            f"inspect pending signals: {type(exc).__name__}: {exc}")
+        return set()
+
+
+def _consume_pending_signals(handled) -> set[int]:
+    consumed = set()
+    if not handled or not hasattr(signal, "sigtimedwait"):
+        return consumed
+    while True:
+        try:
+            info = signal.sigtimedwait(handled, 0)
+        except (OSError, ValueError):
+            break
+        if info is None:
+            break
+        consumed.add(info.si_signo)
+    return consumed
 
 
 def run(profile_path: Path, *, entry: str, args: Sequence[str], output: Path,
@@ -457,23 +496,34 @@ def run(profile_path: Path, *, entry: str, args: Sequence[str], output: Path,
 
     def write_post_manifest(termination):
         nonlocal status
-        post_signals = termination["pending"][published_signal_count:]
+        post_signals = set(termination["pending"][published_signal_count:])
+        post_signals.update(_pending_handled_signals(termination))
+        post_signals.update(_consume_pending_signals(termination["handled"]))
         restore_errors = termination["restore_errors"]
         if not post_signals and not restore_errors:
             return
+        if termination.get("post_manifest_failed"):
+            status = 75
+            return
         status = 130 if post_signals else 1
+        if termination.get("post_manifest_written"):
+            return
         post = {"schema": "spire-learn-runtime-container-post-v1",
             "final_manifest_sha256": _sha256(output / "manifest-final.json"),
-            "signals": post_signals, "handler_restore_errors": restore_errors,
+            "signals": sorted(post_signals), "handler_restore_errors": restore_errors,
             "exit_status": status,
-            "failure": "signal received after final manifest publication" if post_signals else
+            "failure": "termination signal pending after final manifest publication" if post_signals else
                        "signal handler restoration failed"}
         try:
             write_exclusive(output / "manifest-post.json", post)
-        except BaseException:
-            status = 130 if post_signals else 1
+            termination["post_manifest_written"] = True
+        except BaseException as exc:
+            status = 75
+            termination["post_manifest_failed"] = True
+            print(f"run is not successful: could not write manifest-post.json: "
+                  f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
 
-    with _termination_scope(after_restore=write_post_manifest) as termination:
+    with _termination_scope(finalize_signals=write_post_manifest) as termination:
         try:
             create_attempted = True
             created_result = _invoke(docker, create_command, timeout=CREATE_TIMEOUT_SECONDS)
@@ -607,6 +657,11 @@ def run(profile_path: Path, *, entry: str, args: Sequence[str], output: Path,
             if not removed:
                 failure = (failure + "; " if failure else "") + "container absence was not verified"
                 status = 1
+            if create_uncertain:
+                failure = (failure + "; " if failure else "") + "container creation outcome uncertain"
+                if status == 0:
+                    status = 1
+            _block_finalization_signals(termination)
             try:
                 final_learner = git_state(root)
             except BaseException as exc:
@@ -615,18 +670,30 @@ def run(profile_path: Path, *, entry: str, args: Sequence[str], output: Path,
                 failure = (failure + "; " if failure else "") + "could not record final learner state"
                 status = 1
             ended = _now()
-            published_signal_count = len(termination["pending"])
+            finalization_signals = _pending_handled_signals(termination)
+            for number in sorted(finalization_signals):
+                if number not in termination["pending"]:
+                    termination["pending"].append(number)
             if termination["pending"]:
                 signal_names = ",".join(str(item) for item in termination["pending"])
-                failure = (failure + "; " if failure else "") + f"received signal(s) during finalization: {signal_names}"
+                failure = (failure + "; " if failure else "") + \
+                    f"received signal(s) during finalization: {signal_names}"
                 status = 130
+            if termination["restore_errors"]:
+                failure = (failure + "; " if failure else "") + \
+                    "could not safely finalize signal handling"
+                status = 1
+            published_signal_count = len(termination["pending"])
             final = {"schema": "spire-learn-runtime-container-final-v1", "started_at": started,
                 "ended_at": ended, "exit_status": int(status), "timed_out": timed_out,
                 "container_created": created if not create_uncertain else None,
-                "container_removed": removed,
+                "container_removed": "uncertain" if create_uncertain else removed,
                 "learner": final_learner, "profile_verification": verification,
-                "cleanup_errors": cleanup_errors, "logs_truncated": logs_truncated, "failure": failure}
+                "cleanup_errors": cleanup_errors, "logs_truncated": logs_truncated, "failure": failure,
+                "success_contract": "Success requires this manifest exit_status to be 0, the process to exit 0, and manifest-post.json to be absent."}
             write_exclusive(output / "manifest-final.json", final)
+    if termination["restore_errors"] and status == 0:
+        status = 1
     return status
 
 

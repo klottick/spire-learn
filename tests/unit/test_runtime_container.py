@@ -1,5 +1,7 @@
 """Runtime container lifecycle tests use a temporary profile tree and fake Docker CLI."""
+import contextlib
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -314,7 +316,8 @@ class RuntimeContainerTests(unittest.TestCase):
         self.assertTrue(docker.name in docker.rm_targets)
         self.assertGreaterEqual(len(docker.inspect_targets), 1)
         final = json.loads((self.output / "manifest-final.json").read_text())
-        self.assertTrue(final["container_removed"])
+        self.assertEqual(final["container_removed"], "uncertain")
+        self.assertIn("container creation outcome uncertain", final["failure"])
         self.assertTrue(final["timed_out"])
         self.assertIsNone(final["container_created"])
 
@@ -325,7 +328,8 @@ class RuntimeContainerTests(unittest.TestCase):
         self.assertIn(docker.name, docker.rm_targets)
         self.assertNotIn("", docker.rm_targets)
         final = json.loads((self.output / "manifest-final.json").read_text())
-        self.assertTrue(final["container_removed"])
+        self.assertEqual(final["container_removed"], "uncertain")
+        self.assertIn("container creation outcome uncertain", final["failure"])
         self.assertIsNone(final["container_created"])
 
     def test_start_failure_still_collects_logs_and_removes(self):
@@ -356,7 +360,23 @@ class RuntimeContainerTests(unittest.TestCase):
         self.assertNotEqual(status, 0)
         self.assertFalse(final["container_removed"] and docker.exists)
         self.assertFalse(docker.exists)
+        self.assertEqual(final["container_removed"], "uncertain")
         self.assertGreaterEqual(docker.inspect_count, 4)
+
+    def test_create_finishing_after_terminal_absence_is_reported_uncertain(self):
+        docker = FakeDocker(failure="create_timeout")
+        original_write = runner.write_exclusive
+        def complete_after_reconciliation(path, value):
+            if Path(path).name == "manifest-final.json":
+                docker.exists = True
+            return original_write(path, value)
+        with patch.object(runner, "write_exclusive", side_effect=complete_after_reconciliation):
+            status = self.run_runner(docker)
+        final = json.loads((self.output / "manifest-final.json").read_text())
+        self.assertNotEqual(status, 0)
+        self.assertTrue(docker.exists)
+        self.assertEqual(final["container_removed"], "uncertain")
+        self.assertIn("container creation outcome uncertain", final["failure"])
 
     def test_stdout_file_error_after_create_failure_still_cleans_and_publishes(self):
         docker = FakeDocker(failure="create")
@@ -426,6 +446,56 @@ class RuntimeContainerTests(unittest.TestCase):
         self.assertEqual((self.output / "manifest-final.json").read_bytes(), published_bytes[0])
         post = json.loads((self.output / "manifest-post.json").read_text())
         self.assertIn(signal.SIGTERM, post["signals"])
+
+    def test_signal_immediately_after_pending_snapshot_is_written_to_post_manifest(self):
+        docker = FakeDocker()
+        original_signal = signal.signal
+        original_sigpending = signal.sigpending
+        previous_sigterm = signal.getsignal(signal.SIGTERM)
+        original_signal(signal.SIGTERM, lambda number, frame: None)
+        injected = [False]
+        def snapshot_then_signal():
+            pending = original_sigpending()
+            if not injected[0]:
+                injected[0] = True
+                signal.raise_signal(signal.SIGTERM)
+            return pending
+        try:
+            with patch.object(runner.signal, "sigpending", side_effect=snapshot_then_signal):
+                status = self.run_runner(docker)
+        finally:
+            original_signal(signal.SIGTERM, previous_sigterm)
+        self.assertNotEqual(status, 0)
+        post = json.loads((self.output / "manifest-post.json").read_text())
+        self.assertIn(signal.SIGTERM, post["signals"])
+
+    def test_manifest_post_write_failure_has_distinct_nonzero_status(self):
+        docker = FakeDocker()
+        original_write = runner.write_exclusive
+        stderr = io.StringIO()
+        def fail_post(path, value):
+            if Path(path).name == "manifest-final.json":
+                original_write(path, value)
+                signal.raise_signal(signal.SIGTERM)
+                return None
+            if Path(path).name == "manifest-post.json":
+                raise OSError("disk full while writing post manifest")
+            return original_write(path, value)
+        with patch.object(runner, "write_exclusive", side_effect=fail_post), \
+             contextlib.redirect_stderr(stderr):
+            status = self.run_runner(docker)
+        self.assertEqual(status, 75)
+        self.assertIn("run is not successful", stderr.getvalue())
+        self.assertIn("disk full while writing post manifest", stderr.getvalue())
+        self.assertFalse((self.output / "manifest-post.json").exists())
+
+    def test_normal_run_has_zero_status_and_no_post_manifest(self):
+        status = self.run_runner(FakeDocker())
+        final = json.loads((self.output / "manifest-final.json").read_text())
+        self.assertEqual(status, 0)
+        self.assertEqual(final["exit_status"], 0)
+        self.assertIn("process to exit 0", final["success_contract"])
+        self.assertFalse((self.output / "manifest-post.json").exists())
 
     def test_sigterm_during_handler_restoration_writes_post_manifest(self):
         docker = FakeDocker()

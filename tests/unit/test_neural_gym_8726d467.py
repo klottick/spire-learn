@@ -1,6 +1,5 @@
 """Offline contract and profile checks for Spire Gym 8726d467."""
 
-from dataclasses import replace
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,12 +14,124 @@ from spire_learn.neural.gym_contracts import (
     CURRENT_CONTRACT, LEGACY_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT,
     contract_for_revision, contracts_for_fingerprint,
 )
+from tests.unit import test_neural_envs_standard as standard_env_tests
+from tests.unit import test_neural_envs_standard_run as standard_run_tests
+from tests.unit.test_neural_envs import _NumpyStub
 from tests.unit.test_neural_checkpoint import _metadata
 
 
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = "8726d467ad8579730ddf4fa236b24aeb2206b71a"
 COMMON = "4c73f7de04d7b2875f473f8034c1cbacf984ea2d52d0a9428289c30cf1dff463"
+V1_REVISION = "1929e18b9f44372e020877bd62f2a5c9dee3e64e"
+TEMPLATE_DIRS = {
+    V1_REVISION: "gym-v1.0.0",
+    REVISION: "gym-8726d467",
+}
+RULES_BY_REVISION = {
+    V1_REVISION: {
+        "standalone": "spire-gym-native-m10-rules-v1",
+        "run": "spire-gym-native-m10-rules-v1",
+        "standard-standalone": "spire-gym-native-standard-rules-v3",
+        "standard-run": "spire-gym-native-standard-rules-v3",
+    },
+    REVISION: {
+        "standalone": "spire-gym-native-m10-rules-v2",
+        "run": "spire-gym-native-m10-rules-v2",
+        "standard-standalone": "spire-gym-native-standard-rules-v5",
+        "standard-run": "spire-gym-native-standard-rules-v5",
+    },
+}
+OTHER_RULES_BY_REVISION = {
+    V1_REVISION: {
+        "standalone": "spire-gym-native-m10-rules-v2",
+        "run": "spire-gym-native-m10-rules-v2",
+        "standard-standalone": "spire-gym-native-standard-rules-v5",
+        "standard-run": "spire-gym-native-standard-rules-v5",
+    },
+    REVISION: {
+        "standalone": "spire-gym-native-m10-rules-v1",
+        "run": "spire-gym-native-m10-rules-v1",
+        "standard-standalone": "spire-gym-native-standard-rules-v3",
+        "standard-run": "spire-gym-native-standard-rules-v3",
+    },
+}
+
+
+class _RulesIdentityEnv:
+    """Small M10 facade exposing the same public identity shape as the fake adapters."""
+
+    def __init__(self, mode, rules_id, partition, entries=()):
+        self.mode = mode
+        self.rules_id = rules_id
+        self.partition = partition
+        self.entries = tuple(entries)
+        self.closed = False
+
+    def observation_spec(self):
+        if self.mode == "run":
+            return {
+                "schema_id": "spire-gym-run-observation-v3",
+                "profile_id": "M10IroncladPolicy",
+                "fingerprint": GYM_V1_CONTRACT.run_fingerprint,
+                "action_space": {"type": "Discrete", "n": 2048, "start": 0},
+                "tensors": [{"key": "action_mask", "dtype": "int8", "shape": [2048]}],
+            }
+        return json.loads((ROOT / "tests/fixtures/neural/common-1929e18.json").read_text())
+
+    def environment_spec(self):
+        if self.mode == "standalone":
+            return {
+                "profile_id": "ironclad-combat-v1",
+                "schema_id": "spire-gym-combat-policy-view-v1",
+                "observation_fingerprint": COMMON,
+                "content_id": "spire-gym-ironclad-combat-content-v1",
+                "rules_id": self.rules_id,
+                "reward_id": "spire-gym-combat-outcome-reward-v1",
+                "mode": "standalone_combat",
+                "partition": self.partition,
+                "autoreset": "disabled",
+            }
+        return {
+            "profile_id": "M10IroncladPolicy",
+            "schema_id": "spire-gym-run-observation-v3",
+            "observation_fingerprint": GYM_V1_CONTRACT.run_fingerprint,
+            "rules_id": self.rules_id,
+            "reward_id": "spire-gym-floor-key-terminal-reward-v1",
+            "combat_view_id": "spire-gym-combat-policy-view-v1",
+            "mode": "normal_run",
+            "partition": self.partition,
+            "autoreset": "disabled",
+        }
+
+    def catalog_descriptor(self):
+        return {
+            "catalog_schema_id": "spire-gym-combat-entry-catalog-v1",
+            "entries": [envs._normalized_entry(entry) for entry in self.entries],
+        }
+
+    def combat_observation_spec(self):
+        return json.loads((ROOT / "tests/fixtures/neural/common-1929e18.json").read_text())
+
+    def close(self):
+        self.closed = True
+
+
+class _RulesIdentityRun(standard_run_tests.FakeStandardRun):
+    def __init__(self, *args, rules_id, revision, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.rules_id = rules_id
+        self.environment["rules_id"] = rules_id
+        self.schema = envs.parse_combat_descriptor(self.combat_descriptor, revision=revision)
+
+
+class _RulesIdentityStandardVector(standard_env_tests.FakeStandardVector):
+    def __init__(self, *args, rules_id, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.environment_rules_id = rules_id
+
+    def environment_spec(self):
+        return super().environment_spec() | {"rules_id": self.environment_rules_id}
 
 
 class Gym8726D467Tests(unittest.TestCase):
@@ -129,6 +240,72 @@ class Gym8726D467Tests(unittest.TestCase):
                 config = load_neural_config(ROOT / "configs/neural" / directory / f"{mode}.toml")
                 self.assertEqual(runner._ENVIRONMENT_IDENTITIES[mode](config)["rules_id"], expected)
 
+    def _fake_runtime(self, config, rules_id, made):
+        contract = contract_for_revision(config.environment_revision)
+        build = contract.build
+        build_info = {
+            "extension": "spire-python", "revision": build.revision, "dirty": False,
+            "profile": build.profile, "features": list(build.features),
+            "source_digest": build.source_digest, "file_digest": build.file_digest,
+        }
+        native = SimpleNamespace(
+            build_info=lambda: build_info,
+            CombatInputError=ValueError, CombatStateError=RuntimeError,
+            RunInputError=ValueError, RunStateError=RuntimeError,
+            RunFaultError=RuntimeError, BatchFaultError=RuntimeError,
+        )
+
+        def m10_factory(*args, **kwargs):
+            mode = config.mode
+            entries = args[1]["entries"] if mode == "standalone" else ()
+            fake = _RulesIdentityEnv(mode, rules_id, kwargs["partition"], entries)
+            made.append(fake)
+            return fake
+
+        def standard_factory(*args, **kwargs):
+            fake = _RulesIdentityStandardVector(
+                *args, rules_id=rules_id, profile_id="standard-combat-v1", **kwargs,
+            )
+            made.append(fake)
+            return fake
+
+        def run_factory(*args, **kwargs):
+            if config.mode == "standard-run":
+                fake = _RulesIdentityRun(
+                    *args, rules_id=rules_id, revision=config.environment_revision, **kwargs,
+                )
+            else:
+                fake = _RulesIdentityEnv("run", rules_id, kwargs["partition"])
+            made.append(fake)
+            return fake
+
+        return envs._NativeRuntime(
+            _NumpyStub(), native, m10_factory, run_factory, standard_factory,
+        )
+
+    def test_driver_factories_accept_own_rules_and_reject_other_release(self):
+        for revision, directory in TEMPLATE_DIRS.items():
+            for mode, expected_rules in RULES_BY_REVISION[revision].items():
+                with self.subTest(revision=revision[:8], mode=mode):
+                    config = load_neural_config(ROOT / "configs/neural" / directory / f"{mode}.toml")
+
+                    accepted_fakes = []
+                    accepted_runtime = self._fake_runtime(config, expected_rules, accepted_fakes)
+                    with patch.object(envs, "_load_native_runtime", return_value=accepted_runtime):
+                        driver = envs.make_driver(config, config.cases)
+                    self.assertEqual(driver.mode, "run" if mode.endswith("run") else "standalone")
+                    driver.close()
+                    self.assertEqual(len(accepted_fakes), 1)
+                    self.assertTrue(accepted_fakes[0].closed)
+
+                    wrong_rules = OTHER_RULES_BY_REVISION[revision][mode]
+                    rejected_fakes = []
+                    rejected_runtime = self._fake_runtime(config, wrong_rules, rejected_fakes)
+                    with patch.object(envs, "_load_native_runtime", return_value=rejected_runtime):
+                        with self.assertRaises(ContractError):
+                            envs.make_driver(config, config.cases)
+                    self.assertEqual(len(rejected_fakes), 1)
+                    self.assertTrue(rejected_fakes[0].closed)
     def test_checkpoint_mappings_reject_cross_release_in_both_directions(self):
         old = load_neural_config(ROOT / "configs/neural/gym-v1.0.0/standalone.toml").accepted_identities[0]
         new = load_neural_config(ROOT / "configs/neural/gym-8726d467/standalone.toml").accepted_identities[0]

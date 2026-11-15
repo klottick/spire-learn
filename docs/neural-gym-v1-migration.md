@@ -36,11 +36,16 @@ defaulting to the current templates.
 - **Speed.** Batch steps are faster, with byte-identical observations.
 - **Compact observations.** `observation="compact"` is new and opt-in. Learn
   does not use it yet: its parser assumes the dense int64 layout.
-- **Former fault paths fixed.** Berserk above four stacks, queued Fire
-  Breathing damage, no choice opened after victory, Necronomicon and Melange
-  Scry, and a typed `Unsupported` at the 999 generated-card bound.
-- **Shops.** The Courier restocks each bought row in place, and Circlet costs
-  400 in a shop.
+- **Former fault paths fixed** (spire-3xq, Standard rules v4):
+  - Berserk grants stacks above four;
+  - queued Fire Breathing hits keep their damage;
+  - post-victory cleanup opens no player choice;
+  - a choice between a finished card and its queued repeat resolves before the
+    repeat;
+  - the 999 generated-card bound reports a typed `Unsupported`;
+  - inconsistent offered choices keep an `Invariant` fault.
+- **Shops** (spire-0kr, Standard rules v5). The Courier restocks each bought
+  row in place, and Circlet costs 400 in a shop.
 
 Rules changed while fingerprints did not. The new `rules_epoch` therefore
 rejects `1929e18b` checkpoints and mappings, and vice versa. Results from the

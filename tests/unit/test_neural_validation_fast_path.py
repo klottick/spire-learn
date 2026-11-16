@@ -260,5 +260,6 @@ class ValidationFastPathTests(unittest.TestCase):
             self.assertEqual(_outcome(schema.candidates, broken, malformed),
                              ("IndexError", "tuple index out of range"))
 
+
 if __name__ == "__main__":
     unittest.main()

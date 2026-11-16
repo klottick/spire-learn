@@ -24,18 +24,27 @@ this release changes gameplay, so its rules IDs change too.
 | Fingerprints | Unchanged: descriptors are byte-identical to `v1.1.0` apart from the two Standard environment specs' `rules_id` |
 | `rules_epoch` | `gym-1.1.1` |
 
-**Gym changes** (see the release's `DELIVERY.md`). Twelve gameplay fixes on
-paths that used to fault or diverge from the original:
-- a Smoke Bomb escape now runs victory relics;
-- cards with no targetable enemy no longer fault;
-- fixes to Time Warp with Distilled Chaos, Omamori with a transformed curse,
-  Bronze Orb double death, Tomb of Lord Red Mask with Ectoplasm, and The Boot
-  against the Heart's Invincible;
-- repeats at an open choice, and Nightmare during Scry;
-- the hand cap of 10.
+**Gym changes**, from the release notes (`docs/releases/v1.1.1.md` at tag
+`v1.1.1`). A stress campaign found twelve gameplay faults; each fix follows the
+original game:
+- **End of combat.** A Smoke Bomb escape ends the battle like a win, so victory
+  relics fire. Meat on the Bone checks its threshold before other heals.
+- **Card cost.** A card's cost no longer depends on having a target, so
+  Infernal Blade with no targetable enemy no longer faults.
+- **Time Warp.** Its twelfth card can come from Distilled Chaos or a repeat.
+- **Events and relics.** Omamori against event-transform curses; Tomb of Lord
+  Red Mask with Ectoplasm.
+- **Enemies.** An enemy dies only once, a Bronze Orb's Stasis card returns
+  once, and The Boot no longer overspends the Heart's Invincible.
+- **Choices and hand.**
+  - A repeated card waits for an earlier open choice.
+  - Nightmare works when Foresight's Scry opens first.
+  - Retained cards return before Dead Branch, Dark Embrace and Feel No Pain
+    act, so the hand stays within 10.
 
-In windows with no targetable enemy, card costs are now known in the
-observation, and cost-reading effects act on them. The layouts are unchanged.
+**Behaviour change.** When nothing can be targeted, observations now show a
+known `effective_cost`, and cost-reading effects act there. The layouts are
+unchanged. Watcher's draw-pile views also show costs in every window.
 
 **Learn changes.**
 - Added `GYM_V1_1_1_CONTRACT`, its own epoch and the five

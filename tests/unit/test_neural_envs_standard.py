@@ -81,6 +81,164 @@ class FakeRunFaultError(RuntimeError):
     pass
 
 
+class FakeNativeValueError(RuntimeError):
+    pass
+
+
+class _HostileStateError(FakeStateError):
+    def __str__(self):
+        raise RuntimeError("SECRET state str")
+
+    def __repr__(self):
+        raise RuntimeError("SECRET state repr")
+
+
+class _HostileReasonStateError(FakeStateError):
+    @property
+    def reason(self):
+        raise RuntimeError("SECRET state reason")
+
+
+class _HostileContractError(ContractError):
+    def __str__(self):
+        raise RuntimeError("SECRET learn str")
+
+    def __repr__(self):
+        raise RuntimeError("SECRET learn repr")
+
+
+class _AttributeHostileError(RuntimeError):
+    def __getattribute__(self, name):
+        if name in {"args", "__dict__", "__cause__", "__context__", "__class__"}:
+            raise RuntimeError("SECRET native getattribute")
+        return super().__getattribute__(name)
+
+
+class _CausePropertyError(RuntimeError):
+    @property
+    def __cause__(self):
+        raise RuntimeError("SECRET cause property")
+
+
+class _LearnAttributeHostileError(ContractError):
+    def __getattribute__(self, name):
+        if name in {"__class__", "native_type"}:
+            raise RuntimeError("SECRET Learn getattribute")
+        return super().__getattribute__(name)
+
+
+class _LearnNativeTypePropertyError(ContractError):
+    @property
+    def native_type(self):
+        raise RuntimeError("SECRET Learn native_type property")
+
+
+class _ForgedNameMeta(type):
+    def __getattribute__(cls, name):
+        if name == "__name__":
+            return "SECRET forged class name"
+        return super().__getattribute__(name)
+
+
+class _ForgedNameError(RuntimeError, metaclass=_ForgedNameMeta):
+    pass
+
+
+class _RaisingNameMeta(type):
+    def __getattribute__(cls, name):
+        if name == "__name__":
+            raise RuntimeError("SECRET name lookup")
+        return super().__getattribute__(name)
+
+
+class _RaisingNameError(RuntimeError, metaclass=_RaisingNameMeta):
+    pass
+
+
+class _RecursiveNameMeta(type):
+    def __getattribute__(cls, name):
+        if name == "__name__":
+            raise _NameBomb("SECRET fallback name lookup")
+        return super().__getattribute__(name)
+
+
+class _NameBomb(RuntimeError, metaclass=_RecursiveNameMeta):
+    pass
+
+
+class _RecursiveNameError(RuntimeError, metaclass=_RecursiveNameMeta):
+    pass
+
+
+_InvalidNameError = type("SECRET invalid class name", (RuntimeError,), {})
+
+
+def _secret_error(error_type, label):
+    if error_type is FakeBatchFaultError:
+        error = error_type([])
+    else:
+        error = error_type(f"SECRET {label} message")
+    error.args = (f"SECRET {label} args",)
+    error.private_detail = f"SECRET {label} attribute"
+    error.add_note(f"SECRET {label} note")
+    nested = RuntimeError(f"SECRET {label} nested cause")
+    nested.args = (f"SECRET {label} nested args",)
+    nested.private_detail = f"SECRET {label} nested attribute"
+    nested.add_note(f"SECRET {label} nested note")
+    error.__cause__ = nested
+    return error
+
+
+def assert_no_secret_error_chain(testcase, error):
+    from spire_learn.neural.runner import _error_value
+
+    pending = [error]
+    seen = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        values = (
+            str(current), repr(current), repr(getattr(current, "__dict__", {})),
+            repr(getattr(current, "__notes__", ())), repr(current.args),
+            repr(_error_value(current)),
+        )
+        for value in values:
+            testcase.assertNotIn("SECRET", value)
+        if isinstance(current, envs._StandardNativeError):
+            testcase.assertEqual(set(current.__dict__), {"native_type"})
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+
+
+def assert_driver_fault_redacted(testcase, caught, native_type, *, delivery=None):
+    error = caught.exception
+    testcase.assertIsInstance(error, envs.DriverFault)
+    testcase.assertEqual(error.evidence.exception_type, native_type)
+    testcase.assertNotIn("SECRET", repr(error.evidence))
+    if delivery is not None:
+        testcase.assertEqual(error.evidence.delivery, delivery)
+    assert_no_secret_error_chain(testcase, error)
+    if error.__cause__ is not None:
+        assert_no_secret_error_chain(testcase, error.__cause__)
+
+
+class _RaiseFromItem:
+    def __init__(self, error):
+        self.error = error
+
+    def item(self):
+        raise self.error
+
+
+class _BadIndex:
+    def __getitem__(self, index):
+        raise _secret_error(TypeError, "presence mask indexing")
+
+
 class FakeStandardVector:
     def __init__(self, catalog, num_envs, *, records=None, partition="train", entry_ids=None,
                  workers=1, autoreset_mode="next_step", fault_policy="freeze",
@@ -93,6 +251,8 @@ class FakeStandardVector:
         self.closed = False
         self.profile_id = profile_id
         self.next_error = None
+        self.next_close_error = None
+        self.next_reward = None
         self.schema = None
 
     def observation_spec(self):
@@ -178,12 +338,17 @@ class FakeStandardVector:
         if self.next_error:
             error, self.next_error = self.next_error, None
             raise error
+        reward = 0.0 if self.next_reward is None else self.next_reward
+        self.next_reward = None
         return ({key: _BatchArray([value] * self.num_envs) for key, value in self._obs().items()},
-                [0.0] * self.num_envs, [False] * self.num_envs,
+                [reward] * self.num_envs, [False] * self.num_envs,
                 [False] * self.num_envs, self._info())
 
     def close(self):
         self.closed = True
+        if self.next_close_error is not None:
+            error, self.next_close_error = self.next_close_error, None
+            raise error
 
     def diagnostic(self, *args, **kwargs):
         raise AssertionError("diagnostic must never be called")
@@ -291,7 +456,7 @@ class StandardEnvTests(unittest.TestCase):
         self.assertNotIn("phase", envs._standard_info_slot(fake._info(), 1))
         driver.close()
 
-    def test_batch_fault_freezes_with_slot_evidence(self):
+    def test_batch_fault_freezes_without_retaining_native_records(self):
         driver, fake = self._factory()
         driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
         fake.next_error = FakeBatchFaultError([
@@ -302,9 +467,8 @@ class StandardEnvTests(unittest.TestCase):
         ])
         with self.assertRaises(envs.DriverFault) as caught:
             driver.step([0] * driver.batch_size)
-        self.assertEqual(caught.exception.evidence.fault_slots, (1,))
-        self.assertEqual(caught.exception.evidence.fault_slot_statuses,
-                         ((0, "unaffected"), (1, "faulted")))
+        self.assertEqual(caught.exception.evidence.fault_slots, ())
+        self.assertEqual(caught.exception.evidence.fault_slot_statuses, ())
         self.assertNotIn("private native detail", repr(caught.exception.evidence))
         self.assertNotIn("sensitive native detail", caught.exception.evidence.message)
         self.assertNotIn("private native detail", caught.exception.evidence.message)
@@ -312,11 +476,311 @@ class StandardEnvTests(unittest.TestCase):
     def test_standard_native_fault_reports_native_exception_type_only(self):
         driver, fake = self._factory()
         driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
-        fake.next_error = FakeBatchFaultError([])
+        fake.next_error = _secret_error(FakeBatchFaultError, "step fault")
         with self.assertRaises(envs.DriverFault) as caught:
             driver.step([0] * driver.batch_size)
-        self.assertEqual(caught.exception.evidence.exception_type, "FakeBatchFaultError")
-        self.assertNotIn("sensitive native detail", caught.exception.evidence.message)
+        assert_driver_fault_redacted(self, caught, "FakeBatchFaultError")
+
+    def test_standard_native_reset_fault_is_redacted(self):
+        driver, fake = self._factory()
+        fake.next_error = _secret_error(FakeBatchFaultError, "reset fault")
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+
+        assert_driver_fault_redacted(self, caught, "FakeBatchFaultError")
+
+    def test_standard_post_return_scalar_error_is_redacted(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        fake.next_reward = _RaiseFromItem(_secret_error(FakeNativeValueError, "reward item"))
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([0] * driver.batch_size)
+
+        assert_driver_fault_redacted(
+            self, caught, "FakeNativeValueError", delivery="returned",
+        )
+
+    def test_standard_learn_contract_error_keeps_message_and_sanitizes_native_cause(self):
+        driver, fake = self._factory()
+        original_info = fake._info
+
+        def bad_info():
+            info = original_info()
+            info["_active"] = _BadIndex()
+            return info
+
+        fake._info = bad_info
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+
+        assert_driver_fault_redacted(self, caught, "ContractError", delivery="returned")
+        self.assertEqual(
+            caught.exception.evidence.message,
+            "Standard vector info presence mask has the wrong batch width",
+        )
+        learned = caught.exception.__cause__
+        self.assertIsInstance(learned, ContractError)
+        self.assertEqual(learned.args, (
+            "Standard vector info presence mask has the wrong batch width",
+        ))
+        self.assertIsInstance(learned.__cause__, envs._StandardNativeError)
+        self.assertEqual(learned.__cause__.native_type, "TypeError")
+
+    def test_standard_snapshot_contract_error_sanitizes_native_tobytes_cause(self):
+        driver, fake = self._factory()
+        original_obs = fake._obs
+
+        def bad_obs():
+            observation = original_obs()
+            first = next(iter(observation.values()))
+            first.tobytes = lambda order="C": (_ for _ in ()).throw(
+                _secret_error(RuntimeError, "snapshot tobytes")
+            )
+            return observation
+
+        fake._obs = bad_obs
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+
+        assert_driver_fault_redacted(self, caught, "ContractError", delivery="returned")
+        self.assertIn("runtime tensor", caught.exception.evidence.message)
+        self.assertIsInstance(caught.exception.__cause__, ContractError)
+        self.assertIsInstance(caught.exception.__cause__.__cause__, envs._StandardNativeError)
+        self.assertEqual(caught.exception.__cause__.__cause__.native_type, "RuntimeError")
+
+    def test_standard_snapshot_contract_error_does_not_expose_native_tensor_names(self):
+        driver, fake = self._factory()
+        original_obs = fake._obs
+        fake._obs = lambda: original_obs() | {
+            "SECRET native tensor name": next(iter(original_obs().values()))
+        }
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+
+        assert_driver_fault_redacted(self, caught, "ContractError", delivery="returned")
+        self.assertNotIn("SECRET", caught.exception.evidence.message)
+        self.assertTrue(driver._failed)
+        self.assertTrue(fake.closed)
+
+    def test_standard_learn_message_redacts_native_text_interpolated_from_cause(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        native = RuntimeError("SECRET native text")
+        learn = ContractError(f"Learn validation failed: {native}")
+        learn.__cause__ = native
+        fake.next_error = learn
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([0] * driver.batch_size)
+
+        assert_driver_fault_redacted(self, caught, "ContractError")
+        self.assertIn("Learn validation failed:", caught.exception.evidence.message)
+        self.assertNotIn("SECRET", caught.exception.evidence.message)
+        self.assertTrue(driver._failed)
+        self.assertTrue(fake.closed)
+
+    def test_standard_input_error_is_redacted_and_recoverable(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        fake.next_error = _secret_error(FakeCombatInputError, "input error")
+
+        with self.assertRaises(envs._StandardNativeRecoverable) as caught:
+            driver.step([0] * driver.batch_size)
+
+        self.assertEqual(caught.exception.native_type, "FakeCombatInputError")
+        assert_no_secret_error_chain(self, caught.exception)
+        self.assertFalse(driver._failed)
+        self.assertEqual(driver.step([0] * driver.batch_size)[0].native_reward, 0.0)
+        driver.close()
+
+    def test_standard_stale_state_error_is_redacted_and_recoverable(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        fake.next_error = _secret_error(FakeStateError, "stale state")
+        fake.next_error.args = ("stale token",)
+
+        with self.assertRaises(envs._StandardNativeRecoverable) as caught:
+            driver.step([0] * driver.batch_size)
+
+        self.assertEqual(caught.exception.native_type, "FakeStateError")
+        assert_no_secret_error_chain(self, caught.exception)
+        self.assertFalse(driver._failed)
+        self.assertEqual(driver.step([0] * driver.batch_size)[0].native_reward, 0.0)
+        driver.close()
+
+    def test_standard_hostile_exception_inspection_is_redacted_at_all_boundaries(self):
+        cases = (
+            (_AttributeHostileError, "_AttributeHostileError"),
+            (_CausePropertyError, "RuntimeError"),
+            (_LearnAttributeHostileError, "ContractError"),
+            (_LearnNativeTypePropertyError, "ContractError"),
+            (_ForgedNameError, "_ForgedNameError"),
+            (_RaisingNameError, "_RaisingNameError"),
+            (_RecursiveNameError, "_RecursiveNameError"),
+            (_InvalidNameError, "UnknownError"),
+        )
+        for error_type, safe_name in cases:
+            for phase in ("reset", "step", "close", "cleanup"):
+                with self.subTest(error=error_type, phase=phase):
+                    driver, fake = self._factory()
+                    if phase in {"step", "cleanup"}:
+                        driver.reset(
+                            seeds=[1] * driver.batch_size,
+                            entry_ids=[None] * driver.batch_size,
+                        )
+                    error = error_type("SECRET payload")
+                    if phase == "close":
+                        fake.next_close_error = error
+                        failure = driver.close
+                    elif phase == "cleanup":
+                        fake.next_error = RuntimeError("SECRET primary")
+                        fake.next_close_error = error
+                        failure = lambda: driver.step([0] * driver.batch_size)
+                    elif phase == "step":
+                        fake.next_error = error
+                        failure = lambda: driver.step([0] * driver.batch_size)
+                    else:
+                        fake.next_error = error
+                        failure = lambda: driver.reset(
+                            seeds=[1] * driver.batch_size,
+                            entry_ids=[None] * driver.batch_size,
+                        )
+
+                    with self.assertRaises(envs.DriverFault) as caught:
+                        failure()
+
+                    expected_name = "RuntimeError" if phase == "cleanup" else safe_name
+                    assert_driver_fault_redacted(self, caught, expected_name)
+                    if phase == "cleanup":
+                        self.assertIn(safe_name, caught.exception.evidence.close_error)
+                    self.assertTrue(driver._failed)
+                    self.assertTrue(fake.closed)
+
+    def test_standard_hostile_state_formatting_is_redacted_and_fatal(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        fake.next_error = _secret_error(_HostileStateError, "hostile state")
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([0] * driver.batch_size)
+
+        assert_driver_fault_redacted(self, caught, "_HostileStateError")
+        self.assertTrue(driver._failed)
+        self.assertTrue(fake.closed)
+
+    def test_standard_state_classification_failure_is_redacted_and_fatal(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        fake.next_error = _secret_error(_HostileReasonStateError, "hostile reason")
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([0] * driver.batch_size)
+
+        assert_driver_fault_redacted(self, caught, "RuntimeError")
+        self.assertTrue(driver._failed)
+        self.assertTrue(fake.closed)
+
+    def test_standard_hostile_contract_formatting_is_redacted_and_fatal(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        fake.next_error = _secret_error(_HostileContractError, "hostile contract")
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([0] * driver.batch_size)
+
+        assert_driver_fault_redacted(self, caught, "_HostileContractError")
+        self.assertTrue(driver._failed)
+        self.assertTrue(fake.closed)
+
+    def test_standard_long_native_chain_is_redacted_and_truncated(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        error = RuntimeError("SECRET deep native error")
+        for _ in range(1100):
+            parent = RuntimeError("SECRET deep native error")
+            parent.__cause__ = error
+            error = parent
+        fake.next_error = error
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([0] * driver.batch_size)
+
+        assert_driver_fault_redacted(self, caught, "RuntimeError")
+        self.assertTrue(driver._failed)
+        self.assertTrue(fake.closed)
+        markers = []
+        pending = [caught.exception]
+        seen = set()
+        while pending:
+            current = pending.pop()
+            if id(current) in seen:
+                continue
+            seen.add(id(current))
+            if isinstance(current, envs._StandardNativeError):
+                if current.native_type == "chain truncated":
+                    markers.append(current)
+            if current.__cause__ is not None:
+                pending.append(current.__cause__)
+            if current.__context__ is not None:
+                pending.append(current.__context__)
+        self.assertEqual(len(markers), 1)
+        self.assertLessEqual(len(seen), 34)
+
+    def test_standard_cyclic_native_chain_is_redacted(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        error = _secret_error(RuntimeError, "cyclic native error")
+        error.__context__ = error
+        fake.next_error = error
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([0] * driver.batch_size)
+
+        assert_driver_fault_redacted(self, caught, "RuntimeError")
+        self.assertTrue(driver._failed)
+        self.assertTrue(fake.closed)
+
+    def test_standard_explicit_close_failure_is_redacted(self):
+        driver, fake = self._factory()
+        fake.next_close_error = _secret_error(FakeNativeValueError, "close failure")
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.close()
+
+        assert_driver_fault_redacted(self, caught, "FakeNativeValueError")
+
+    def test_standard_cleanup_close_failure_is_redacted(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        fake.next_error = _secret_error(FakeBatchFaultError, "primary fault")
+        fake.next_close_error = _secret_error(FakeNativeValueError, "cleanup failure")
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([0] * driver.batch_size)
+
+        assert_driver_fault_redacted(self, caught, "FakeBatchFaultError")
+        self.assertIn("FakeNativeValueError", caught.exception.evidence.close_error)
+        self.assertNotIn("SECRET", repr(caught.exception.evidence))
+
+    def test_standard_fault_has_no_native_context(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
+        native = _secret_error(FakeBatchFaultError, "step fault")
+        native.slots = [{"status": "faulted", "message": "SECRET slot detail"}]
+        fake.next_error = native
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([0] * driver.batch_size)
+
+        assert_driver_fault_redacted(self, caught, "FakeBatchFaultError")
+        redacted = caught.exception.__cause__
+        self.assertIsInstance(redacted, envs._StandardNativeFault)
+        self.assertIsInstance(redacted.__cause__, envs._StandardNativeError)
+        self.assertEqual(redacted.__cause__.native_type, "RuntimeError")
+        assert_no_secret_error_chain(self, redacted)
 
     def test_fault_slot_truncation_only_marks_omitted_fault_records(self):
         driver, _fake = self._factory()
@@ -332,9 +796,11 @@ class StandardEnvTests(unittest.TestCase):
     def test_standard_combat_input_error_on_step_is_recoverable(self):
         driver, fake = self._factory()
         driver.reset(seeds=[1] * driver.batch_size, entry_ids=[None] * driver.batch_size)
-        fake.next_error = FakeCombatInputError("invalid batch input")
-        with self.assertRaises(FakeCombatInputError):
+        fake.next_error = _secret_error(FakeCombatInputError, "input error")
+        with self.assertRaises(envs._StandardNativeRecoverable) as caught:
             driver.step([0] * driver.batch_size)
+        self.assertEqual(caught.exception.native_type, "FakeCombatInputError")
+        assert_no_secret_error_chain(self, caught.exception)
         self.assertEqual(driver.accepted_steps, 0)
         self.assertEqual(driver.step([0] * driver.batch_size)[0].native_reward, 0.0)
         self.assertEqual(driver.accepted_steps, 1)

@@ -134,6 +134,22 @@ class _Fakes:
 
 
 class ProfileEntryTests(unittest.TestCase):
+    def test_v1_1_0_profile_plan_matches_the_baseline_shape_on_the_new_build(self):
+        from scripts.neural.baseline_entry import load_plan
+        plan = load_plan(ROOT / "configs/neural/profile-gym-1.1.0/plan.json")
+        baseline = load_plan(ROOT / PLAN)
+        self.assertEqual(plan["gym_revision"], "26615ef470e420114f29a208103260b517ee4906")
+        self.assertEqual(plan["template"], "configs/neural/profile-gym-1.1.0/template.toml")
+        for key in ("segment", "recipe", "arm"):
+            self.assertEqual(plan[key], baseline[key], key)
+        template = (ROOT / plan["template"]).read_text()
+        self.assertIn('gym_revision = "26615ef470e420114f29a208103260b517ee4906"', template)
+        self.assertNotIn("8726d467", template.split("\n", 1)[1])
+        self.assertIn("+gym-1.1.0", template)
+        base_lines = (ROOT / baseline["template"]).read_text().splitlines()[1:]
+        changed = [pair for pair in zip(base_lines, template.splitlines()[1:]) if pair[0] != pair[1]]
+        self.assertEqual(len(changed), 3)  # revision and the two raw-mode mappings only
+
     def setUp(self):
         from spire_learn.neural import features, model
         self.stub = stub = lambda frames, *args, **kwargs: "batch"

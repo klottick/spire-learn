@@ -1,0 +1,44 @@
+{
+  "arm": "mixed",
+  "baseline_id": "profile-gym-1.1.0-20261116",
+  "evaluation": {
+    "action_selection": "deterministic",
+    "case_actions": 256,
+    "case_seconds": 30
+  },
+  "gym_revision": "26615ef470e420114f29a208103260b517ee4906",
+  "max_new_output_bytes": 12884901888,
+  "notes": [
+    "Throughput profile only (scripts/neural/profile_entry.py): three baseline-shaped segments; not a training result",
+    "segment allowance, rollout and model settings match baseline-8726d467 so timings are comparable"
+  ],
+  "qualification": {
+    "max_environment_actions": 512,
+    "max_updates": 1
+  },
+  "qualifications": [
+    "RNG-001",
+    "TIME-001",
+    "standalone Ironclad only",
+    "one replicate",
+    "simulator only; no original-game transfer claim",
+    "not comparable with pre-8726d467 panel scores"
+  ],
+  "recipe": "configs/neural/curriculum-v1/recipe.json",
+  "retain_near_decisions": [
+    135168,
+    270336
+  ],
+  "runner_timeout_seconds": 15600,
+  "schema": "spire-learn-baseline-plan-v1",
+  "segment": {
+    "max_environment_actions": 4096,
+    "max_updates": 8
+  },
+  "target_learned_decisions": 405504,
+  "template": "configs/neural/profile-gym-1.1.0/template.toml",
+  "wall_seconds": {
+    "total": 14400,
+    "training": 12600
+  }
+}

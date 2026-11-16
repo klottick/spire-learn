@@ -1,6 +1,6 @@
 # Spire Gym 1.0.0 and Standard adoption
 
-Updated **2026-11-16** (current release `v1.1.0`, build `26615ef`; see the re-pin sections). Originally written 2026-11-12 for build `1929e18b`. Spire Learn now selects Gym by the configured revision
+Updated **2026-11-16** (current release `v1.1.1`, build `e3c1383`; see the re-pin sections). Originally written 2026-11-12 for build `1929e18b`. Spire Learn now selects Gym by the configured revision
 and supports the Gym 1.0.0 common, Standard combat and Standard Run contracts.
 The native extension revision is
 `1929e18b9f44372e020877bd62f2a5c9dee3e64e` (tag `v1.0.0` is `fc3c0118`,
@@ -8,6 +8,60 @@ documentation/data only). The release build identity is `release`, clean, with
 feature `spire-python/extension`, source digest
 `d4b3121226cfbb030b89731ed7ea3773f5c2b44988c9ec01c2355d53f2dfa9b2` and file
 digest `dce682976f221f5686d16beda7ced03f0221624da0a9b83e8b5969f7300f60ce`.
+
+## Re-pin to release v1.1.1 (2026-11-16)
+
+Learn's current templates are `configs/neural/gym-1.1.1/`. They pin Gym release
+`v1.1.1`, revision `e3c13836bd1458be8a87b93160f5c350f78fcd80`. Unlike `v1.1.0`,
+this release changes gameplay, so its rules IDs change too.
+
+| Item | Value |
+| --- | --- |
+| Wheel SHA-256 | `fd4b6a2e50cca78ad2776b66694f7696ec74ee787db6e6cbe690f4c1fa81eb62` |
+| `_native` SHA-256 | `eaeb61d767a53731f0cc2a2d8e0222db8298a4f0b6d1c3ea3c55cb3e0d4348e5` |
+| `source_digest` / `file_digest` | `82b4384a1e51e57de7c0243c9e7a6a053b8aad9fdd4bb525610800418a5e5ad0` / `9ec87b6bf319ac24b4c055a89b87b65c65f1429798eb3cd59fb9ef77fbe1e1f8` |
+| Rules IDs | Standard `spire-gym-native-standard-rules-v6`; M10/Gym66 `spire-gym-native-m10-rules-v3` (M9 moves to v4; Learn has no M9 mode) |
+| Fingerprints | Unchanged: descriptors are byte-identical to `v1.1.0` apart from the two Standard environment specs' `rules_id` |
+| `rules_epoch` | `gym-1.1.1` |
+
+**Gym changes** (see the release's `DELIVERY.md`). Twelve gameplay fixes on
+paths that used to fault or diverge from the original:
+- a Smoke Bomb escape now runs victory relics;
+- cards with no targetable enemy no longer fault;
+- fixes to Time Warp with Distilled Chaos, Omamori with a transformed curse,
+  Bronze Orb double death, Tomb of Lord Red Mask with Ectoplasm, and The Boot
+  against the Heart's Invincible;
+- repeats at an open choice, and Nightmare during Scry;
+- the hand cap of 10.
+
+In windows with no targetable enemy, card costs are now known in the
+observation, and cost-reading effects act on them. The layouts are unchanged.
+
+**Learn changes.**
+- Added `GYM_V1_1_1_CONTRACT`, its own epoch and the five
+  `configs/neural/gym-1.1.1/` profiles.
+- Qualification, soak and `validation_profile.py` now default to them.
+- Tests reject checkpoints across `v1.1.0` and `v1.1.1` in both directions.
+- `v1.1.0`, `8726d467` and their templates remain valid for their own revisions.
+
+**Verification** (2026-11-16). All checks ran through `runtime_container.py`,
+each with exit status 0 and `learner_changed: false`.
+- **Release.** The wheel and `_native` hashes match the release.
+  `build_info()` matches the table, with `dirty=false`.
+- **Descriptors.** Four files are byte-identical to `v1.1.0`'s. The two Standard
+  environment specs differ only in `rules_id` (v5 to v6).
+- **Qualification.** `qualified_one_reset_per_mode` in all four modes.
+- **Soak.** `soak_gym_v1.py --steps 3000 --characters` passed with no contract
+  fault. Every count equals the `v1.1.0` soak's under the same seeds, so these
+  random rollouts did not reach the fixed paths. The soak establishes that the
+  adapters accept the new build, not that the fixes are covered, including the
+  no-target cost change.
+
+The gated tensor tests were not repeated, for the same reason as for `v1.1.0`:
+Learn's code under test is unchanged, and the descriptors match.
+
+Outputs are under `artifacts/development/neural-combat/gym-1.1.1/`, which Git
+ignores.
 
 ## Re-pin to release v1.1.0 (2026-11-16)
 

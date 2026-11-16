@@ -134,6 +134,24 @@ class _Fakes:
 
 
 class ProfileEntryTests(unittest.TestCase):
+    def test_v1_1_0_profile_plan_matches_the_baseline_shape_on_the_new_build(self):
+        from scripts.neural.baseline_entry import load_plan
+        plan = load_plan(ROOT / "configs/neural/profile-gym-1.1.0/plan.json")
+        baseline = load_plan(ROOT / PLAN)
+        self.assertEqual(plan["gym_revision"], "26615ef470e420114f29a208103260b517ee4906")
+        self.assertEqual(plan["template"], "configs/neural/profile-gym-1.1.0/template.toml")
+        own = {"baseline_id", "gym_revision", "template", "notes", "qualifications"}
+        self.assertEqual({k: v for k, v in plan.items() if k not in own},
+                         {k: v for k, v in baseline.items() if k not in own})
+        template = (ROOT / plan["template"]).read_text()
+        self.assertIn('gym_revision = "26615ef470e420114f29a208103260b517ee4906"', template)
+        self.assertNotIn("8726d467", template.split("\n", 1)[1])
+        self.assertIn("+gym-1.1.0", template)
+        base_lines = (ROOT / baseline["template"]).read_text().splitlines()[1:]
+        changed = [new.split("=", 1)[0].strip()
+                   for old, new in zip(base_lines, template.splitlines()[1:]) if old != new]
+        self.assertEqual(changed, ["gym_revision", "standalone", "run"])
+
     def setUp(self):
         from spire_learn.neural import features, model
         self.stub = stub = lambda frames, *args, **kwargs: "batch"

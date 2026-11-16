@@ -1,6 +1,6 @@
 # Spire Gym 1.0.0 and Standard adoption
 
-Updated **2026-11-15** (current build `8726d467`; see the re-pin section). Originally written 2026-11-12 for build `1929e18b`. Spire Learn now selects Gym by the configured revision
+Updated **2026-11-16** (current release `v1.1.0`, build `26615ef`; see the re-pin sections). Originally written 2026-11-12 for build `1929e18b`. Spire Learn now selects Gym by the configured revision
 and supports the Gym 1.0.0 common, Standard combat and Standard Run contracts.
 The native extension revision is
 `1929e18b9f44372e020877bd62f2a5c9dee3e64e` (tag `v1.0.0` is `fc3c0118`,
@@ -8,6 +8,57 @@ documentation/data only). The release build identity is `release`, clean, with
 feature `spire-python/extension`, source digest
 `d4b3121226cfbb030b89731ed7ea3773f5c2b44988c9ec01c2355d53f2dfa9b2` and file
 digest `dce682976f221f5686d16beda7ced03f0221624da0a9b83e8b5969f7300f60ce`.
+
+## Re-pin to release v1.1.0 (2026-11-16)
+
+Learn's current templates are `configs/neural/gym-1.1.0/`. They pin the stable
+Gym release `v1.1.0`, revision `26615ef470e420114f29a208103260b517ee4906`. Its
+engine source is the same as `8726d467`'s; only the package version moved from
+1.0.0 to 1.1.0. Between the two commits Gym changed 13 files: release notes,
+version strings and lockfiles. The `8726d467` contract, templates and baseline
+remain valid for that revision.
+
+| Item | Value |
+| --- | --- |
+| Wheel SHA-256 | `b90f599e6a0d3106836e013cb2682d4213db6df7a0d3f37f4d4cfc80b853a54b` |
+| `_native` SHA-256 | `55f60b4b76279f894d6c09c643da90086d3c44b5d2ef12c723d2640b4ddf324f` |
+| `source_digest` / `file_digest` | `35ea001a49233209132ede98c85ffe9943e0e5366bad8e2876757a4865becaef` / `9e6eab51ad85b7c42917fefbe518796cb3b4517f0d2282c5f6480d2d0abd8867` |
+| Rules IDs | Unchanged from `8726d467`: Standard `spire-gym-native-standard-rules-v5`; M10/Gym66 `spire-gym-native-m10-rules-v2` |
+| Fingerprints | Unchanged: every captured descriptor is byte-identical to `8726d467`'s |
+| `rules_epoch` | `gym-1.1.0` |
+
+**Separate epoch.** By user decision, `v1.1.0` gets its own `rules_epoch` even
+though its behaviour matches `8726d467`. Checkpoints and mappings do not cross
+between the two builds in either direction, and tests pin both rejections. The
+`8726d467` baseline therefore stays an `8726d467` result. Training on `v1.1.0`
+starts from fresh weights.
+
+**Learn changes.**
+- Added `GYM_V1_1_0_CONTRACT` and the five `configs/neural/gym-1.1.0/` profiles.
+- `qualify_gym_v1.py` and `soak_gym_v1.py` now default to these profiles.
+- Added `configs/neural/profile-gym-1.1.0/` for the throughput profile. Its
+  template is the `8726d467` baseline template re-bound to `v1.1.0`.
+
+**Verification** (2026-11-16). Every check ran through
+`scripts/neural/runtime_container.py`. Each finished with manifest exit status 0
+and `learner_changed: false`.
+- **Release.** The wheel hash and the extracted `_native` hash match the release.
+  `build_info()` matches the table above, with `dirty=false`.
+- **Descriptors.** `capture_gym_descriptors.py` output is byte-identical to the
+  `8726d467` capture for all six files, including both Standard environment specs.
+- **Qualification.** `qualify_gym_v1.py` reports `qualified_one_reset_per_mode`:
+  four adapters and four resets, with no training imports.
+- **Soak.** `soak_gym_v1.py --steps 3000 --characters` passed. Every mode count
+  and every per-character A0/A20 Standard Run count is identical to the
+  `8726d467` soak under the same seeds.
+
+The gated tensor tests were not repeated. They test Learn's model, distribution,
+PPO and checkpoint code against Gym descriptors. That code is unchanged, and the
+descriptors and driver behaviour are identical to `8726d467`, where those tests
+passed 34/34 on both CPU and GPU.
+
+Outputs are under `artifacts/development/neural-combat/gym-1.1.0/`, which Git
+ignores.
 
 ## Re-pin to build 8726d467 (2026-11-15)
 

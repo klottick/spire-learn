@@ -14,7 +14,8 @@ from spire_learn.neural import envs
 from spire_learn.neural.config import load_neural_config
 from spire_learn.neural.checkpoint import validate_checkpoint_metadata
 from spire_learn.neural.gym_contracts import (
-    CURRENT_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT, BuildIdentity, contract_for_revision,
+    CURRENT_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT, GYM_V1_1_0_CONTRACT,
+    BuildIdentity, contract_for_revision,
     contract_for_schema, contracts_for_fingerprint,
 )
 from tests.unit.test_neural_checkpoint import _metadata
@@ -133,7 +134,8 @@ class GymV1ContractTests(unittest.TestCase):
 
     def test_shared_fingerprint_is_ambiguous(self):
         self.assertEqual(contracts_for_fingerprint(COMMON),
-                         (CURRENT_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT))
+                         (CURRENT_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT,
+                          GYM_V1_1_0_CONTRACT))
         with self.assertRaisesRegex(ValueError, "revision is required"):
             contract_for_schema(COMMON, None)
         self.assertIs(contract_for_schema(COMMON, V1), GYM_V1_CONTRACT)

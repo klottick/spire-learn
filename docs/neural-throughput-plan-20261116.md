@@ -179,7 +179,12 @@ All of this is outside Git, under `artifacts/development/neural-combat/`:
 - `validation-profile-gym-1.1.0-20261116/` holds `validation-profile.json` and
   `.txt`.
 - `validation-differential-gym-1.1.1-20261116/` and
-  `profile-gym-1.1.1-fastpath-20261116/` hold the fast-path evidence.
+  `profile-gym-1.1.1-fastpath-20261116/` hold the fast-path evidence, from
+  commit `84fce8e`.
+- The `-b` directories repeat both runs on the reviewed code, commit `5e926ed`.
+  The differential gave identical counts and agreement. The profile gave
+  170.6 decisions/s in segment 2 (193.4 and 178.9 in the synchronized
+  segments), with validation at 2.1 s.
 
 One profile run and one cProfile run, on a shared host with the co-resident GPU
 services running.

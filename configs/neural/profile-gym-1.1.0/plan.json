@@ -22,7 +22,7 @@
     "standalone Ironclad only",
     "one replicate",
     "simulator only; no original-game transfer claim",
-    "not comparable with pre-8726d467 panel scores"
+    "timings only; not a training or panel result"
   ],
   "recipe": "configs/neural/curriculum-v1/recipe.json",
   "retain_near_decisions": [

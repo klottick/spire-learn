@@ -140,15 +140,17 @@ class ProfileEntryTests(unittest.TestCase):
         baseline = load_plan(ROOT / PLAN)
         self.assertEqual(plan["gym_revision"], "26615ef470e420114f29a208103260b517ee4906")
         self.assertEqual(plan["template"], "configs/neural/profile-gym-1.1.0/template.toml")
-        for key in ("segment", "recipe", "arm"):
-            self.assertEqual(plan[key], baseline[key], key)
+        own = {"baseline_id", "gym_revision", "template", "notes", "qualifications"}
+        self.assertEqual({k: v for k, v in plan.items() if k not in own},
+                         {k: v for k, v in baseline.items() if k not in own})
         template = (ROOT / plan["template"]).read_text()
         self.assertIn('gym_revision = "26615ef470e420114f29a208103260b517ee4906"', template)
         self.assertNotIn("8726d467", template.split("\n", 1)[1])
         self.assertIn("+gym-1.1.0", template)
         base_lines = (ROOT / baseline["template"]).read_text().splitlines()[1:]
-        changed = [pair for pair in zip(base_lines, template.splitlines()[1:]) if pair[0] != pair[1]]
-        self.assertEqual(len(changed), 3)  # revision and the two raw-mode mappings only
+        changed = [new.split("=", 1)[0].strip()
+                   for old, new in zip(base_lines, template.splitlines()[1:]) if old != new]
+        self.assertEqual(changed, ["gym_revision", "standalone", "run"])
 
     def setUp(self):
         from spire_learn.neural import features, model

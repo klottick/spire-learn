@@ -1,4 +1,4 @@
-"""Throughput profile of baseline-shaped training segments on Gym 8726d467.
+"""Throughput profile of baseline-shaped training segments for a baseline-style plan.
 
 Runs inside the runtime container started by ``runtime_container.py``. It trains
 a few ordinary stream segments from fresh weights, exactly as the baseline does,

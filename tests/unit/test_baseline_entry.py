@@ -169,6 +169,20 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertIn(V8726, template)
         self.assertIn('device = "cuda:0"', template)
 
+    def test_v1_1_1_plan_repeats_the_8726d467_baseline_on_the_new_build(self):
+        plan = baseline_entry.load_plan(ROOT / "configs/neural/baseline-gym-1.1.1/plan.json")
+        previous = baseline_entry.load_plan(ROOT / PLAN)
+        own = {"baseline_id", "gym_revision", "template", "qualifications"}
+        self.assertEqual({k: v for k, v in plan.items() if k not in own},
+                         {k: v for k, v in previous.items() if k not in own})
+        self.assertEqual(plan["gym_revision"], "e3c13836bd1458be8a87b93160f5c350f78fcd80")
+        template = (ROOT / plan["template"]).read_text()
+        base_lines = (ROOT / previous["template"]).read_text().splitlines()[1:]
+        changed = [new.split("=", 1)[0].strip()
+                   for old, new in zip(base_lines, template.splitlines()[1:]) if old != new]
+        self.assertEqual(changed, ["gym_revision", "standalone", "run"])
+        self.assertIn("+gym-1.1.1", template)
+
     def test_fresh_qualification_then_warm_start_and_resume_until_target(self):
         fakes = _Fakes(decisions_per_segment=4096)
         summary, events, written = _run(fakes)

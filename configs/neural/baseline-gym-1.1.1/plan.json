@@ -1,0 +1,45 @@
+{
+  "arm": "mixed",
+  "baseline_id": "baseline-gym-1.1.1-20261116",
+  "evaluation": {
+    "action_selection": "deterministic",
+    "case_actions": 256,
+    "case_seconds": 30
+  },
+  "gym_revision": "e3c13836bd1458be8a87b93160f5c350f78fcd80",
+  "max_new_output_bytes": 12884901888,
+  "notes": [
+    "runner_timeout_seconds exceeds wall_seconds.total so the entry always publishes summary.json before the outer kill",
+    "retention labels checkpoints; nothing is deleted",
+    "panel evaluation runs on cuda:0, unlike the CPU campaign panel; record this when comparing"
+  ],
+  "qualification": {
+    "max_environment_actions": 512,
+    "max_updates": 1
+  },
+  "qualifications": [
+    "RNG-001",
+    "TIME-001",
+    "standalone Ironclad only",
+    "one replicate",
+    "simulator only; no original-game transfer claim",
+    "not comparable with panel scores from earlier Gym builds (rules epoch gym-1.1.1)"
+  ],
+  "recipe": "configs/neural/curriculum-v1/recipe.json",
+  "retain_near_decisions": [
+    135168,
+    270336
+  ],
+  "runner_timeout_seconds": 15600,
+  "schema": "spire-learn-baseline-plan-v1",
+  "segment": {
+    "max_environment_actions": 4096,
+    "max_updates": 8
+  },
+  "target_learned_decisions": 405504,
+  "template": "configs/neural/baseline-gym-1.1.1/template.toml",
+  "wall_seconds": {
+    "total": 14400,
+    "training": 12600
+  }
+}

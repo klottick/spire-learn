@@ -34,7 +34,7 @@ def _frame_with(api, schema, original, **updates):
 
 
 class NeuralValidationMemoTests(unittest.TestCase):
-    def test_identical_valid_pair_skips_repeated_deep_deeping(self):
+    def test_identical_valid_pair_skips_repeated_deep_validation(self):
         api = _api(self)
         with _synthetic_schema(api) as schema:
             frame = _frame(api, schema)
@@ -178,6 +178,7 @@ class NeuralValidationMemoTests(unittest.TestCase):
                 with self.assertRaises(api.schema.ContractError):
                     api.schema.validate_frame(frame, schema)
                 # Not a memo hit: the changed record was validated again and rejected.
+                # (This counts validation entries, so it no longer shows rejection precedes decoding.)
                 self.assertEqual(deep.call_count, 2 * first_work + 1)
 
     def test_mutable_dtype_string_inside_exact_records_is_revalidated(self):
@@ -209,6 +210,7 @@ class NeuralValidationMemoTests(unittest.TestCase):
                 with self.assertRaises(api.schema.ContractError):
                     api.schema.validate_frame(frame, schema)
                 # Not a memo hit: the changed record was validated again and rejected.
+                # (This counts validation entries, so it no longer shows rejection precedes decoding.)
                 self.assertEqual(deep.call_count, 2 * first_work + 1)
 
     def test_mutable_nested_schema_shape_is_not_admitted(self):
@@ -244,6 +246,7 @@ class NeuralValidationMemoTests(unittest.TestCase):
                 with self.assertRaises(api.schema.ContractError):
                     api.schema.validate_frame(frame, schema)
                 # Not a memo hit: the changed record was validated again and rejected.
+                # (This counts validation entries, so it no longer shows rejection precedes decoding.)
                 self.assertEqual(deep.call_count, 2 * first_work + 1)
 
     def test_weak_cache_does_not_retain_frame_schema_or_tensor_bytes(self):

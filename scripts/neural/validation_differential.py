@@ -120,7 +120,7 @@ def run(output: Path, *, profile_dir: Path, steps: int, mutate_every: int, mutat
               'modes': modes, **{key: round(value, 3) if isinstance(value, float) else value
                                  for key, value in totals.items()},
               'disagreements': disagreements,
-              'status': 'agree' if not disagreements else 'disagree'}
+              'status': 'disagree' if disagreements else ('agree' if totals['frames'] else 'no_frames')}
     output.mkdir(parents=True, exist_ok=True)
     (output / 'validation-differential.json').write_text(json.dumps(result, indent=2) + '\n')
     return result

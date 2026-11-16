@@ -143,8 +143,10 @@ zero-copy views.
   plus known-bit and int8 flips, on synthetic, common and Standard frames: more
   than 4,000 cases, about three-quarters rejected. The fast path accepts exactly
   what the reference accepts, and sampled composite calls match its messages.
-  The tests catch each of six deliberate fast-path defects, including
-  nonzero-padding handling.
+  During development they caught each of six deliberately injected fast-path
+  defects; that mutation check was manual and is not part of the suite. Two
+  parser-rejected layouts found in adversarial review, non-int8 or short
+  occupancy tensors, are pinned by tests and go to the reference.
 - **Real frames** (`scripts/neural/validation_differential.py` on Gym v1.1.1,
   1,000 batch steps in each of the four modes):
   - all 11,719 real frames were accepted by the fast path, with no fallbacks;
@@ -154,7 +156,9 @@ zero-copy views.
   - checking took 90.9 s in the reference against 2.1 s on the fast path.
 
 **Throughput.** The same three-segment profile on v1.1.1, using
-`configs/neural/baseline-gym-1.1.1/plan.json`:
+`configs/neural/baseline-gym-1.1.1/plan.json`. The table compares segment 2,
+the unsynchronized one, in each run. The synchronized segments 0–1 went from
+63.6 and 66.7 to 182.0 and 181.1 decisions/s.
 
 | | Before (v1.1.0) | After (v1.1.1) |
 | --- | ---: | ---: |
@@ -163,8 +167,9 @@ zero-copy views.
 | `snapshot_validation` | 40.9 s (64%) | 1.9 s (8%) |
 | Unattributed per-segment overhead | 7.3 s | 7.3 s (31%) |
 
-The builds differ, but v1.1.1 changes only rules, not the observation layouts
-validation reads. Per-segment overhead (fix 3) is now the largest single cost.
+The builds differ. v1.1.1's `DELIVERY.md` states that observation and action
+layouts are unchanged, and its captured descriptors match v1.1.0's apart from
+`rules_id`, so validation reads the same tensors. Per-segment overhead (fix 3) is now the largest single cost.
 
 ## Evidence
 

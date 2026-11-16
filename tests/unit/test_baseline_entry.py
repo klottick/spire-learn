@@ -178,6 +178,7 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertEqual(plan["gym_revision"], "e3c13836bd1458be8a87b93160f5c350f78fcd80")
         template = (ROOT / plan["template"]).read_text()
         base_lines = (ROOT / previous["template"]).read_text().splitlines()[1:]
+        self.assertEqual(len(base_lines), len(template.splitlines()[1:]))
         changed = [new.split("=", 1)[0].strip()
                    for old, new in zip(base_lines, template.splitlines()[1:]) if old != new]
         self.assertEqual(changed, ["gym_revision", "standalone", "run"])

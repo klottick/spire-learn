@@ -7,6 +7,7 @@ its message still comes from the reference.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 import struct
@@ -18,7 +19,7 @@ from spire_learn.neural import schema
 from spire_learn.neural.contracts import BufferArray, CombatFrame
 from spire_learn.neural.gym_contracts import GYM_V1_CONTRACT
 from tests.neural._support import authored_frame
-from tests.unit.test_neural_schema import _api, _frame, _synthetic_schema
+from tests.unit.test_neural_schema import _api, _buffer, _frame, _synthetic_schema
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures/neural"
 V1 = GYM_V1_CONTRACT.source_revision
@@ -71,7 +72,8 @@ def _sample_rows(frame, spec, limit):
     occupied = frame.tensors[spec.occupied_key].data
     filled = [row for row in range(rows) if occupied[row]]
     empty = [row for row in range(rows) if not occupied[row]]
-    picked = filled[:limit] + empty[:1] + empty[-1:]
+    after = [row for row in empty if filled and row == filled[-1] + 1]
+    picked = filled[:limit] + empty[:1] + after + empty[-1:]
     if limit > 1:  # small synthetic tensors: probe more of the empty rows too
         picked += empty[:2] + empty[len(empty) // 2:len(empty) // 2 + 1]
     return sorted(set(picked))
@@ -215,17 +217,48 @@ class ValidationFastPathTests(unittest.TestCase):
             schema._validate_frame_contents(frame, common)
         self.assertEqual(reference.call_count, 1)
 
-    def test_candidates_match_fully_decoded_tuples(self):
-        for label, frame, parsed, _ in self.fixtures():
-            if "actions" not in parsed.tensors or not any(frame.tensors["action_mask"].data):
-                continue
-            with self.subTest(label):
-                viewed = schema.candidates(frame, parsed)
-                with patch.object(schema, "_cells", side_effect=schema._unpack):
-                    decoded = schema.candidates(frame, parsed)
-                self.assertEqual(viewed, decoded)
-                self.assertTrue(viewed)
+    def test_malformed_companion_tensors_are_left_to_the_reference(self):
+        # Parser-rejected layouts from adversarial review: occupancy that is not one int8
+        # flag per row must never be read as raw bytes by the fast path.
+        api = _api(self)
 
+        def with_specs(parsed, **updates):
+            return replace(parsed, tensors={**parsed.tensors, **updates},
+                           _parser_authority=schema._PARSER_AUTHORITY)
+
+        with _synthetic_schema(api) as parsed:
+            frame = _frame(api, parsed)
+            tensors = dict(frame.tensors)
+            cases = {}
+            cases["int64 occupancy"] = (
+                with_specs(parsed, combat_cards_occupied=replace(
+                    parsed.tensors["combat_cards_occupied"], dtype="int64")),
+                {**tensors, "combat_cards_occupied": _buffer(api, [256, 0], (2,)),
+                 "combat_cards": _buffer(api, [0, 1], (2, 1)),
+                 "combat_cards_known": _buffer(api, [0, 1], (2, 1), "int8")})
+            cases["occupancy aliased to a short tensor"] = (
+                with_specs(parsed, combat_cards=replace(
+                    parsed.tensors["combat_cards"], occupied_key="player")),
+                {**tensors, "player": _buffer(api, [1], (1,))})
+            cases["oversized action mask"] = (
+                with_specs(parsed,
+                           action_mask=replace(parsed.tensors["action_mask"], shape=(11,)),
+                           actions_occupied=replace(parsed.tensors["actions_occupied"], shape=(11,))),
+                {**tensors, **{key: BufferArray("int8", (11,), tensors[key].data + b"\x01")
+                               for key in ("action_mask", "actions_occupied")}})
+            for label, (malformed, changed) in cases.items():
+                with self.subTest(label):
+                    broken = CombatFrame(changed, malformed.schema_fingerprint)
+                    if label != "oversized action mask":
+                        self.assertFalse(schema._frame_is_valid_fast(broken, malformed))
+                    self.assertEqual(
+                        _outcome(schema._validate_frame_contents, broken, malformed),
+                        _outcome(schema._validate_frame_contents_reference, broken, malformed))
+            # Both validators accept the oversized mask; candidates keeps the tuple IndexError.
+            malformed, changed = cases["oversized action mask"]
+            broken = CombatFrame(changed, malformed.schema_fingerprint)
+            self.assertEqual(_outcome(schema.candidates, broken, malformed),
+                             ("IndexError", "tuple index out of range"))
 
 if __name__ == "__main__":
     unittest.main()

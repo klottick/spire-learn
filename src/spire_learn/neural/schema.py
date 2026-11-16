@@ -571,11 +571,6 @@ def _unpack(buffer: BufferArray) -> tuple[int, ...]:
     return struct.unpack(f"={len(buffer.data) // 8}q", buffer.data)
 
 
-def _cells(buffer: BufferArray) -> memoryview:
-    """Zero-copy indexable view yielding the same ints as ``_unpack``."""
-    return memoryview(buffer.data).cast("b" if buffer.dtype == "int8" else "q")
-
-
 def _row_capacity(spec: TensorSpec) -> int:
     return spec.shape[0] if len(spec.shape) == 2 else 1
 
@@ -852,10 +847,11 @@ def _frame_is_valid_fast(frame: CombatFrame, schema: CombatSchema) -> bool:
         for spec in schema.tensors.values() if spec.occupied_key is not None
     }
     action_spec = schema.tensors.get("actions")
-    if (action_spec is not None and action_spec.occupied_key is not None
-            and schema.tensors.get("action_mask") is not None
-            and raw["action_mask"] != occupancy[action_spec.occupied_key]):
-        return False
+    mask_spec = schema.tensors.get("action_mask")
+    if action_spec is not None and action_spec.occupied_key is not None and mask_spec is not None:
+        if (mask_spec.dtype != "int8" or schema.tensors[action_spec.occupied_key].dtype != "int8"
+                or raw["action_mask"] != occupancy[action_spec.occupied_key]):
+            return False
 
     view = schema.view
     for key, spec in schema.tensors.items():
@@ -863,6 +859,11 @@ def _frame_is_valid_fast(frame: CombatFrame, schema: CombatSchema) -> bool:
             continue
         if spec.known_key is None or schema.tensors[spec.known_key].dtype != "int8":
             return False
+        if spec.occupied_key is not None:
+            # Raw bytes stand in for occupancy only when they are one int8 flag per row.
+            occupied_spec = schema.tensors[spec.occupied_key]
+            if occupied_spec.dtype != "int8" or occupied_spec.shape != (_row_capacity(spec),):
+                return False
         data = raw[key]
         known_data = raw[spec.known_key]
         columns = len(spec.columns)
@@ -870,8 +871,8 @@ def _frame_is_valid_fast(frame: CombatFrame, schema: CombatSchema) -> bool:
         item = 1 if spec.dtype == "int8" else 8
         if len(data) != rows * columns * item or len(known_data) != rows * columns:
             return False
-        values = _cells(frame.tensors[key])
-        known = _cells(frame.tensors[spec.known_key])
+        values = memoryview(data).cast("b" if item == 1 else "q")
+        known = memoryview(known_data).cast("b")
         occupied = occupancy.get(spec.occupied_key) if spec.occupied_key is not None else None
         if occupied is not None and len(occupied) < rows:
             return False
@@ -1041,16 +1042,15 @@ def _candidate_reference(
 def candidates(frame: CombatFrame, schema: CombatSchema) -> tuple[CombatCandidate, ...]:
     """Decode legal rows without changing their original native dispatch indices."""
     validate_frame(frame, schema)
-    # Validated frames are read through zero-copy views that yield the decoded ints.
-    mask = _cells(frame.tensors["action_mask"])
+    mask = _unpack(frame.tensors["action_mask"])
     indexes = tuple(index for index, legal in enumerate(mask) if legal == 1)
     if not indexes:
         raise ContractError("empty legal-action mask cannot be sent to an actor")
     spec = schema.tensors.get("actions")
     if spec is None or not spec.columns or len(spec.shape) != 2:
         raise ContractError("accepted descriptor lacks a row-based actions tensor")
-    actions = _cells(frame.tensors["actions"])
-    known = _cells(frame.tensors[spec.known_key or ""])
+    actions = _unpack(frame.tensors["actions"])
+    known = _unpack(frame.tensors[spec.known_key or ""])
     columns = len(spec.columns)
     indexes_by_name = {
         name: _field_index(spec, name, required=True)

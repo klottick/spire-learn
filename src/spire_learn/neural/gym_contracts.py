@@ -104,7 +104,27 @@ GYM_8726D467_CONTRACT = GymContract(
     m10_rules_id="spire-gym-native-m10-rules-v2",
     standard_rules_id="spire-gym-native-standard-rules-v5",
 )
-CONTRACTS = (LEGACY_CONTRACT, CURRENT_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT)
+GYM_V1_1_0_CONTRACT = GymContract(
+    "26615ef470e420114f29a208103260b517ee4906",
+    ("26615ef470e420114f29a208103260b517ee4906",),
+    "4c73f7de04d7b2875f473f8034c1cbacf984ea2d52d0a9428289c30cf1dff463",
+    "28d92d89c437eea7fdc260240585bca466dee1fd74b9b3eb38513d2b34b0be64",
+    "effbb810d345e906f6e20b47bd972e35d72ef48141378d54bd28b54afac5f406",
+    BuildIdentity(
+        "26615ef470e420114f29a208103260b517ee4906",
+        "35ea001a49233209132ede98c85ffe9943e0e5366bad8e2876757a4865becaef",
+        "9e6eab51ad85b7c42917fefbe518796cb3b4517f0d2282c5f6480d2d0abd8867",
+        "release",
+        ("spire-python/extension",),
+    ),
+    standard_combat_fingerprint="5d8147e13ded030c7faa501a8202eb2588915c2e1330b30cac5b06afc9f9916e",
+    standard_run_fingerprint="bf8e1d111bbf2171594231b99d8d6b701244249abfbb90a11e86c4b4a405f7ae",
+    rules_epoch="gym-1.1.0",
+    m10_rules_id="spire-gym-native-m10-rules-v2",
+    standard_rules_id="spire-gym-native-standard-rules-v5",
+)
+CONTRACTS = (LEGACY_CONTRACT, CURRENT_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT,
+             GYM_V1_1_0_CONTRACT)
 RUNTIME_REVISIONS = frozenset(revision for item in CONTRACTS for revision in item.runtime_revisions)
 COMMON_FINGERPRINTS = frozenset(item.common_fingerprint for item in CONTRACTS)
 

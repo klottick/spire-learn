@@ -182,21 +182,22 @@ class RuntimeContainerTests(unittest.TestCase):
     def write_profile(self):
         self.profile_path.write_text(json.dumps(self.profile_data), encoding="utf-8")
 
-    def fake_git(self, *, late_signal=False):
+    def fake_git(self, *, late_signal=False, final_head="1" * 40):
         calls = []
         def state(root):
             calls.append("state")
             if late_signal and len(calls) == 2:
                 signal.raise_signal(signal.SIGTERM)
-            return {"head": "1" * 40, "dirty": []}
+            return {"head": "1" * 40 if len(calls) == 1 else final_head, "dirty": []}
         return state
 
     def run_runner(self, docker, **overrides):
         values = dict(entry="gated_tests_entry.py", args=["--smoke"], output=self.output,
                       authority="approved unit fixture", gpu_uuid=None, timeout_seconds=15600,
                       cpus=2.0, memory="4g", env={}, ledger_bind=None, root=self.root)
+        git = overrides.pop("git", None) or self.fake_git()
         values.update(overrides)
-        with patch.object(runner, "git_state", side_effect=self.fake_git()), \
+        with patch.object(runner, "git_state", side_effect=git), \
              patch.object(runner, "CREATE_RECONCILE_SECONDS", 0.05, create=True), \
              patch.object(runner, "RECONCILE_INTERVAL_SECONDS", 0.005, create=True):
             return runner.run(self.profile_path, docker=docker, **values)
@@ -296,6 +297,23 @@ class RuntimeContainerTests(unittest.TestCase):
         manifest = json.loads((self.output / "manifest.json").read_text())
         self.assertEqual(manifest["ledger_bind"], str(self.ledger))
 
+    def test_ledger_bind_is_refused_for_entries_other_than_gated_tests(self):
+        docker = FakeDocker()
+        with self.assertRaisesRegex(ValueError, "ledger-bind"):
+            self.run_runner(docker, entry="entry.py", ledger_bind=self.ledger)
+        self.assertEqual(docker.calls, [])
+
+    def test_final_manifest_flags_learner_changes_during_the_run(self):
+        status = self.run_runner(FakeDocker())
+        self.assertEqual(status, 0)
+        final = json.loads((self.output / "manifest-final.json").read_text())
+        self.assertFalse(final["learner_changed"])
+        output = self.output.parent / "changed"
+        status = self.run_runner(FakeDocker(), output=output, git=self.fake_git(final_head="2" * 40))
+        final = json.loads((output / "manifest-final.json").read_text())
+        self.assertTrue(final["learner_changed"])
+        self.assertEqual(final["learner"]["head"], "2" * 40)
+
     def test_invalid_ledger_binds_are_refused_before_any_docker_call(self):
         other = self.root / "artifacts/development/neural-combat/other.jsonl"
         other.write_text("ledger\n")
@@ -393,7 +411,9 @@ class RuntimeContainerTests(unittest.TestCase):
         final = json.loads((self.output / "manifest-final.json").read_text())
         self.assertEqual(final["container_removed"], "uncertain")
         self.assertIn("container creation outcome uncertain", final["failure"])
-        self.assertTrue(final["timed_out"])
+        # A create timeout is a failure, not the entry's own wait timing out.
+        self.assertFalse(final["timed_out"])
+        self.assertNotEqual(status, 124)
         self.assertIsNone(final["container_created"])
 
     def test_empty_create_output_keeps_owned_name_as_cleanup_target(self):

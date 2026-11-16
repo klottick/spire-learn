@@ -460,7 +460,18 @@ class BaselineEntryTests(unittest.TestCase):
         paired = summary["paired_fresh_vs_final"]
         self.assertEqual(paired["paired_cases"], 2)
         self.assertEqual(paired["excluded_censored"], 1)
+        self.assertEqual(paired["excluded_failed_invalid_or_missing"], 0)
         self.assertEqual(paired["final_only_win"], 2)
+
+    def test_failed_retention_panel_keeps_result_incomplete(self):
+        fakes = _Fakes(decisions_per_segment=4096, panel_cases=3)
+        fakes.fail_evaluation_at = 7  # first case of the third label, after final and fresh-initial
+        summary, _, _ = _run(fakes)
+        self.assertEqual(summary["evaluations"]["final"]["status"], "complete")
+        self.assertEqual(summary["evaluations"]["fresh-initial"]["status"], "complete")
+        self.assertEqual(summary["evaluations"]["near-135168"]["status"], "operational_failure")
+        self.assertNotIn("near-270336", summary["evaluations"])
+        self.assertEqual(summary["result"], "incomplete")
 
     def test_exception_mid_panel_preserves_partial_rows(self):
         fakes = _Fakes(decisions_per_segment=4096)

@@ -252,12 +252,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     result = unittest.TestResult()
     runner_error = None
     runner_started = False
+    interrupted: BaseException | None = None
     if all(int(module["collected"]) > 0 and module["load_error"] is None for module in modules):
         suite = unittest.TestSuite(tests)
         try:
             runner_started = True
             result = unittest.TextTestRunner(verbosity=2).run(suite)
-        except Exception as error:
+        except BaseException as error:
+            # Process control still settles the reservation and publishes a red result, then propagates.
+            if not isinstance(error, Exception):
+                interrupted = error
             runner_error = f"{type(error).__name__}: {error}"
             result.errors.append(("gated tensor test runner", runner_error))
 
@@ -290,7 +294,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                            "attempted_rows": event["attempted_rows"],
                            "completed_rows": event["completed_rows"],
                            "rejected_rows": event["rejected_rows"]})
-    except (OSError, ValueError, SampleBudgetError) as error:
+    except Exception as error:  # includes malformed ledger events (KeyError, TypeError)
         completion["error"] = f"{type(error).__name__}: {error}"
 
     document = _result_document(
@@ -302,7 +306,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         _write_exclusive(evidence_dir / "result.json", document)
     except (OSError, ValueError) as error:
         print(f"could not write exclusive result.json: {error}", file=sys.stderr)
+        if interrupted is not None:
+            raise interrupted
         return 2
+    if interrupted is not None:
+        raise interrupted
     print(json.dumps(document, sort_keys=True))
     return 0 if document["status"] == "green" else 1
 

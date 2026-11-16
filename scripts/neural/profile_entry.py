@@ -52,21 +52,32 @@ def _timed(timing, label: str, function: Callable) -> Callable:
     return call
 
 
-def instrument(runtime, timing, stack: ExitStack) -> None:
-    """Wrap the runtime's own collaborators; every wrapper is restored by ``stack``."""
+def instrument(runtime, timing, stack: ExitStack) -> list[str]:
+    """Wrap the runtime's own collaborators; every wrapper is restored by ``stack``.
+
+    Returns the labels that could not be wrapped (for example a native object
+    without an instance ``__dict__``), so a missing span is reported, not silent.
+    """
     collector = runtime.collector
-    for obj, name, label in ((collector.driver, 'reset', 'driver_reset'),
-                             (collector.driver, 'step', 'driver_step'),
-                             (collector.policy, 'act', 'policy_act'),
-                             (collector.policy, 'values', 'bootstrap_values'),
-                             (collector, 'collect', 'collection'),
-                             (runtime, 'update', 'ppo_update'),
-                             (runtime, 'save', 'checkpoint_save')):
-        if callable(getattr(obj, name, None)):
-            _patch(stack, obj, name, _timed(timing, label, getattr(obj, name)))
     optimizer = getattr(runtime, 'optimizer', None)
+    targets = [(collector.driver, 'reset', 'driver_reset'),
+               (collector.driver, 'step', 'driver_step'),
+               (collector.policy, 'act', 'policy_act'),
+               (collector.policy, 'values', 'bootstrap_values'),
+               (collector, 'collect', 'collection'),
+               (runtime, 'update', 'ppo_update'),
+               (runtime, 'save', 'checkpoint_save')]
     if optimizer is not None:
-        _patch(stack, optimizer, 'step', _timed(timing, 'adam_step', optimizer.step))
+        targets.append((optimizer, 'step', 'adam_step'))
+    missing = []
+    for obj, name, label in targets:
+        if not callable(getattr(obj, name, None)):
+            continue
+        try:
+            _patch(stack, obj, name, _timed(timing, label, getattr(obj, name)))
+        except (TypeError, AttributeError):
+            missing.append(label)
+    return missing
 
 
 def _encoding(timing, stack: ExitStack) -> None:
@@ -86,11 +97,15 @@ def _recorder(runtime, synchronized: bool):
 
 
 def _top(rows: Mapping[str, Mapping], wall: float) -> list[dict]:
-    ranked = sorted(rows.items(), key=lambda item: -item[1]['exclusive_wall_seconds'])
-    return [{'span': name, 'count': row['count'],
-             'exclusive_wall_seconds': round(row['exclusive_wall_seconds'], 3),
-             'share_of_segment': round(row['exclusive_wall_seconds'] / wall, 4) if wall > 0 else None}
-            for name, row in ranked]
+    # Exclusive times partition the spanned time; the remainder (runtime creation,
+    # checkpoint preflight, untimed loop code) is reported as ``unattributed``.
+    seconds = {name: row['exclusive_wall_seconds'] for name, row in rows.items()}
+    counts = {name: row['count'] for name, row in rows.items()}
+    seconds['unattributed'] = max(0., wall - sum(seconds.values()))
+    counts['unattributed'] = None
+    return [{'span': name, 'count': counts[name], 'exclusive_wall_seconds': round(value, 3),
+             'share_of_segment': round(value / wall, 4) if wall > 0 else None}
+            for name, value in sorted(seconds.items(), key=lambda item: -item[1])]
 
 
 def run_profile(root: Path, plan_path: Path, output: Path, *, checkpoint: Path | None = None,
@@ -132,21 +147,24 @@ def run_profile(root: Path, plan_path: Path, output: Path, *, checkpoint: Path |
             def train(config, *, runtime, clock):
                 timing = row['_timing']
                 with ExitStack() as stack:
-                    instrument(runtime, timing, stack)
+                    row['not_instrumented'] = instrument(runtime, timing, stack)
                     _encoding(timing, stack)
                     with observe(timing):
                         return deps['train'](config, runtime=runtime, clock=clock)
 
             started = clock()
-            result = deps['run_stream_segment'](
-                config, purpose=purpose, checkpoint=parent,
-                operation_limits=_limits(prefix, plan['segment'], clock() + 900),
-                dependencies={'create_runtime': create_runtime, 'train': train, 'clock': clock})
-            wall = clock() - started
+            try:
+                result = deps['run_stream_segment'](
+                    config, purpose=purpose, checkpoint=parent,
+                    operation_limits=_limits(prefix, plan['segment'], clock() + 900),
+                    dependencies={'create_runtime': create_runtime, 'train': train, 'clock': clock})
+            finally:
+                # A faulting segment still reports the time it spent and where.
+                wall = clock() - started
+                timing = row.pop('_timing', None)
+                rows = timing.snapshot() if timing is not None else {}
+                row.update(wall_seconds=round(wall, 3), spans=rows, ranked=_top(rows, wall))
             previous = (prefix or {}).get('learned_decisions', 0)
-            timing = row.pop('_timing', None)
-            rows = timing.snapshot() if timing is not None else {}
-            row.update(wall_seconds=round(wall, 3), spans=rows, ranked=_top(rows, wall))
             if result['checkpoint'] is None:
                 row['report'] = getattr(result['report'], 'summary', None)
                 profile['stop_reason'] = 'segment_without_checkpoint'

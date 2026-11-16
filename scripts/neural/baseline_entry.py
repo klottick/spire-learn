@@ -246,8 +246,8 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
         evaluated = summary['evaluations']
         summary['result'] = ('complete' if summary['stop_reason'] == 'target_reached'
                              and 'evaluation_fault' not in summary
-                             and all(evaluated.get(label, {}).get('status') == 'complete'
-                                     for label in ('final', 'fresh-initial'))
+                             and all(evaluated.get(row['label'], {}).get('status') == 'complete'
+                                     for row in summary['checkpoints'])
                              else 'incomplete')
     except BaseException as interrupt:
         # Process control (interrupt, exit) still publishes what is known, then propagates.
@@ -354,7 +354,7 @@ def _case_outcome(report) -> str:
     return 'incomplete'
 
 
-def _paired(fresh: Mapping[str, str], final: Mapping[str, str]) -> dict:
+def _paired(fresh: Mapping[str, str], final: Mapping[str, str], *, total: int) -> dict:
     """Fresh vs final on cases both evaluated healthily; exact two-sided McNemar test."""
     from math import comb
     shared = sorted(set(fresh) & set(final))
@@ -370,7 +370,7 @@ def _paired(fresh: Mapping[str, str], final: Mapping[str, str]) -> dict:
     tail = sum(comb(discordant, k) for k in range(min(fresh_only, final_only) + 1)) / 2**discordant \
         if discordant else 1.0
     return {'paired_cases': len(healthy), 'excluded_censored': len(censored),
-            'excluded_failed_invalid_or_missing': 64 - len(healthy) - len(censored),
+            'excluded_failed_invalid_or_missing': total - len(healthy) - len(censored),
             'both_win': both, 'fresh_only_win': fresh_only, 'final_only_win': final_only,
             'neither_win': neither, 'fresh_wins': both + fresh_only, 'final_wins': both + final_only,
             'exact_mcnemar_two_sided_p': min(1.0, 2 * tail) if discordant else 1.0}
@@ -439,7 +439,7 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, deadline, cloc
         if status != 'complete':
             break
     if 'fresh-initial' in outcomes and 'final' in outcomes:
-        summary['paired_fresh_vs_final'] = _paired(outcomes['fresh-initial'], outcomes['final'])
+        summary['paired_fresh_vs_final'] = _paired(outcomes['fresh-initial'], outcomes['final'], total=len(rows))
 
 
 class _Stop(Exception):

@@ -11,7 +11,7 @@ Read the [limits](#limits) before comparing these numbers with anything else.
 | Item | Value |
 | --- | --- |
 | Gym build | `8726d467ad8579730ddf4fa236b24aeb2206b71a`, `rules_epoch` `gym-1.0.0+8726d467` |
-| Learner commit | `1e6e0f7`, clean tree |
+| Learner commit | `1e6e0f7` at start, clean tree. The repo is mounted live, and `52ecca9` was committed during the run, so the final manifest records `52ecca9`. That commit only added `profile_entry.py` and its test, which this run never imports. The runner now flags such drift as `learner_changed`. |
 | Plan | `configs/neural/baseline-8726d467/plan.json` (`baseline-8726d467-20261115`) |
 | Template | `configs/neural/baseline-8726d467/template.toml`, prepared config SHA-256 `d3a4e35e…` |
 | Stream | `configs/neural/curriculum-v1/recipe.json`, arm `mixed`, train split, shards 0–98 |

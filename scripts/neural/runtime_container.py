@@ -161,6 +161,9 @@ def _output_path(root: Path, value: Path) -> Path:
     return result
 
 
+LEDGER_ENTRIES = frozenset({"gated_tests_entry.py"})
+
+
 def _ledger_bind_path(root: Path, value: Path | None) -> Path | None:
     if value is None:
         return None
@@ -275,6 +278,9 @@ def docker_command(profile: RuntimeProfile, *, root: Path, entry: str, args: Seq
         raise ValueError("invalid owned container name")
     output = _output_path(root, output)
     ledger_path = _ledger_bind_path(root, ledger_bind)
+    # The shared sampled-row ledger is a second writable mount; only the gated tests may append to it.
+    if ledger_path is not None and entry not in LEDGER_ENTRIES:
+        raise ValueError("--ledger-bind is only allowed for " + ", ".join(sorted(LEDGER_ENTRIES)))
     if not math.isfinite(cpus) or cpus <= 0:
         raise ValueError("cpus must be positive")
     if not isinstance(memory, str) or not memory:
@@ -691,11 +697,11 @@ def run(profile_path: Path, *, entry: str, args: Sequence[str], output: Path,
             failure = f"{type(exc).__name__}: {exc}"
             if create_attempted and not created:
                 create_uncertain = True
-            timed_out = isinstance(exc, (TimeoutError, subprocess.TimeoutExpired))
-            status = 124 if timed_out else (130 if isinstance(exc, KeyboardInterrupt) else 1)
+            # Only the entry's own wait can time the run out; create/start timeouts are plain failures.
+            status = 130 if isinstance(exc, KeyboardInterrupt) else 1
         finally:
             termination["cleanup"] = True
-            if created or create_uncertain or (create_attempted and timed_out):
+            if created or create_uncertain:
                 try:
                     log_error, logs_truncated = _collect_logs(docker, container_target, output)
                     if log_error:
@@ -811,6 +817,10 @@ def run(profile_path: Path, *, entry: str, args: Sequence[str], output: Path,
                 "container_created": created if not create_uncertain else None,
                 "container_removed": "uncertain" if create_uncertain else removed,
                 "learner": final_learner, "profile_verification": verification,
+                # The repo is mounted live, not snapshotted: a changed head or dirty state means
+                # code the entry imported lazily may differ from the start manifest's learner.
+                "learner_changed": {key: final_learner.get(key) for key in ("head", "dirty")}
+                    != {key: learner.get(key) for key in ("head", "dirty")},
                 "cleanup_errors": cleanup_errors, "logs_truncated": logs_truncated, "failure": failure,
                 "success_contract": "Success requires this manifest exit_status to be 0, the process to exit 0, and manifest-post.json to be absent."}
             write_exclusive(output / "manifest-final.json", final)

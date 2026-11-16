@@ -312,6 +312,25 @@ class GatedTestsEntryTests(unittest.TestCase):
             self.assertIn("runner broke", result["runner_error"])
             self.assertEqual(self._ledger(Path(directory) / "ledger.jsonl")[-1]["status"], "failed")
 
+    def test_interrupt_during_tests_settles_reservation_and_publishes_red_then_propagates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(KeyboardInterrupt):
+                self._invoke(directory, "interrupted", runner=_Runner(error=KeyboardInterrupt()))
+            result = json.loads(next(Path(directory).glob("*/result.json")).read_text())
+            self.assertEqual(result["status"], "red")
+            self.assertIn("KeyboardInterrupt", result["runner_error"])
+            self.assertEqual(self._ledger(Path(directory) / "ledger.jsonl")[-1]["status"], "failed")
+
+    def test_malformed_completion_event_is_recorded_red_not_raised(self):
+        with tempfile.TemporaryDirectory() as directory:
+            from scripts.neural import gated_tests_entry as entry
+            with patch.object(entry, "_completion_for", return_value={"event": "completion"}):
+                status, _root, evidence, *_ = self._invoke(directory, "malformed")
+            self.assertNotEqual(status, 0)
+            result = json.loads((evidence / "result.json").read_text())
+            self.assertEqual(result["status"], "red")
+            self.assertIn("KeyError", result["reservation_completion"]["error"])
+
     def test_dirty_sampling_and_failed_ledger_completion_force_red(self):
         with tempfile.TemporaryDirectory() as directory:
             status, _root, evidence, *_ = self._invoke(

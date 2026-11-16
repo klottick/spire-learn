@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from scripts.neural import profile_entry
 
@@ -35,37 +36,59 @@ class _Driver:
 
 class _Policy:
     def act(self, frames, **kwargs):
+        from spire_learn.neural import model
+        model.encode_frames(frames)  # looked up at call time, as the real model does
         return "acted"
 
     def values(self, frames):
         return "values"
 
 
+class _SlottedDriver:
+    __slots__ = ()
+
+    def reset(self, **kwargs):
+        return "reset"
+
+    def step(self, actions):
+        return "stepped"
+
+
+class _Optimizer:
+    def step(self):
+        return None
+
+
 class _Collector:
-    def __init__(self):
-        self.driver, self.policy = _Driver(), _Policy()
+    def __init__(self, driver=None):
+        self.driver, self.policy = driver or _Driver(), _Policy()
 
     def collect(self, **kwargs):
         self.driver.step(())
         self.policy.act(())
+        self.policy.values(())
         return "rollout"
 
 
 class _Runtime:
-    def __init__(self):
-        self.collector = _Collector()
+    def __init__(self, driver=None):
+        self.collector = _Collector(driver)
         self.config = SimpleNamespace(device="cpu")
         self.torch = None
-        self.optimizer = None
+        self.optimizer = _Optimizer()
 
     def update(self, rollout):
+        from spire_learn.neural import features
+        features.encode_frames(())  # PPO re-encodes through the features module
+        self.optimizer.step()
         return "updated"
 
 
 class _Fakes:
-    def __init__(self, *, missing_checkpoint_at=None, fault_at=None):
+    def __init__(self, *, missing_checkpoint_at=None, fault_at=None, train_fault_at=None, driver=None):
         self.calls, self.decisions, self.runtimes = [], 0, []
         self.missing_checkpoint_at, self.fault_at = missing_checkpoint_at, fault_at
+        self.train_fault_at, self.driver = train_fault_at, driver
 
     def prepare_stream(self, recipe, destination, *, arm, split, shard_index, template):
         Path(destination).mkdir()
@@ -75,12 +98,14 @@ class _Fakes:
         return SimpleNamespace(environment_revision=V8726, path=str(path))
 
     def create_runtime(self, config, **kwargs):
-        runtime = _Runtime()
+        runtime = _Runtime(self.driver)
         self.runtimes.append(runtime)
         return runtime
 
     def train(self, config, *, runtime, clock):
         runtime.collector.collect()
+        if len(self.calls) - 1 == self.train_fault_at:
+            raise RuntimeError("train fault")
         runtime.update("rollout")
         return "report"
 
@@ -109,6 +134,14 @@ class _Fakes:
 
 
 class ProfileEntryTests(unittest.TestCase):
+    def setUp(self):
+        from spire_learn.neural import features, model
+        stub = lambda frames, *args, **kwargs: "batch"
+        for module in (features, model):
+            patcher = patch.object(module, "encode_frames", stub)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def run_profile(self, fakes):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "out"
@@ -142,18 +175,36 @@ class ProfileEntryTests(unittest.TestCase):
         fakes = _Fakes()
         _, written = self.run_profile(fakes)
         spans = written["segments"][0]["spans"]
-        for name in ("collection", "driver_step", "policy_act", "ppo_update"):
+        for name in ("collection", "driver_step", "policy_act", "bootstrap_values", "ppo_update", "adam_step"):
             self.assertEqual(spans[name]["count"], 1, name)
+        # One encode in inference, one in the update: each counted once, not double-wrapped.
+        self.assertEqual(spans["encode_frames"]["count"], 2)
+        ranked = {row["span"]: row for row in written["segments"][0]["ranked"]}
+        self.assertIn("unattributed", ranked)
+        self.assertAlmostEqual(sum(row["exclusive_wall_seconds"] for row in ranked.values()),
+                               written["segments"][0]["wall_seconds"], places=2)
+        self.assertEqual(written["segments"][0]["not_instrumented"], [])
         self.assertEqual(written["segments"][0]["learned_decisions"], 4096)
-        self.assertEqual(written["segments"][0]["ranked"][0]["span"],
-                         max(spans, key=lambda name: spans[name]["exclusive_wall_seconds"]))
         runtime = fakes.runtimes[0]
         for obj, name in ((runtime.collector.driver, "step"), (runtime.collector.policy, "act"),
                           (runtime.collector, "collect"), (runtime, "update")):
             self.assertNotIn(name, vars(obj), name)
         from spire_learn.neural import features, model
-        self.assertIs(model.encode_frames, features.encode_frames)
-        self.assertEqual(features.encode_frames.__module__, "spire_learn.neural.features")
+        self.assertEqual(model.encode_frames(()), "batch")
+        self.assertEqual(features.encode_frames(()), "batch")
+
+    def test_unpatchable_native_driver_is_reported_not_instrumented(self):
+        _, written = self.run_profile(_Fakes(driver=_SlottedDriver()))
+        self.assertEqual(written["status"], "complete")
+        self.assertEqual(written["segments"][0]["not_instrumented"], ["driver_reset", "driver_step"])
+        self.assertNotIn("driver_step", written["segments"][0]["spans"])
+
+    def test_faulting_segment_still_reports_its_spans_and_wall(self):
+        _, written = self.run_profile(_Fakes(train_fault_at=0))
+        self.assertEqual(written["fault"], {"type": "RuntimeError", "message": "train fault"})
+        row = written["segments"][0]
+        self.assertGreater(row["wall_seconds"], 0)
+        self.assertEqual(row["spans"]["collection"]["count"], 1)
 
     def test_missing_checkpoint_stops_and_fault_is_recorded(self):
         result, written = self.run_profile(_Fakes(missing_checkpoint_at=1))

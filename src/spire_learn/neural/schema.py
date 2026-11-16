@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import InitVar, dataclass
 import hashlib
 import json
@@ -565,13 +565,15 @@ def parse_combat_descriptor(
 
 
 def _unpack(buffer: BufferArray) -> tuple[int, ...]:
+    # One bulk call; byte-identical to per-element "=b"/"=q" decoding (standard sizes, no padding).
     if buffer.dtype == "int8":
-        return tuple(value[0] for value in struct.iter_unpack("=b", buffer.data))
-    return tuple(value[0] for value in struct.iter_unpack("=q", buffer.data))
+        return struct.unpack(f"={len(buffer.data)}b", buffer.data)
+    return struct.unpack(f"={len(buffer.data) // 8}q", buffer.data)
 
 
-def _tensor_values(frame: CombatFrame, key: str) -> tuple[int, ...]:
-    return _unpack(frame.tensors[key])
+def _cells(buffer: BufferArray) -> memoryview:
+    """Zero-copy indexable view yielding the same ints as ``_unpack``."""
+    return memoryview(buffer.data).cast("b" if buffer.dtype == "int8" else "q")
 
 
 def _row_capacity(spec: TensorSpec) -> int:
@@ -580,7 +582,7 @@ def _row_capacity(spec: TensorSpec) -> int:
 
 def _selector_group(
     schema: CombatSchema, spec: TensorSpec, column: ColumnSpec, row: int | None,
-    values: tuple[int, ...], known: tuple[int, ...], columns: int,
+    values: Sequence[int], known: Sequence[int], columns: int,
 ) -> str | None:
     """Resolve a literal group or descriptor-named selector column."""
     if column.reference is None:
@@ -605,7 +607,7 @@ def _selector_group(
 
 def _resolve_reference(
     schema: CombatSchema, group: str, row: int,
-    occupancy: Mapping[str, tuple[int, ...]],
+    occupancy: Mapping[str, Sequence[int]],
 ) -> None:
     target = schema.tensors.get(group)
     if target is None or not target.columns:
@@ -809,6 +811,99 @@ def validate_frame(frame: CombatFrame, schema: CombatSchema) -> None:
 
 
 def _validate_frame_contents(frame: CombatFrame, schema: CombatSchema) -> None:
+    """Accept on the fast path only when it proves validity; otherwise the reference decides.
+
+    The reference validator stays the only source of rejections and their
+    messages, so any fast-path doubt (a mismatch, an unexpected shape, an
+    exception) costs time, never a different decision.
+    """
+    try:
+        if _frame_is_valid_fast(frame, schema):
+            return
+    except Exception:
+        pass
+    _validate_frame_contents_reference(frame, schema)
+
+
+def _frame_is_valid_fast(frame: CombatFrame, schema: CombatSchema) -> bool:
+    """Return True only if the reference validator would accept ``frame``.
+
+    Unoccupied rows, which are most of every capacity, are compared as whole runs
+    of bytes against their required padding. Occupied rows use the reference's
+    own per-row check over zero-copy views. False means "not proven", not "invalid".
+    """
+    if frame.schema_fingerprint != schema.schema_fingerprint:
+        return False
+    if set(frame.tensors) != set(schema.tensors):
+        return False
+    raw: dict[str, bytes] = {}
+    for key, spec in schema.tensors.items():
+        array = frame.tensors[key]
+        if not isinstance(array, BufferArray):
+            return False
+        if array.dtype != spec.dtype or array.shape != spec.shape:
+            return False
+        if spec.dtype == "int8" and array.data.translate(None, b"\x00\x01"):
+            return False  # some byte is neither 0 nor 1
+        raw[key] = array.data
+    # Binary int8 bytes index to the same 0/1 ints the reference decodes.
+    occupancy = {
+        spec.occupied_key: raw[spec.occupied_key]
+        for spec in schema.tensors.values() if spec.occupied_key is not None
+    }
+    action_spec = schema.tensors.get("actions")
+    if (action_spec is not None and action_spec.occupied_key is not None
+            and schema.tensors.get("action_mask") is not None
+            and raw["action_mask"] != occupancy[action_spec.occupied_key]):
+        return False
+
+    view = schema.view
+    for key, spec in schema.tensors.items():
+        if not spec.columns:
+            continue
+        if spec.known_key is None or schema.tensors[spec.known_key].dtype != "int8":
+            return False
+        data = raw[key]
+        known_data = raw[spec.known_key]
+        columns = len(spec.columns)
+        rows = _row_capacity(spec)
+        item = 1 if spec.dtype == "int8" else 8
+        if len(data) != rows * columns * item or len(known_data) != rows * columns:
+            return False
+        values = _cells(frame.tensors[key])
+        known = _cells(frame.tensors[spec.known_key])
+        occupied = occupancy.get(spec.occupied_key) if spec.occupied_key is not None else None
+        if occupied is not None and len(occupied) < rows:
+            return False
+        if key in view.required_known_empty_groups:
+            empty_values, empty_known = bytes(columns * item), b"\x01" * columns
+        elif key in view.optional_known_empty_groups:
+            empty_values, empty_known = bytes(columns * item), None
+        else:
+            empty_values = struct.pack("=b" if item == 1 else "=q", spec.padding) * columns
+            empty_known = bytes(columns)
+        row = 0
+        while row < rows:
+            if occupied is None or occupied[row]:
+                try:
+                    _check_occupied_row(schema, key, spec, row, values, known, occupancy)
+                except ContractError:
+                    return False
+                row += 1
+                continue
+            end = occupied.find(b"\x01", row, rows)
+            end = rows if end == -1 else end
+            count = end - row
+            if data[row * columns * item:end * columns * item] != empty_values * count:
+                return False
+            if (empty_known is not None
+                    and known_data[row * columns:end * columns] != empty_known * count):
+                return False
+            row = end
+    return True
+
+
+def _validate_frame_contents_reference(frame: CombatFrame, schema: CombatSchema) -> None:
     if frame.schema_fingerprint != schema.schema_fingerprint:
         raise ContractError("frame schema fingerprint does not match CombatSchema")
     view = schema.view
@@ -855,44 +950,63 @@ def _validate_frame_contents(frame: CombatFrame, schema: CombatSchema) -> None:
         rows = _row_capacity(spec)
         occupied = occupancy.get(spec.occupied_key) if spec.occupied_key is not None else None
         for row_index in range(rows):
-            row = row_index if len(spec.shape) == 2 else None
-            row_occupied = True if occupied is None else bool(occupied[row_index])
-            for column_index, column in enumerate(spec.columns):
-                flat_index = row_index * columns + column_index
-                value = values[flat_index]
-                is_known = bool(known[flat_index])
-                if not row_occupied:
-                    if key in view.required_known_empty_groups:
-                        if value != 0 or not is_known:
-                            raise ContractError(f"empty {key} slots must be known zeroes with occupied=0")
-                    elif key in view.optional_known_empty_groups:
-                        if value != 0:
-                            raise ContractError(f"empty {key} slots must hold zero values with occupied=0")
-                    elif value != spec.padding or is_known:
-                        raise ContractError(f"unoccupied {key} rows must use zero/known0 padding")
-                    continue
+            if occupied is None or occupied[row_index]:
+                _check_occupied_row(schema, key, spec, row_index, values, known, occupancy)
+            else:
+                _check_unoccupied_row(view, key, spec, row_index, values, known)
 
-                if value < column.low or value > column.high:
-                    raise ContractError(f"{key}.{column.field} is outside its registered domain")
-                if not is_known:
-                    if column.reference is not None:
-                        accepted = value == column.unavailable
-                    else:
-                        accepted = view.accepts_unknown(key, column.field, value, spec.padding)
-                    if not accepted:
-                        raise ContractError(f"unknown {key}.{column.field} has the wrong typed padding")
-                    continue
-                if column.vocabulary is not None:
-                    vocabulary = schema.vocabularies.get(column.vocabulary)
-                    if vocabulary is None or value >= len(vocabulary):
-                        raise ContractError(f"{key}.{column.field} is outside its declared vocabulary")
-                if column.reference is not None:
-                    group = _selector_group(schema, spec, column, row, values, known, columns)
-                    if group is None:
-                        raise ContractError(f"known {key}.{column.field} lacks a known reference group")
-                    if value < 0:
-                        raise ContractError(f"known {key}.{column.field} cannot use the -1 unknown row")
-                    _resolve_reference(schema, group, value, occupancy)
+
+def _check_unoccupied_row(
+    view: ViewSpec, key: str, spec: TensorSpec, row_index: int,
+    values: Sequence[int], known: Sequence[int],
+) -> None:
+    columns = len(spec.columns)
+    for column_index in range(columns):
+        flat_index = row_index * columns + column_index
+        value = values[flat_index]
+        is_known = bool(known[flat_index])
+        if key in view.required_known_empty_groups:
+            if value != 0 or not is_known:
+                raise ContractError(f"empty {key} slots must be known zeroes with occupied=0")
+        elif key in view.optional_known_empty_groups:
+            if value != 0:
+                raise ContractError(f"empty {key} slots must hold zero values with occupied=0")
+        elif value != spec.padding or is_known:
+            raise ContractError(f"unoccupied {key} rows must use zero/known0 padding")
+
+
+def _check_occupied_row(
+    schema: CombatSchema, key: str, spec: TensorSpec, row_index: int,
+    values: Sequence[int], known: Sequence[int], occupancy: Mapping[str, Sequence[int]],
+) -> None:
+    view = schema.view
+    columns = len(spec.columns)
+    row = row_index if len(spec.shape) == 2 else None
+    for column_index, column in enumerate(spec.columns):
+        flat_index = row_index * columns + column_index
+        value = values[flat_index]
+        is_known = bool(known[flat_index])
+        if value < column.low or value > column.high:
+            raise ContractError(f"{key}.{column.field} is outside its registered domain")
+        if not is_known:
+            if column.reference is not None:
+                accepted = value == column.unavailable
+            else:
+                accepted = view.accepts_unknown(key, column.field, value, spec.padding)
+            if not accepted:
+                raise ContractError(f"unknown {key}.{column.field} has the wrong typed padding")
+            continue
+        if column.vocabulary is not None:
+            vocabulary = schema.vocabularies.get(column.vocabulary)
+            if vocabulary is None or value >= len(vocabulary):
+                raise ContractError(f"{key}.{column.field} is outside its declared vocabulary")
+        if column.reference is not None:
+            group = _selector_group(schema, spec, column, row, values, known, columns)
+            if group is None:
+                raise ContractError(f"known {key}.{column.field} lacks a known reference group")
+            if value < 0:
+                raise ContractError(f"known {key}.{column.field} cannot use the -1 unknown row")
+            _resolve_reference(schema, group, value, occupancy)
 
 
 def _field_index(spec: TensorSpec, field: str, *, required: bool = False) -> int | None:
@@ -904,8 +1018,8 @@ def _field_index(spec: TensorSpec, field: str, *, required: bool = False) -> int
 
 
 def _candidate_reference(
-    schema: CombatSchema, spec: TensorSpec, row: int, values: tuple[int, ...],
-    known: tuple[int, ...], column_index: int | None,
+    schema: CombatSchema, spec: TensorSpec, row: int, values: Sequence[int],
+    known: Sequence[int], column_index: int | None,
 ) -> CombatReference | None:
     if column_index is None:
         return None
@@ -927,15 +1041,16 @@ def _candidate_reference(
 def candidates(frame: CombatFrame, schema: CombatSchema) -> tuple[CombatCandidate, ...]:
     """Decode legal rows without changing their original native dispatch indices."""
     validate_frame(frame, schema)
-    mask = _tensor_values(frame, "action_mask")
+    # Validated frames are read through zero-copy views that yield the decoded ints.
+    mask = _cells(frame.tensors["action_mask"])
     indexes = tuple(index for index, legal in enumerate(mask) if legal == 1)
     if not indexes:
         raise ContractError("empty legal-action mask cannot be sent to an actor")
     spec = schema.tensors.get("actions")
     if spec is None or not spec.columns or len(spec.shape) != 2:
         raise ContractError("accepted descriptor lacks a row-based actions tensor")
-    actions = _tensor_values(frame, "actions")
-    known = _tensor_values(frame, spec.known_key or "")
+    actions = _cells(frame.tensors["actions"])
+    known = _cells(frame.tensors[spec.known_key or ""])
     columns = len(spec.columns)
     indexes_by_name = {
         name: _field_index(spec, name, required=True)

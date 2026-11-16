@@ -136,7 +136,7 @@ class _Fakes:
 class ProfileEntryTests(unittest.TestCase):
     def setUp(self):
         from spire_learn.neural import features, model
-        stub = lambda frames, *args, **kwargs: "batch"
+        self.stub = stub = lambda frames, *args, **kwargs: "batch"
         for module in (features, model):
             patcher = patch.object(module, "encode_frames", stub)
             patcher.start()
@@ -190,8 +190,8 @@ class ProfileEntryTests(unittest.TestCase):
                           (runtime.collector, "collect"), (runtime, "update")):
             self.assertNotIn(name, vars(obj), name)
         from spire_learn.neural import features, model
-        self.assertEqual(model.encode_frames(()), "batch")
-        self.assertEqual(features.encode_frames(()), "batch")
+        self.assertIs(model.encode_frames, self.stub)
+        self.assertIs(features.encode_frames, self.stub)
 
     def test_unpatchable_native_driver_is_reported_not_instrumented(self):
         _, written = self.run_profile(_Fakes(driver=_SlottedDriver()))

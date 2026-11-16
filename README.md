@@ -88,8 +88,14 @@ Learn now pins Spire Gym 1.0.0 native revision
 `configs/neural/gym-8726d467/`, and adopts its Standard combat and Run views.
 The earlier 1.0.0 build `1929e18b` and its `configs/neural/gym-v1.0.0/` templates
 remain valid for their own revision. Native qualification and the driver soak
-passed on both builds; no training run has been launched on either. See the
+passed on both builds. See the
 [Gym 1.0.0 migration record](docs/neural-gym-v1-migration.md).
+
+A fresh-weights mixed-stream baseline on `8726d467` reached its 405,504
+learned-decision target on 2026-11-16. Its final policy won **37/64** paired
+development cases, against 18/64 for the same untrained weights (exact McNemar
+p = 6.6 × 10⁻⁵). These scores are not comparable with earlier builds. See the
+[baseline results and limits](docs/neural-baseline-8726d467.md).
 
 The separately approved fresh-weight campaign on this release has now completed
 its development comparisons. Across 438,272 learned decisions, the final mixed

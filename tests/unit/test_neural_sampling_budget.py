@@ -21,6 +21,23 @@ class _ShapedInput:
 
 
 class NeuralSamplingBudgetTests(unittest.TestCase):
+    def test_gym_8726d467_shares_the_existing_lifetime_cap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ledger.jsonl"
+            guard.initialize_ledger(path)
+            guard.reserve_rows(
+                task="gym-8726d467", reservation_id="gym-8726d467-run-a", path=path
+            )
+            for index in range(1, guard.LIFETIME_CAP // guard.MAX_INVOCATION_ROWS):
+                task = "task4" if index % 2 else "task6"
+                guard.reserve_rows(task=task, reservation_id=f"shared-run-{index:02d}", path=path)
+            with self.assertRaises(guard.SampleBudgetError):
+                guard.reserve_rows(task="gym-8726d467", reservation_id="gym-over-cap", path=path)
+            events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+            reservations = [event for event in events if event["event"] == "reservation"]
+            self.assertEqual(reservations[0]["task"], "gym-8726d467")
+            self.assertEqual(reservations[-1]["reserved_after"], guard.LIFETIME_CAP)
+
     def test_failed_reservation_stays_spent_against_the_shared_lifetime_cap(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "ledger.jsonl"

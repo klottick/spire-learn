@@ -98,8 +98,8 @@ class NeuralCheckpointTensorTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if (os.environ.get("SPIRE_LEARN_RUN_NEURAL_TENSOR") != "1"
-                or os.environ.get("SPIRE_LEARN_TENSOR_TASK") != "task6"):
-            raise unittest.SkipTest("Task 6 checkpoint tests require the protected tensor gate")
+                or os.environ.get("SPIRE_LEARN_TENSOR_TASK") not in {"task6", "gym-8726d467"}):
+            raise unittest.SkipTest("checkpoint tests require the protected tensor gate")
         import torch
         from tests.neural._sample_guard import activate_from_environment
 

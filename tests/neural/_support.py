@@ -451,7 +451,7 @@ def accepted_schema_and_config() -> tuple[object, object]:
     from spire_learn.neural.envs import make_driver
 
     root = Path(__file__).resolve().parents[2]
-    config = load_neural_config(root / "configs/neural/run.toml")
+    config = load_neural_config(root / "configs/neural/gym-8726d467/run.toml")
     return schema_from_driver_factory(config, make_driver), config
 
 

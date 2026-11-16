@@ -100,7 +100,7 @@ p = 6.6 × 10⁻⁵). These scores are not comparable with earlier builds. See t
 [baseline results and limits](docs/neural-baseline-8726d467.md).
 A [throughput profile on v1.1.0](docs/neural-throughput-plan-20261116.md) puts
 about 64% of training time in Learn's per-element frame validation and about 1%
-in Gym's native engine. It ranks the fixes, which do not change learning results.
+in Gym's native engine. It ranks the fixes; the first three leave learning unchanged.
 
 The separately approved fresh-weight campaign on this release has now completed
 its development comparisons. Across 438,272 learned decisions, the final mixed

@@ -11,6 +11,7 @@ import argparse
 import cProfile
 import io
 import json
+import os
 from pathlib import Path
 import pstats
 import random
@@ -71,6 +72,13 @@ def main(argv=None) -> int:
     parser.add_argument('--config', type=Path, default=Path('configs/neural/gym-1.1.0/standalone.toml'))
     parser.add_argument('--steps', type=int, default=300)
     arguments = parser.parse_args(argv)
+    if not arguments.output.is_absolute():
+        print('--output must be an absolute path', file=sys.stderr)
+        return 2
+    expected = os.environ.get('SPIRE_LEARN_RUNNER_OUTPUT')
+    if expected is not None and Path(expected).resolve() != arguments.output.resolve():
+        print('output must match SPIRE_LEARN_RUNNER_OUTPUT', file=sys.stderr)
+        return 2
     config = arguments.config if arguments.config.is_absolute() else _ROOT / arguments.config
     result = run(arguments.output, config_path=config, steps=arguments.steps)
     print(json.dumps({key: result[key] for key in ('mode', 'batch_size', 'steps',

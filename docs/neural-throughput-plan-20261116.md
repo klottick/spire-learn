@@ -13,7 +13,8 @@ segments from fresh weights on Gym v1.1.0, using
 16 environments × 32 steps, 8 PPO updates. It ran on the RTX 5090 through
 `runtime_container.py`, with exit 0 and `learner_changed: false`. Segments 0–1
 synchronize the device at every span. Segment 2 does not, so its wall time is
-unperturbed: 63.96 s, or 64.0 decisions/s, matching the baseline's rate.
+unperturbed: 63.96 s, or 64.0 decisions/s, close to the baseline's overall
+58 decisions/s, which also includes qualification and per-segment setup.
 
 Exclusive time in segment 2:
 
@@ -27,7 +28,7 @@ Exclusive time in segment 2:
 | `frame_hash` | 1.1 | 2% |
 | Feature transfer to the device | 1.1 | 2% |
 | Checkpoint save | 0.9 | 1% |
-| Native step and reset, including public export | 0.8 | 1% |
+| Native step and reset (`driver_step`, `driver_reset` and both public-export spans) | 0.9 | 1% |
 
 Native Gym time is about 1% of the segment. The GPU-bound work, inference plus
 PPO, is about 15%.
@@ -61,20 +62,42 @@ captured frames and on mutated frames, such as out-of-range values, non-binary
 masks, unknown-but-occupied rows, bad references and mask/occupancy mismatches.
 
 1. **Bulk decoding and set checks in `schema.py`.**
-   - Replace the per-element `_unpack` with one `struct.unpack` per tensor.
+   - Replace the per-element `_unpack` with one `struct.unpack` per tensor,
+     `f"={n}b"` for int8 and `f"={n}q"` for every other dtype. That is the same
+     fall-through the current code uses, and with standard sizes and no padding
+     it decodes byte-identically. `BufferArray` already enforces the buffer
+     length.
    - Replace the per-element binary `any(...)` with a set comparison.
-   - Let `candidates` reuse the values validation already decoded instead of
-     unpacking again.
+   - Stop `candidates` decoding again. `validate_frame` currently discards its
+     decoded values and returns early on a memo hit, so this needs either a
+     decoded-values cache keyed like the validation memo, or one decode passed
+     to both. Its ceiling is the `candidates` share: 8.4 cProfile seconds of
+     the 41 spent unpacking.
 
-   This is pure standard-library Python, with no new dependency. Expected:
-   validation falls from about 41 s to about 12–15 s per segment, giving
-   roughly 100–110 decisions/s (1.6–1.7×).
+   This is pure standard-library Python, with no new dependency.
+   - **Expected gain.** The micro-benchmark saves about 2 ms of the 6.6 ms each
+     validation call costs. That leaves about 25–29 s of validation per segment,
+     and about 80–85 decisions/s (about 1.3×).
+   - **What it leaves.** The per-row, per-column loop in
+     `_validate_frame_contents`, the largest single cost at 24.6 s of own time
+     under cProfile, stays for step 2.
 2. **Vectorised column checks.** Move the per-row, per-column loop in
    `_validate_frame_contents` to whole-tensor NumPy operations on the decoded
-   arrays. NumPy is already in the runtime and used by `snapshot.py`. Expected:
-   validation under about 3 s per segment, giving roughly 150–170 decisions/s
-   (2.5×) at the same rollout width. This is a larger correctness surface, so it
-   gets its own review.
+   arrays. NumPy is already in the runtime and used by `snapshot.py`.
+   - **Target, not a measurement.** Validation under about 3 s per segment would
+     give roughly 150–170 decisions/s (2.5×) at the same rollout width. Measure
+     it with the same profile plan before claiming it.
+   - **Risks the differential tests must pin:**
+     - Python integers are unbounded and NumPy int64 is not, so range and
+       vocabulary comparisons must not overflow.
+     - Error order and error text change; tests should check the decision, not
+       the message.
+     - `_selector_group` and reference resolution depend on each row and on
+       occupancy, so they need care to vectorise.
+     - Unoccupied rows have three cases: required known-empty, optional, and
+       padding.
+   - This is a larger correctness surface than step 1, so it gets its own
+     review.
 3. **Amortise per-segment overhead.** About 7 s per segment is unattributed:
    runtime creation, checkpoint preflight and the save. Longer segments, for
    example 16,384 decisions, would spread it out. This changes checkpoint
@@ -105,3 +128,8 @@ All of this is outside Git, under `artifacts/development/neural-combat/`:
 
 One profile run and one cProfile run, on a shared host with the co-resident GPU
 services running.
+
+`validation_profile.py` was still uncommitted when it produced the cProfile
+evidence: that run's final manifest records head `534f941` with the script
+untracked. The committed script adds only the runner output-path check. Its
+profiling logic is the same.

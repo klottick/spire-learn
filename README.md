@@ -101,6 +101,8 @@ p = 6.6 × 10⁻⁵). These scores are not comparable with earlier builds. See t
 A [throughput profile on v1.1.0](docs/neural-throughput-plan-20261116.md) puts
 about 64% of training time in Learn's per-element frame validation and about 1%
 in Gym's native engine. It ranks the fixes; the first three leave learning unchanged.
+A validation fast path, proven to accept exactly what the reference validator
+accepts, raised training throughput from 64 to 173 decisions/s.
 
 The separately approved fresh-weight campaign on this release has now completed
 its development comparisons. Across 438,272 learned decisions, the final mixed

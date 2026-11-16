@@ -1,6 +1,6 @@
 # Fresh-weights baseline on Gym v1.1.1
 
-Run on **2026-11-16**, 19:41–20:31 UTC. This is one fresh-weights mixed-stream
+Run on **2026-11-16**, 19:42–20:31 UTC. This is one fresh-weights mixed-stream
 Ironclad combat baseline on Spire Gym release v1.1.1. It used the validation fast
 path, and its plan is the [8726d467 baseline](neural-baseline-8726d467.md)'s,
 re-bound to the new build. It trained to its learned-decision target, then
@@ -39,8 +39,9 @@ earlier validator accepted.
 | Faults | None: no segment fault, evaluation fault, censored case or failed report |
 | Runner | `manifest-final.json` exit status 0, not timed out, `learner_changed: false`; no `manifest-post.json` |
 
-The training wall includes per-segment setup, about 7 s of each segment. That is
-the next throughput target ([plan](neural-throughput-plan-20261116.md), fix 3).
+The training wall includes per-segment setup. The throughput profile measured
+it at about 7 s per segment; this run's segments averaged 28.3 s, against the
+profile's 23.7 s. That setup cost is the next throughput target ([plan](neural-throughput-plan-20261116.md), fix 3).
 Outputs stay outside Git, under
 `artifacts/development/neural-combat/baseline-gym-1.1.1-20261116/`.
 

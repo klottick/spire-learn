@@ -34,16 +34,16 @@ def _frame_with(api, schema, original, **updates):
 
 
 class NeuralValidationMemoTests(unittest.TestCase):
-    def test_identical_valid_pair_skips_repeated_deep_unpacking(self):
+    def test_identical_valid_pair_skips_repeated_deep_validation(self):
         api = _api(self)
         with _synthetic_schema(api) as schema:
             frame = _frame(api, schema)
-            with patch.object(api.schema, "_unpack", wraps=api.schema._unpack) as unpack:
+            with patch.object(api.schema, "_validate_frame_contents", wraps=api.schema._validate_frame_contents) as deep:
                 self.assertIsNone(api.schema.validate_frame(frame, schema))
-                first_call_count = unpack.call_count
-                self.assertEqual(first_call_count, len(schema.tensors))
+                first_call_count = deep.call_count
+                self.assertEqual(first_call_count, 1)
                 self.assertIsNone(api.schema.validate_frame(frame, schema))
-                self.assertEqual(unpack.call_count, first_call_count)
+                self.assertEqual(deep.call_count, first_call_count)
 
     def test_invalid_padding_domain_known_occupancy_reference_and_mask_never_cache(self):
         api = _api(self)
@@ -97,16 +97,16 @@ class NeuralValidationMemoTests(unittest.TestCase):
                     action_mask=_buffer(api, [0, 0, 0, 0, 0, 0, 0, 0, 0, 1], (10,), "int8"),
                 ),
             }
-            with patch.object(api.schema, "_unpack", wraps=api.schema._unpack) as unpack:
+            with patch.object(api.schema, "_validate_frame_contents", wraps=api.schema._validate_frame_contents) as deep:
                 for name, invalid in invalid_cases.items():
                     with self.subTest(case=name):
                         with self.assertRaises(api.schema.ContractError):
                             api.schema.validate_frame(invalid, schema)
-                        first_failure_work = unpack.call_count
+                        first_failure_work = deep.call_count
                         self.assertGreater(first_failure_work, 0)
                         with self.assertRaises(api.schema.ContractError):
                             api.schema.validate_frame(invalid, schema)
-                        self.assertGreater(unpack.call_count, first_failure_work)
+                        self.assertGreater(deep.call_count, first_failure_work)
 
     def test_same_fingerprint_different_schema_identity_revalidates(self):
         api = _api(self)
@@ -115,11 +115,11 @@ class NeuralValidationMemoTests(unittest.TestCase):
                 self.assertIsNot(first_schema, second_schema)
                 self.assertEqual(first_schema.schema_fingerprint, second_schema.schema_fingerprint)
                 frame = _frame(api, first_schema)
-                with patch.object(api.schema, "_unpack", wraps=api.schema._unpack) as unpack:
+                with patch.object(api.schema, "_validate_frame_contents", wraps=api.schema._validate_frame_contents) as deep:
                     api.schema.validate_frame(frame, first_schema)
-                    self.assertEqual(unpack.call_count, len(first_schema.tensors))
+                    self.assertEqual(deep.call_count, 1)
                     api.schema.validate_frame(frame, second_schema)
-                    self.assertEqual(unpack.call_count, 2 * len(second_schema.tensors))
+                    self.assertEqual(deep.call_count, 2)
 
     def test_dataclass_replacements_get_new_frame_and_buffer_certificates(self):
         api = _api(self)
@@ -131,14 +131,14 @@ class NeuralValidationMemoTests(unittest.TestCase):
             copied = replace(changed)
             self.assertIsNot(changed, frame)
             self.assertIsNot(copied, changed)
-            with patch.object(api.schema, "_unpack", wraps=api.schema._unpack) as unpack:
+            with patch.object(api.schema, "_validate_frame_contents", wraps=api.schema._validate_frame_contents) as deep:
                 api.schema.validate_frame(frame, schema)
                 api.schema.validate_frame(frame, schema)
-                self.assertEqual(unpack.call_count, len(schema.tensors))
+                self.assertEqual(deep.call_count, 1)
                 api.schema.validate_frame(changed, schema)
-                self.assertEqual(unpack.call_count, 2 * len(schema.tensors))
+                self.assertEqual(deep.call_count, 2)
                 api.schema.validate_frame(copied, schema)
-                self.assertEqual(unpack.call_count, 3 * len(schema.tensors))
+                self.assertEqual(deep.call_count, 3)
 
     def test_raw_source_mutation_cannot_change_owned_immutable_bytes(self):
         api = _api(self)
@@ -168,16 +168,18 @@ class NeuralValidationMemoTests(unittest.TestCase):
             mutable_player = api.BufferArray(player.dtype, mutable_shape, player.data)
             frame = _frame_with(api, schema, original, player=mutable_player)
 
-            with patch.object(api.schema, "_unpack", wraps=api.schema._unpack) as unpack:
+            with patch.object(api.schema, "_validate_frame_contents", wraps=api.schema._validate_frame_contents) as deep:
                 api.schema.validate_frame(frame, schema)
-                first_work = unpack.call_count
+                first_work = deep.call_count
                 api.schema.validate_frame(frame, schema)
-                self.assertEqual(unpack.call_count, 2 * first_work)
+                self.assertEqual(deep.call_count, 2 * first_work)
 
                 mutable_shape.invalid = True
                 with self.assertRaises(api.schema.ContractError):
                     api.schema.validate_frame(frame, schema)
-                self.assertEqual(unpack.call_count, 2 * first_work)
+                # Not a memo hit: the changed record was validated again and rejected.
+                # (This counts validation entries, so it no longer shows rejection precedes decoding.)
+                self.assertEqual(deep.call_count, 2 * first_work + 1)
 
     def test_mutable_dtype_string_inside_exact_records_is_revalidated(self):
         api = _api(self)
@@ -198,16 +200,18 @@ class NeuralValidationMemoTests(unittest.TestCase):
             mutable_player = api.BufferArray(mutable_dtype, player.shape, player.data)
             frame = _frame_with(api, schema, original, player=mutable_player)
 
-            with patch.object(api.schema, "_unpack", wraps=api.schema._unpack) as unpack:
+            with patch.object(api.schema, "_validate_frame_contents", wraps=api.schema._validate_frame_contents) as deep:
                 api.schema.validate_frame(frame, schema)
-                first_work = unpack.call_count
+                first_work = deep.call_count
                 api.schema.validate_frame(frame, schema)
-                self.assertEqual(unpack.call_count, 2 * first_work)
+                self.assertEqual(deep.call_count, 2 * first_work)
 
                 mutable_dtype.invalid = True
                 with self.assertRaises(api.schema.ContractError):
                     api.schema.validate_frame(frame, schema)
-                self.assertEqual(unpack.call_count, 2 * first_work)
+                # Not a memo hit: the changed record was validated again and rejected.
+                # (This counts validation entries, so it no longer shows rejection precedes decoding.)
+                self.assertEqual(deep.call_count, 2 * first_work + 1)
 
     def test_mutable_nested_schema_shape_is_not_admitted(self):
         api = _api(self)
@@ -232,16 +236,18 @@ class NeuralValidationMemoTests(unittest.TestCase):
                 MappingProxyType({**schema.tensors, "player": mutable_spec}),
             )
 
-            with patch.object(api.schema, "_unpack", wraps=api.schema._unpack) as unpack:
+            with patch.object(api.schema, "_validate_frame_contents", wraps=api.schema._validate_frame_contents) as deep:
                 api.schema.validate_frame(frame, schema)
-                first_work = unpack.call_count
+                first_work = deep.call_count
                 api.schema.validate_frame(frame, schema)
-                self.assertEqual(unpack.call_count, 2 * first_work)
+                self.assertEqual(deep.call_count, 2 * first_work)
 
                 mutable_shape.invalid = True
                 with self.assertRaises(api.schema.ContractError):
                     api.schema.validate_frame(frame, schema)
-                self.assertEqual(unpack.call_count, 2 * first_work)
+                # Not a memo hit: the changed record was validated again and rejected.
+                # (This counts validation entries, so it no longer shows rejection precedes decoding.)
+                self.assertEqual(deep.call_count, 2 * first_work + 1)
 
     def test_weak_cache_does_not_retain_frame_schema_or_tensor_bytes(self):
         api = _api(self)
@@ -283,13 +289,13 @@ class NeuralValidationMemoTests(unittest.TestCase):
         with _synthetic_schema(api) as schema:
             frames = [_frame(api, schema) for _ in range(3)]
             with patch.object(api.schema, "_VALIDATION_MEMO_CAPACITY", 2):
-                with patch.object(api.schema, "_unpack", wraps=api.schema._unpack) as unpack:
+                with patch.object(api.schema, "_validate_frame_contents", wraps=api.schema._validate_frame_contents) as deep:
                     for frame in frames:
                         api.schema.validate_frame(frame, schema)
                     self.assertLessEqual(len(api.schema._VALIDATION_MEMO), 2)
-                    before_recheck = unpack.call_count
+                    before_recheck = deep.call_count
                     api.schema.validate_frame(frames[0], schema)
-                    self.assertEqual(unpack.call_count, before_recheck + len(schema.tensors))
+                    self.assertEqual(deep.call_count, before_recheck + 1)
 
     def test_concurrent_validation_and_late_cleanup_do_not_corrupt_replacements(self):
         api = _api(self)

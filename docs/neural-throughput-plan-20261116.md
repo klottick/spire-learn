@@ -118,6 +118,59 @@ unchanged. Their throughput gains can be measured by re-running the same profile
 plan. Training results from before and after stay comparable, apart from the
 documented RNG-001 and TIME-001 qualifications.
 
+## Result: validation fast path (fixes 1 and 2)
+
+Implemented on 2026-11-16 as one change. NumPy turned out not to be needed:
+`schema.py` stays dependency-free.
+
+**Design.** `_validate_frame_contents` first tries `_frame_is_valid_fast`, which
+can only accept:
+- **Unoccupied rows.** These are most of every capacity, with up to 1,024 rows
+  per tensor. Whole runs of them are compared as bytes against their required
+  padding, and int8 tensors are checked binary with one `bytes.translate`.
+- **Occupied rows.** These run the reference's own per-row check, now shared
+  code, over zero-copy `memoryview` views.
+- **Fallback.** Any mismatch, unexpected shape or exception falls back to the
+  unchanged reference validator, `_validate_frame_contents_reference`. The
+  reference remains the only source of rejections and their messages.
+
+Tensors decode in one `struct.unpack` call, and `candidates` reads the same
+zero-copy views.
+
+**Evidence that decisions are unchanged.**
+- **Unit differential tests** (`tests/unit/test_neural_validation_fast_path.py`).
+  Every column of sampled rows is probed with about a dozen boundary values,
+  plus known-bit and int8 flips, on synthetic, common and Standard frames: more
+  than 4,000 cases, about three-quarters rejected. The fast path accepts exactly
+  what the reference accepts, and sampled composite calls match its messages.
+  During development they caught each of six deliberately injected fast-path
+  defects; that mutation check was manual and is not part of the suite. Two
+  parser-rejected layouts found in adversarial review, non-int8 or short
+  occupancy tensors, are pinned by tests and go to the reference.
+- **Real frames** (`scripts/neural/validation_differential.py` on Gym v1.1.1,
+  1,000 batch steps in each of the four modes):
+  - all 11,719 real frames were accepted by the fast path, with no fallbacks;
+  - 9,360 random single-cell mutations of them were checked, of which 8,420
+    were rejected;
+  - there were zero disagreements in either direction;
+  - checking took 90.9 s in the reference against 2.1 s on the fast path.
+
+**Throughput.** The same three-segment profile on v1.1.1, using
+`configs/neural/baseline-gym-1.1.1/plan.json`. The table compares segment 2,
+the unsynchronized one, in each run. The synchronized segments 0–1 went from
+63.6 and 66.7 to 182.0 and 181.1 decisions/s.
+
+| | Before (v1.1.0) | After (v1.1.1) |
+| --- | ---: | ---: |
+| Segment wall, unsynchronized | 63.96 s | 23.65 s |
+| Decisions/s | 64.0 | 173.2 (2.7×) |
+| `snapshot_validation` | 40.9 s (64%) | 1.9 s (8%) |
+| Unattributed per-segment overhead | 7.3 s | 7.3 s (31%) |
+
+The builds differ. v1.1.1's `DELIVERY.md` states that observation and action
+layouts are unchanged, and its captured descriptors match v1.1.0's apart from
+`rules_id`, so validation reads the same tensors. Per-segment overhead (fix 3) is now the largest single cost.
+
 ## Evidence
 
 All of this is outside Git, under `artifacts/development/neural-combat/`:
@@ -125,6 +178,13 @@ All of this is outside Git, under `artifacts/development/neural-combat/`:
   the manifests.
 - `validation-profile-gym-1.1.0-20261116/` holds `validation-profile.json` and
   `.txt`.
+- `validation-differential-gym-1.1.1-20261116/` and
+  `profile-gym-1.1.1-fastpath-20261116/` hold the fast-path evidence, from
+  commit `84fce8e`.
+- The `-b` directories repeat both runs on the reviewed code, commit `5e926ed`.
+  The differential gave identical counts and agreement. The profile gave
+  170.6 decisions/s in segment 2 (193.4 and 178.9 in the synchronized
+  segments), with validation at 2.1 s.
 
 One profile run and one cProfile run, on a shared host with the co-resident GPU
 services running.

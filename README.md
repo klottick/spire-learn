@@ -83,12 +83,14 @@ record the retained audit, independent review and P1 Gym issue `spire-14g`.
 The original Learn audit did not determine the internal cause. Training is
 stopped; the consumed campaign cannot be retried.
 
-Learn now pins Spire Gym 1.0.0 native revision
-`8726d467ad8579730ddf4fa236b24aeb2206b71a`, with templates in
-`configs/neural/gym-8726d467/`, and adopts its Standard combat and Run views.
-The earlier 1.0.0 build `1929e18b` and its `configs/neural/gym-v1.0.0/` templates
-remain valid for their own revision. Native qualification and the driver soak
-passed on both builds. See the
+Learn now pins the stable Spire Gym release **v1.1.0**, revision
+`26615ef470e420114f29a208103260b517ee4906`, with templates in
+`configs/neural/gym-1.1.0/`, and adopts its Standard combat and Run views.
+Its behaviour matches the earlier build `8726d467`, but it has its own rules
+epoch, so checkpoints from one build do not load on the other. The 1.0.0 builds
+`8726d467` and `1929e18b` and their templates remain valid for their own
+revisions. Native qualification and the driver soak passed on all three builds.
+See the
 [Gym 1.0.0 migration record](docs/neural-gym-v1-migration.md).
 
 A fresh-weights mixed-stream baseline on `8726d467` reached its 405,504

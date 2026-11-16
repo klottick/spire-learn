@@ -69,7 +69,7 @@ def run(output: Path, *, config_path: Path, steps: int, limit: int = 40) -> dict
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--config', type=Path, default=Path('configs/neural/gym-1.1.0/standalone.toml'))
+    parser.add_argument('--config', type=Path, default=Path('configs/neural/gym-1.1.1/standalone.toml'))
     parser.add_argument('--steps', type=int, default=300)
     arguments = parser.parse_args(argv)
     if not arguments.output.is_absolute():

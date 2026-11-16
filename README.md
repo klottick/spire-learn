@@ -83,13 +83,13 @@ record the retained audit, independent review and P1 Gym issue `spire-14g`.
 The original Learn audit did not determine the internal cause. Training is
 stopped; the consumed campaign cannot be retried.
 
-Learn now pins the stable Spire Gym release **v1.1.0**, revision
-`26615ef470e420114f29a208103260b517ee4906`, with templates in
-`configs/neural/gym-1.1.0/`, and adopts its Standard combat and Run views.
-Its behaviour matches the earlier build `8726d467`, but it has its own rules
-epoch, so checkpoints from one build do not load on the other. The 1.0.0 builds
-`8726d467` and `1929e18b` and their templates remain valid for their own
-revisions. Native qualification and the driver soak passed on all three builds.
+Learn now pins the stable Spire Gym release **v1.1.1**, revision
+`e3c13836bd1458be8a87b93160f5c350f78fcd80`, with templates in
+`configs/neural/gym-1.1.1/`, and adopts its Standard combat and Run views.
+It adds twelve gameplay fixes and new rules IDs. Like every pin, it has its own
+rules epoch, so checkpoints never load across builds. Earlier builds (`v1.1.0`,
+`8726d467`, `1929e18b`) and their templates remain valid for their own
+revisions. Native qualification and the driver soak passed on all of them.
 See the
 [Gym 1.0.0 migration record](docs/neural-gym-v1-migration.md).
 

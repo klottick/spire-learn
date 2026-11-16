@@ -1,0 +1,36 @@
+{
+  "schema": "spire-learn-gym-runtime-profile-v2",
+  "gym_revision": "e3c13836bd1458be8a87b93160f5c350f78fcd80",
+  "native_sha256": "eaeb61d767a53731f0cc2a2d8e0222db8298a4f0b6d1c3ea3c55cb3e0d4348e5",
+  "wheel_sha256": "fd4b6a2e50cca78ad2776b66694f7696ec74ee787db6e6cbe690f4c1fa81eb62",
+  "wheel_path": "artifacts/development/neural-combat/gym-1.1.1/inputs/spire_lab-1.1.1-cp312-cp312-manylinux_2_34_x86_64.whl",
+  "package_overlay": "artifacts/development/neural-combat/gym-1.1.1/site",
+  "dependency_venv": "artifacts/development/neural-combat/task-8/runtime-output/cuda-setup-20261028-a/install-work/venv-cuda",
+  "dependency_lock_sha256": "92022c4b8f68dd7c5bad091b558744ffb30c627292135b7ab18a179f2fd65b45",
+  "delivery_manifest_sha256": "ddfa79f7a1660b3e41381885f50c9538d204c220bbf1f05a9ca3a736a95229c7",
+  "common_view_fingerprint": "4c73f7de04d7b2875f473f8034c1cbacf984ea2d52d0a9428289c30cf1dff463",
+  "run_observation_fingerprint": "28d92d89c437eea7fdc260240585bca466dee1fd74b9b3eb38513d2b34b0be64",
+  "qualification_report": null,
+  "qualification_scope": null,
+  "historical_controls": "Existing one-use campaign controls remain pinned to their original runtime. These templates and this profile grant no execution authority.",
+  "card_metadata_fingerprint": "effbb810d345e906f6e20b47bd972e35d72ef48141378d54bd28b54afac5f406",
+  "checkpoint_policy": "fresh weights required; no legacy vocabulary checkpoint evaluation, warm start or resume",
+  "qualification_process": null,
+  "qualification_tool_exit": null,
+  "standard_fingerprints": {
+    "combat": "5d8147e13ded030c7faa501a8202eb2588915c2e1330b30cac5b06afc9f9916e",
+    "run": "bf8e1d111bbf2171594231b99d8d6b701244249abfbb90a11e86c4b4a405f7ae"
+  },
+  "build_identity": {
+    "dirty": false,
+    "extension": "spire-python",
+    "features": [
+      "spire-python/extension"
+    ],
+    "file_digest": "9ec87b6bf319ac24b4c055a89b87b65c65f1429798eb3cd59fb9ef77fbe1e1f8",
+    "profile": "release",
+    "revision": "e3c13836bd1458be8a87b93160f5c350f78fcd80",
+    "rust_version": "1.99.0",
+    "source_digest": "82b4384a1e51e57de7c0243c9e7a6a053b8aad9fdd4bb525610800418a5e5ad0"
+  }
+}

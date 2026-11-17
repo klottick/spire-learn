@@ -109,8 +109,9 @@ byte-identical on CPU.
 A fresh-weights baseline on **v1.1.1**, with the same plan as the 8726d467 one,
 trained 405,504 learned decisions in 47 minutes (about 145/s, against 58/s
 before). Its final policy won **39/64** paired development cases, against 18/64
-for the untrained weights (exact McNemar p = 5.7 × 10⁻⁶). v1.1.1 changed
-gameplay, so these scores are not comparable with earlier builds. See the
+for the untrained weights (exact McNemar p = 5.7 × 10⁻⁶). A second replicate with
+new seeds scored 38/64 (fresh 17/64), and the two agree on 59 of 64 cases. v1.1.1
+changed gameplay, so these scores are not comparable with earlier builds. See the
 [v1.1.1 baseline results and limits](docs/neural-baseline-gym-1.1.1.md).
 
 The separately approved fresh-weight campaign on this release has now completed

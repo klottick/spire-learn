@@ -82,17 +82,57 @@ By encounter tier, the final policy won:
 
 Bosses and late elites remain largely unsolved.
 
+## Replicate 2 (2026-11-17)
+
+`configs/neural/baseline-gym-1.1.1-r2/` repeats the plan with new policy,
+optimizer, curriculum and noncombat seeds; the stream, panel, budgets and model
+settings are unchanged. It ran from learner `5b5ae06`, with the stream caches and
+the GPU-yield gate. Its output is
+`artifacts/development/neural-combat/baseline-gym-1.1.1-r2-20261117-b/`.
+
+The first attempt (`baseline-gym-1.1.1-r2-20261117/`) stopped safely at 229,376
+decisions when the runtime's 12 GiB free-memory preflight faulted. At the time,
+`nvidia-smi` showed ollama's `llama-server` holding about 25 GB of the shared GPU;
+the run artifacts record only the preflight fault. By user direction training is second class, so
+plans now carry `gpu_wait`: runs wait instead of faulting. The relaunch never had
+to wait.
+
+| | Replicate 1 | Replicate 2 |
+| --- | ---: | ---: |
+| Result | complete, `target_reached` | complete, `target_reached` |
+| Training wall | 2,798 s (about 145/s) | 1,475 s (about 275/s) |
+| fresh-initial wins | 18/64 | 17/64 |
+| near-135168 | 34/64 | 32/64 |
+| near-270336 | 36/64 | 38/64 |
+| final | **39/64** | **38/64** |
+| Paired fresh vs final (fresh-only / final-only) | 1 / 22, p = 5.7 × 10⁻⁶ | 0 / 21, p = 9.5 × 10⁻⁷ |
+| Final mean HP retention | 0.305 | 0.308 |
+| Boss cases won (of 17) | 2 | 2 |
+
+Replicate 2 also had no faults, no censored cases and no failed reports, with
+`learner_changed: false`.
+
+**Agreement.** The two final policies agree on 59 of the 64 panel cases: 36 won
+by both, 23 lost by both. Replicate 1 alone won 3 and replicate 2 alone won 2.
+Across two seeds, the baseline result is stable at about 38–39 of 64. Both runs
+fail on the same hard cases: act 3 and act 4 bosses (0 of 8), act 3 elites
+(0 of 3), and most act 2 bosses.
+
+Two replicates give a first estimate of seed variation, not a confidence
+interval. Differences of one or two panel wins between later variants should
+not be read as effects.
+
 ## Limits
 
-- One replicate, one seed schedule and a 64-case development panel. The protected
-  final split was not run.
+- Two replicates and a 64-case development panel. The protected final split was
+  not run.
 - Simulator-only standalone Ironclad combat. It makes no claim about full Runs or
   transfer to the original game. RNG-001 and TIME-001 qualifications apply.
 - Panel scores are bound to `rules_epoch` `gym-1.1.1`. v1.1.1 changes gameplay in
   twelve places, so these scores are **not comparable** with the 8726d467
   baseline's 37/64 or with any earlier build. The matching fresh-initial 18/64
   reflects the same initial weights and seeds, not equivalence of the builds.
-- One replicate cannot separate the two baselines' final scores (39 vs 37) from
-  noise, even setting the rule change aside.
+- The 8726d467 and v1.1.1 baselines differ in rules, so their scores (37 vs
+  38–39) are not compared.
 - The panel ran on `cuda:0`, like the 8726d467 baseline and unlike the earlier
   CPU campaign panels.

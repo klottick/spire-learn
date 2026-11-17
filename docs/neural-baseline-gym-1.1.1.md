@@ -122,6 +122,47 @@ Two replicates give a first estimate of seed variation, not a confidence
 interval. Differences of one or two panel wins between later variants should
 not be read as effects.
 
+## 64-environment arm (2026-11-17)
+
+`configs/neural/baseline-gym-1.1.1-envs64/` is replicate 1's plan and seeds with
+`rollout.rows = 64` instead of 16. Each 4,096-decision segment then holds two
+2,048-decision rollouts: 2 PPO updates per segment instead of 8, each with 4×
+the optimizer steps. Total decisions, total optimizer steps (about 25,000) and
+shard usage are unchanged.
+- **Learner and output.** It ran from learner `a294f7f`, which includes chunked
+  PPO behavior validation (PR #13). Output is
+  `artifacts/development/neural-combat/baseline-gym-1.1.1-envs64-20261117-b/`.
+- **First attempt** (`-20261117/`). It stopped in its first update: the
+  check-only behavior forward pass over 2,048 rows exceeded Learn's 8 GiB
+  per-process CUDA cap. PR #13 chunks that pass.
+- **The relaunch** waited 240 s for the shared GPU before starting, then
+  completed with no faults.
+
+| | Replicate 1 | Replicate 2 | 64 environments |
+| --- | ---: | ---: | ---: |
+| Training wall, excluding GPU waits | 2,798 s | 1,475 s | 1,272 s |
+| fresh-initial | 18/64 | 17/64 | 18/64 |
+| near-135168 | 34/64 | 32/64 | 37/64 |
+| near-270336 | 36/64 | 38/64 | 37/64 |
+| final | 39/64 | 38/64 | **33/64** |
+| Paired fresh vs final (fresh-only / final-only) | 1 / 22 | 0 / 21 | 1 / 16, p = 2.7 × 10⁻⁴ |
+| Boss cases won (of 17) | 2 | 2 | 1 |
+
+Replicate 1 predates the stream caches, so its wall time is not comparable with
+the other two.
+
+**Case level.** Replicate 1 won 7 final cases that the 64-environment policy lost,
+and the 64-environment policy won 1 that replicate 1 lost (exact two-sided
+p ≈ 0.07). Against replicate 2 the split is 6 and 1 (p ≈ 0.13). The two
+replicates differ from each other by only 3 and 2 cases.
+
+**Reading.** One run cannot establish the effect, but the 64-environment arm is
+not better. Its final score is 5–6 wins below both replicates, and it peaked
+mid-run (37/64) before falling back. At equal total optimizer steps, fewer and
+larger PPO updates trained about 14% faster than replicate 2 but learned worse
+here. **It is not adopted.** Wider rollouts would need their own tuning (for
+example epochs, learning rate or minibatch size) to be reconsidered.
+
 ## Limits
 
 - Two replicates and a 64-case development panel. The protected final split was

@@ -113,7 +113,13 @@ for the untrained weights (exact McNemar p = 5.7 × 10⁻⁶). A second replicat
 new seeds scored 38/64 (fresh 17/64), and the two agree on 59 of 64 cases. v1.1.1
 changed gameplay, so these scores are not comparable with earlier builds. A
 64-environment arm (2 larger PPO updates per segment instead of 8) trained about
-14% faster in one run but finished at 33/64, so it was not adopted. See the
+14% faster in one run but finished at 33/64, so it was not adopted.
+
+A [boss winnability diagnostic](docs/neural-boss-winnability-20261117.md) replayed
+curriculum scenarios with Gym's public-information search. Search won every act 1
+elite, but only 1 of 20 act 2–3 bosses (0 of 10 in act 3). The generated late
+boss decks deal far too little damage for those fights, so the boss failures are
+a curriculum problem first. See the
 [v1.1.1 baseline results and limits](docs/neural-baseline-gym-1.1.1.md).
 
 The separately approved fresh-weight campaign on this release has now completed

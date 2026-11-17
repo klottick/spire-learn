@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 import random
@@ -42,11 +43,24 @@ class ShardCacheTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             first.manifest["cases"] = ()  # frozen: a shared shard cannot be altered
 
+        def mutable(value):
+            if isinstance(value, (dict, list, set)):
+                return True
+            if isinstance(value, Mapping):
+                return any(mutable(item) for item in value.values())
+            if isinstance(value, tuple):
+                return any(mutable(item) for item in value)
+            return False
+
+        for name in ("manifest", "catalog", "annotations"):
+            self.assertFalse(mutable(getattr(first, name)), name)
+
     def test_every_key_component_and_a_changed_recipe_miss(self):
         base = self.generate()
         others = [self.generate(shard_index=4), self.generate(split="selection"),
                   self.generate(arm="fixed"),
-                  self.generate(replace(self.recipe, generator_seed=self.recipe.generator_seed + 1))]
+                  self.generate(replace(self.recipe, generator_seed=self.recipe.generator_seed + 1)),
+                  self.generate(replace(self.recipe, shard_size=self.recipe.shard_size - 1))]
         for other in others:
             self.assertIsNot(other, base)
         self.assertNotEqual(others[-1].manifest_sha256, base.manifest_sha256)

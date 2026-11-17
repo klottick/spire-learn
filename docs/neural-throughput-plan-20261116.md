@@ -173,10 +173,12 @@ layouts are unchanged, and its captured descriptors match v1.1.0's apart from
 
 ## Result: per-segment setup (fix 3, revised) — 2026-11-17
 
-Fix 3 as planned would have lengthened segments, but that is **not**
-learning-neutral. Each segment trains on one 256-scenario stream shard and plays
-about 135 episodes from it. Longer segments would train on fewer distinct shards
-over a run, which changes the training data, so it was dropped.
+Fix 3 as planned would have lengthened segments, but that changes the training
+data mix. Each segment is bound to one 256-scenario stream shard: the config pins
+`shard_index`, and the successor offered is the next index
+(`stream_runner.py`, `run_stream_segment`). A segment draws about 186 episodes
+(case choices) from its shard. Longer segments would draw more episodes per shard
+and visit fewer distinct shards over a fixed budget, so the idea was dropped.
 
 **Diagnosis.** `profile_entry.py` now splits each segment into runtime creation,
 training and finalization, and can run cProfile over one segment
@@ -186,7 +188,7 @@ recomputation:
   `stream_identity`, resume validation and checkpoint provenance regenerate the
   same current and next shards through pure-Python canonical-JSON hashing.
 - `CurriculumSampler.validate_cases` revalidated all 256 cases, rehashing every
-  deck, on each of about 186 case choices per segment.
+  deck, on each of about 186 case choices (episodes) per segment.
 
 **Change.**
 - Shards are deeply frozen, and pure functions of the recipe's content hash,
@@ -208,11 +210,13 @@ recomputation:
   `device = "cpu"`, ran on `main` (`c17e560`) and on this change (`25e3eb3`,
   twice). All three runs produced byte-identical `model.pt` and `training.pt`
   for every segment. The checkpoint stream, sampler and training state differ
-  only in wall-clock `elapsed_seconds`.
+  only in wall-clock `elapsed_seconds`. The GPU path is not byte-checked, because
+  CUDA kernels are not deterministic run to run, but the caches act only on CPU
+  stream work, which is the same on both paths.
 
 **Throughput** (same profile plan as above, on the RTX 5090):
 
-| | Validation fast path | Plus stream caches |
+| | Validation fast path (overhead run) | Plus stream caches |
 | --- | ---: | ---: |
 | Runtime creation per segment | 5.1 s | 0.13 s |
 | Finalization per segment | 1.8 s | 0.03 s |

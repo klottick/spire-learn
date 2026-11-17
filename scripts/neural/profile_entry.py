@@ -149,20 +149,21 @@ def run_profile(root: Path, plan_path: Path, output: Path, *, checkpoint: Path |
             profile['segments'].append(row)
 
             phases = row['phases'] = {}
+            timer = clock  # train() receives its own clock argument; phases use this one
 
             def create_runtime(*args, **kwargs):
-                begun = clock()
+                begun = timer()
                 try:
                     runtime = deps['create_runtime'](*args, **kwargs)
                 finally:
-                    phases['create_runtime_seconds'] = round(clock() - begun, 3)
+                    phases['create_runtime_seconds'] = round(timer() - begun, 3)
                 row['device'] = str(runtime.config.device)
                 row['_timing'] = _recorder(runtime, sync)
                 return runtime
 
             def train(config, *, runtime, clock):
                 timing = row['_timing']
-                begun = clock()
+                begun = timer()
                 try:
                     with ExitStack() as stack:
                         row['not_instrumented'] = instrument(runtime, timing, stack)
@@ -170,7 +171,7 @@ def run_profile(root: Path, plan_path: Path, output: Path, *, checkpoint: Path |
                         with observe(timing):
                             return deps['train'](config, runtime=runtime, clock=clock)
                 finally:
-                    phases['train_seconds'] = round(clock() - begun, 3)
+                    phases['train_seconds'] = round(timer() - begun, 3)
 
             profiler = cProfile.Profile() if index == cprofile_segment else None
             started = clock()
@@ -186,7 +187,10 @@ def run_profile(root: Path, plan_path: Path, output: Path, *, checkpoint: Path |
                 wall = clock() - started
                 if profiler is not None:
                     profiler.disable()
-                    row['cprofile_top_cumulative'] = _cprofile_rows(profiler)
+                    try:
+                        row['cprofile_top_cumulative'] = _cprofile_rows(profiler)
+                    except Exception as error:  # never mask the segment's own outcome
+                        row['cprofile_error'] = f'{type(error).__name__}: {error}'
                 phases['after_train_seconds'] = round(
                     wall - phases.get('create_runtime_seconds', 0) - phases.get('train_seconds', 0), 3)
                 timing = row.pop('_timing', None)

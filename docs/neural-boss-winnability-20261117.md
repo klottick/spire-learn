@@ -18,58 +18,70 @@ potions, as Ironclad at A0. Each scenario is then played three ways:
 - **heuristic:** a random card play or potion use before ending the turn;
 - **search:** Gym's `PublicSearch`.
   - At every decision it scores each legal action over the same 8 sampled
-    worlds, with common random numbers.
-  - The worlds are consistent with public information only.
+    worlds, consistent with public information only.
+  - Sample *k* uses the same world and the same playout random stream for every
+    action (common random numbers).
   - Each sample plays out up to 40 steps with the heuristic.
   - A playout scores +1 for a win, −1 for a death, 0 for an escape, and half the
     HP balance at the cap.
   - If a search root is unavailable, it falls back to the heuristic.
 
-The run used `runtime_container.py`, offline on CPU, with exit status 0. Output
-is in `artifacts/development/neural-combat/boss-winnability-20261117/`. 1,194
-decisions were searched; 17 roots were unavailable and fell back.
+The run used `runtime_container.py`, offline on CPU, with exit status 0 and
+`learner_changed: false`. Output is in
+`artifacts/development/neural-combat/boss-winnability-20261117-b/`:
+`winnability.json`, `cases.jsonl` and `trace.json`. 1,212 decisions were
+searched. 11 roots were unavailable and fell back; Gym failed closed with "draw
+knowledge exceeds the exact model" (9) and "a nested card play holds an enemy
+target" (2). An earlier run, `boss-winnability-20261117/`, had no playout common
+random numbers and gave the same tier results except act 1 bosses (3/10).
 
 ## Results
 
-| Tier | Random | Heuristic | Search | Training win rate (replicate 1, late) |
+| Tier | Random | Heuristic | Search | Training win rate (replicate 1, segments 66–98) |
 | --- | ---: | ---: | ---: | ---: |
 | Act 1 elite | 3/10 | 7/10 | **10/10** | 78% |
-| Act 1 boss | 0/10 | 1/10 | 3/10 | 22% |
+| Act 1 boss | 0/10 | 1/10 | 4/10 | 22% |
 | Act 2 elite | 0/10 | 2/10 | 4/10 | 17% |
-| Act 2 boss | 0/10 | 0/10 | 1/10 | 1% |
+| Act 2 boss | 0/10 | 0/10 | 1/10 | 1.5% |
 | Act 3 elite | 0/10 | 0/10 | 1/10 | 9% |
 | Act 3 boss | 0/10 | 0/10 | **0/10** | 0% |
 
 Search clearly works: it wins every act 1 elite, a tier the trained policy wins
 78% of the time. On act 2 and act 3 bosses it wins 1 of 20.
 
-**A traced act 3 boss fight.** The trace used a one-off script (not kept) on the
-first act 3 case.
-- The scenario: Time Eater, which has its real A0 stats (456 HP, attacks of 26,
-  7×3, 28 and 42). The player starts at 62/98 HP with a generated 20-odd-card
-  deck.
-- The deck deals about 8–12 damage per turn, so killing Time Eater would take
-  roughly 40 turns.
-- The boss deals 20–40 per turn and wins by turn 6.
+**A traced act 3 boss fight** (`trace.json`, the first sampled act 3 case, played
+by the heuristic).
+- The player is at 74/81 HP with a 34-card deck, against Donu and Deca: 500 HP
+  between them.
+- The bosses' combined HP falls 500 → 476 → 459 → 438 → 371 over the first
+  turns, roughly 20–60 damage a turn.
+- Their attacks grow from 10×2 to 13×2 to 16×2. The player is at 2 HP by turn 5
+  and dies. Killing 500 HP at that rate would take more than ten turns.
+- Search also lost this case. The other sampled act 3 bosses ended in deaths
+  within 8–19 decisions from 34–80 HP.
 
-Other act 3 cases look the same: deaths in 8–19 decisions from 34–80 HP. The
-simulator is behaving correctly. The generated scenarios do not give the player
-anything like the damage or scaling a real deck has at these bosses.
+The simulator's enemy stats are the real ones. The generated scenarios do not
+give the player the damage or scaling a deck needs at these bosses.
 
-Starting HP is not the issue. Training scenarios start at a median of about 60%
-HP in every tier, monsters included. Deck size grows by act (median 12, 17–18
-and 24–25 cards), but the decks are random, upgraded draws, not built decks.
+Starting HP is not the issue. Across all 5,120 cases in shards 0–19
+(`population` in `winnability.json`), median starting HP is 58–68% of maximum in
+every tier, monsters included. Median deck size grows by act: 12 cards, then
+17–18, then 24–25. The decks are random, upgraded draws, not decks built for
+these fights. Bosses are 23.2% of these generated scenarios. In replicate 1's
+training they were 21.5% of fights.
 
 ## Conclusion
 
-The curriculum's act 2 boss, act 3 boss and act 3 elite scenarios are largely
-**unwinnable as generated**. The bosses' failure is a curriculum problem first,
-not evidence that the learner cannot learn bosses. Two consequences:
-- About 23% of training scenarios are boss fights. Most act 2 and all act 3
-  ones give no win signal.
-- The development panel's 17 boss cases come from the same generator, so the
-  panel's practical ceiling is well below 64. The 38–39 of 64 baselines are
-  probably close to it on the winnable cases.
+- **Act 3 bosses** are effectively unwinnable as generated. Search won 0 of 10,
+  and the traced damage arithmetic leaves no realistic path.
+- **Act 2 bosses and act 3 elites** are mostly unwinnable for this search (1 of
+  10 each). The search is a lower bound, so this is weaker evidence.
+- **The boss failures are a curriculum problem first**, not evidence that the
+  learner cannot learn bosses. A large share of boss scenarios give no win
+  signal.
+- **The panel is affected too.** Its 17 boss cases come from the same generator,
+  so its attainable maximum is below 64. This diagnostic did not measure that
+  maximum.
 
 ## Limits
 

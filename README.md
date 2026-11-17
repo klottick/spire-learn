@@ -117,7 +117,7 @@ changed gameplay, so these scores are not comparable with earlier builds. A
 
 A [boss winnability diagnostic](docs/neural-boss-winnability-20261117.md) replayed
 curriculum scenarios with Gym's public-information search. Search won every act 1
-elite, but 1 of 20 act 2–3 bosses and 0 of 10 act 3 bosses. The generated late
+elite, but only 1 of 20 act 2–3 bosses (0 of 10 in act 3). The generated late
 boss decks deal far too little damage for those fights, so the boss failures are
 a curriculum problem first. See the
 [v1.1.1 baseline results and limits](docs/neural-baseline-gym-1.1.1.md).

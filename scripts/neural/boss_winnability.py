@@ -112,17 +112,21 @@ def search_choice(env, view: View, observation, *, samples: int, playout_steps: 
         search = env.public_search(research_seed, limits={
             'max_live_branches': samples * len(legal) + 8, 'max_branches': samples * len(legal) + 8,
             'max_steps_per_branch': playout_steps + 2, 'max_total_steps': samples * len(legal) * (playout_steps + 2)})
-    except (unsupported, state_error):
+    except (unsupported, state_error) as error:
         stats['root_unavailable'] += 1
+        stats[f'root_unavailable:{type(error).__name__}:{str(error)[:80]}'] += 1
         return view.heuristic_choice(observation, rng)
     try:
         values = {}
         for action in legal:
             total = 0.0
-            for sample in range(samples):  # the same sample k for every action: common random numbers
+            for sample in range(samples):
+                # Common random numbers: sample k is the same world and the same playout
+                # stream for every action, so actions differ only by the action itself.
                 branch = search.branch(sample)
+                playout_rng = random.Random(research_seed * 1_000_003 + sample)
                 try:
-                    total += _playout(branch, action, view, playout_steps, rng)
+                    total += _playout(branch, action, view, playout_steps, playout_rng)
                 except unsupported:
                     stats['branch_refused'] += 1
                     total -= 1.0
@@ -182,21 +186,75 @@ def play(catalog: dict, case: dict, player: str, view: View, *, seed: int, sampl
         env.close()
 
 
+def population_stats(recipe_path: Path, *, shards: range) -> dict:
+    """Starting HP fraction and deck size by tier over every case in the shards."""
+    from statistics import median
+    from spire_learn.neural.scenario_stream import generate_scenario_shard, load_scenario_recipe
+    recipe = load_scenario_recipe(recipe_path)
+    hp, deck, count = defaultdict(list), defaultdict(list), Counter()
+    for index in shards:
+        shard = generate_scenario_shard(recipe, split='train', shard_index=index, arm='mixed')
+        for case in shard.manifest['cases']:
+            tier = shard.annotations[case['case_id']]['encounter_tier']
+            hp[tier].append(case['entry']['hp'] / case['entry']['max_hp'])
+            deck[tier].append(len(case['entry']['deck']))
+            count[tier] += 1
+    total = sum(count.values())
+    return {'cases': total, 'boss_share': round(sum(v for k, v in count.items() if k.endswith(':boss')) / total, 4),
+            'by_tier': {tier: {'cases': count[tier], 'median_hp_fraction': round(median(hp[tier]), 3),
+                               'median_deck_size': median(deck[tier])} for tier in sorted(count)}}
+
+
+def trace(catalog: dict, case: dict, view: View, descriptor: dict, *, seed: int, max_steps: int) -> list[dict]:
+    """One heuristic-player fight, step by step: public view values only."""
+    from spire_lab.gymnasium import StandardCombatEnv
+    columns = {t['key']: [c['field'] for c in t.get('columns', [])] for t in descriptor['tensors']}
+    verbs = descriptor['vocabularies']['verb']
+    env = StandardCombatEnv(catalog)
+    rng = random.Random(seed)
+    rows = []
+    try:
+        observation, info = env.reset(seed=seed, options={'entry_id': case['entry']['id']})
+        for step in range(max_steps):
+            player = dict(zip(columns['player'], observation['player'].tolist()))
+            enemies = [dict(zip(columns['enemies'], row.tolist())) for row in observation['enemies']
+                       if row[view.enemy_max] > 0]
+            action = view.heuristic_choice(observation, rng)
+            rows.append({'step': step, 'turn': player['turn'], 'hp': player['hp'], 'block': player['block'],
+                         'energy': player['energy'],
+                         'enemies': [{key: enemy[key] for key in ('hp', 'max_hp', 'block', 'intent_damage', 'intent_hits')}
+                                     for enemy in enemies],
+                         'action_verb': verbs[int(observation['actions'][action, view.verb])]})
+            observation, reward, terminated, truncated, info = env.step(action)
+            if terminated or truncated:
+                rows.append({'end': info.get('outcome'), 'reward': float(reward)})
+                break
+    finally:
+        env.close()
+    return rows
+
+
 def run(output: Path, *, recipe: Path, shards: range, tiers: set[str], per_tier: int, samples: int,
-        playout_steps: int, max_steps: int, seed: int) -> dict:
+        playout_steps: int, max_steps: int, seed: int, trace_tier: str | None = None) -> dict:
     from spire_lab.gymnasium import StandardCombatEnv
     cases = select_scenarios(recipe, shards=shards, tiers=tiers, per_tier=per_tier, seed=seed)
     catalog = {'catalog_schema_id': 'spire-gym-standard-combat-catalog-v1', 'profile_id': 'standard-combat-v1',
                'entries': [standard_entry(case['entry']) for case in cases]}
     probe = StandardCombatEnv(catalog)
     try:
-        view = View(probe.combat_observation_spec() if hasattr(probe, 'combat_observation_spec')
-                    else probe.observation_spec())
+        descriptor = probe.observation_spec()
     finally:
         probe.close()
+    view = View(descriptor)
+    output.mkdir(parents=True, exist_ok=True)
+    if trace_tier is not None:
+        traced = next(case for case in cases if case['tier'] == trace_tier)
+        (output / 'trace.json').write_text(json.dumps(
+            {'case_id': traced['case_id'], 'entry': traced['entry'],
+             'steps': trace(catalog, traced, view, descriptor, seed=seed, max_steps=max_steps)},
+            indent=1, sort_keys=True) + '\n')
     stats: Counter = Counter()
     rows = []
-    output.mkdir(parents=True, exist_ok=True)
     for index, case in enumerate(cases):
         row = {'case_id': case['case_id'], 'tier': case['tier'], 'encounter': case['entry']['encounter'],
                'hp': case['entry']['hp'], 'max_hp': case['entry']['max_hp'], 'deck_size': len(case['entry']['deck'])}
@@ -212,7 +270,7 @@ def run(output: Path, *, recipe: Path, shards: range, tiers: set[str], per_tier:
             by_tier[row['tier']][player][row[player]['outcome']] += 1
     result = {'schema': SCHEMA, 'cases': len(rows), 'samples': samples, 'playout_steps': playout_steps,
               'max_steps': max_steps, 'seed': seed, 'shards': [shards.start, shards.stop],
-              'search_stats': dict(stats),
+              'search_stats': dict(stats), 'population': population_stats(recipe, shards=shards),
               'by_tier': {tier: {player: dict(counts) for player, counts in players.items()}
                           for tier, players in sorted(by_tier.items())}}
     (output / 'winnability.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
@@ -230,6 +288,7 @@ def main(argv=None) -> int:
     parser.add_argument('--playout-steps', type=int, default=40)
     parser.add_argument('--max-steps', type=int, default=600)
     parser.add_argument('--seed', type=int, default=20261117)
+    parser.add_argument('--trace-tier', help='also write trace.json for the first sampled case of this tier')
     arguments = parser.parse_args(argv)
     if not arguments.output.is_absolute():
         print('--output must be an absolute path', file=sys.stderr)
@@ -241,7 +300,7 @@ def main(argv=None) -> int:
     recipe = arguments.recipe if arguments.recipe.is_absolute() else _ROOT / arguments.recipe
     result = run(arguments.output, recipe=recipe, shards=range(*arguments.shards), tiers=set(arguments.tiers),
                  per_tier=arguments.per_tier, samples=arguments.samples, playout_steps=arguments.playout_steps,
-                 max_steps=arguments.max_steps, seed=arguments.seed)
+                 max_steps=arguments.max_steps, seed=arguments.seed, trace_tier=arguments.trace_tier)
     print(json.dumps({key: result[key] for key in ('cases', 'by_tier', 'search_stats')}, sort_keys=True))
     return 0
 

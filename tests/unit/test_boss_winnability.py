@@ -156,6 +156,81 @@ class BossWinnabilityTests(unittest.TestCase):
         self.assertEqual((stats["branch_refused"], stats["branch_fault"]), (1, 1))
         self.assertTrue(all(branch.closed for branch in search.branches))
 
+    def test_balance_ignores_padded_enemy_rows(self):
+        width_player = len(DESCRIPTOR["tensors"][[t["key"] for t in DESCRIPTOR["tensors"]].index("player")]["columns"])
+        width_enemy = len(DESCRIPTOR["tensors"][[t["key"] for t in DESCRIPTOR["tensors"]].index("enemies")]["columns"])
+        player = [0] * width_player
+        player[self.view.player_hp], player[self.view.player_max] = 30, 60
+        enemy = [0] * width_enemy
+        enemy[self.view.enemy_hp], enemy[self.view.enemy_max] = 100, 400
+        observation = {"player": _NumpyRow(player), "enemies": _NumpyRows([enemy, [0] * width_enemy])}
+        self.assertAlmostEqual(self.view.balance(observation), 0.5 - 0.25)
+
+    def test_multi_step_playout_reaches_the_cap_and_scores_balance(self):
+        view = self.view
+
+        class Branch:
+            def __init__(self):
+                self.steps = 0
+
+            def step(self, action, view="full"):
+                self.steps += 1
+                return {"marker": self.steps}, 0.0, False, False, {}
+
+        branch = Branch()
+        with patch.object(bw.View, "heuristic_choice", return_value=0), \
+             patch.object(bw.View, "balance", return_value=0.4):
+            value = bw._playout(branch, 1, view, 5, random.Random(0))
+        self.assertEqual(branch.steps, 6)  # the searched action, then 5 playout steps
+        self.assertAlmostEqual(value, 0.2)
+
+    def test_ties_choose_only_among_the_best_actions(self):
+        observation = _observation(self.view, {0: "end_turn", 1: "play_card", 2: "play_card"}, [1, 1, 1])
+        outcomes = {(0, 0): -1.0, (1, 0): 1.0, (2, 0): 1.0}
+        picks = set()
+        for seed in range(20):
+            picks.add(bw.search_choice(_Env(_Search(outcomes)), self.view, observation, samples=1,
+                                       playout_steps=5, rng=random.Random(seed), research_seed=1,
+                                       stats=Counter()))
+        self.assertEqual(picks, {1, 2})
+
+    def test_root_fallback_never_opens_a_search(self):
+        observation = _observation(self.view, {0: "end_turn", 1: "play_card"}, [1, 1])
+        env = _Env(error=_Errors.State("not in combat"))
+        stats = Counter()
+        bw.search_choice(env, self.view, observation, samples=2, playout_steps=5,
+                         rng=random.Random(0), research_seed=1, stats=stats)
+        self.assertEqual(stats["root_unavailable"], 1)
+        self.assertEqual(stats["root_unavailable:State:not in combat"], 1)
+
+
+class _NumpyRow(list):
+    def __getitem__(self, index):
+        return list.__getitem__(self, index)
+
+
+class _NumpyRows:
+    """Rows supporting enemies[:, column], enemies[mask, column] and clip/sum chains."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def __getitem__(self, key):
+        selector, column = key
+        rows = self.rows if isinstance(selector, slice) else [r for r, keep in zip(self.rows, selector) if keep]
+        return _Column([row[column] for row in rows])
+
+
+class _Column(list):
+    def __gt__(self, other):
+        return [value > other for value in self]
+
+    def clip(self, min=None):
+        return _Column([max(value, min) for value in self])
+
+    def sum(self):
+        return sum(self)
+
 
 if __name__ == "__main__":
     unittest.main()

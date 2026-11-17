@@ -314,6 +314,20 @@ class BaselineEntryTests(unittest.TestCase):
         changed = {new.split("=", 1)[0].strip() for old, new in zip(first_lines, lines) if old != new}
         self.assertEqual(changed, {"policy", "optimizer", "curriculum", "noncombat"})
 
+    def test_v1_1_1_envs64_arm_changes_only_the_rollout_width(self):
+        plan = baseline_entry.load_plan(ROOT / "configs/neural/baseline-gym-1.1.1-envs64/plan.json")
+        gated = baseline_entry.load_plan(ROOT / "configs/neural/baseline-gym-1.1.1-r2/plan.json")
+        own = {"baseline_id", "template", "notes"}
+        self.assertEqual({k: v for k, v in plan.items() if k not in own},
+                         {k: v for k, v in gated.items() if k not in own})
+        first = (ROOT / "configs/neural/baseline-gym-1.1.1/template.toml").read_text().splitlines()[1:]
+        lines = (ROOT / plan["template"]).read_text().splitlines()[1:]
+        self.assertEqual(len(lines), len(first))
+        self.assertEqual([(old, new) for old, new in zip(first, lines) if old != new],
+                         [("rows = 16", "rows = 64")])
+        # Whole rollouts fill each segment: 2 x (64 x 32) = 4,096 environment actions.
+        self.assertEqual(plan["segment"]["max_environment_actions"] % (64 * 32), 0)
+
     def test_fresh_qualification_then_warm_start_and_resume_until_target(self):
         fakes = _Fakes(decisions_per_segment=4096)
         summary, events, written = _run(fakes)

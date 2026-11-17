@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 import random
 import unittest
@@ -75,6 +75,34 @@ class ShardCacheTests(unittest.TestCase):
                 self.generate(shard_index=5)
         self.assertNotIn((self.recipe.sha256, "train", 5, "mixed"), scenario_stream._SHARD_CACHE)
 
+    def test_a_rebound_cached_shard_is_regenerated(self):
+        first = self.generate()
+        object.__setattr__(first, "catalog", {"entries": ()})  # deliberate frozen-record bypass
+        again = self.generate()
+        self.assertIsNot(again, first)
+        self.assertTrue(again.catalog["entries"])
+        self.assertEqual(again.manifest_sha256, first.manifest_sha256)
+
+    def test_recipe_or_support_subclasses_bypass_the_cache(self):
+        from spire_learn.neural.scenario_support import ScenarioSupport
+
+        class Support(ScenarioSupport):
+            pass
+
+        class Recipe(scenario_stream.ScenarioRecipe):
+            pass
+
+        support = Support(self.recipe.support.payload)
+        variants = (replace(self.recipe, support=support),
+                    Recipe(**{field.name: getattr(self.recipe, field.name) for field in fields(self.recipe)}))
+        for variant in variants:
+            with self.subTest(type(variant).__name__), patch.object(
+                    scenario_stream, "_generate_scenario_shard",
+                    wraps=scenario_stream._generate_scenario_shard) as build:
+                self.generate(variant)
+                self.generate(variant)
+            self.assertEqual(build.call_count, 2)
+
     def test_cache_is_bounded(self):
         with patch.object(scenario_stream, "_SHARD_CACHE_CAPACITY", 2):
             for index in range(3):
@@ -123,6 +151,14 @@ class CaseValidationMemoTests(unittest.TestCase):
             sampler.validate_cases(loose)
             sampler.validate_cases(loose)
         self.assertEqual(check.call_count, 2)
+
+    def test_a_rebound_case_record_is_revalidated(self):
+        cases = catalog()[0]
+        sampler = self.sampler()
+        sampler.validate_cases(cases)
+        object.__setattr__(cases[0], "lineage_id", "lineage-other")  # deliberate bypass
+        with self.assertRaises(ValueError):
+            sampler.validate_cases(cases)
 
     def test_choices_are_unchanged_by_the_memo(self):
         cases = catalog()[0]

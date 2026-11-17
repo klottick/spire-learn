@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections import Counter, OrderedDict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 import random
 import threading
@@ -326,7 +326,11 @@ def _build(recipe: ScenarioRecipe, split: str, shard_index: int, arm: str, size:
 # are deeply frozen, so a generated shard can be reused within a process. Resume
 # and checkpoint provenance checks regenerate the same few shards many times.
 _SHARD_CACHE_CAPACITY = 16
-_SHARD_CACHE: OrderedDict[tuple[str, str, int, str], ScenarioShard] = OrderedDict()
+_SHARD_CACHE: OrderedDict[tuple[str, str, int, str], tuple[ScenarioShard, tuple[object, ...]]] = OrderedDict()
+
+
+def _shard_fields(shard: ScenarioShard) -> tuple[object, ...]:
+    return tuple(getattr(shard, field.name) for field in fields(shard))
 _SHARD_CACHE_LOCK = threading.Lock()
 
 
@@ -339,16 +343,23 @@ def generate_scenario_shard(recipe: ScenarioRecipe, *, split: str, shard_index: 
     if not isinstance(arm, str) or arm not in _ARMS:
         raise ValueError("unsupported scenario arm")
     _integer(shard_index, 0, 2**24 - 1, "shard_index")
+    if type(recipe) is not ScenarioRecipe or type(recipe.support) is not ScenarioSupport:
+        # Subclasses could change generation inputs without changing the content hash.
+        return _generate_scenario_shard(recipe, split=split, shard_index=shard_index, arm=arm)
     # Keyed by the recipe's current content hash, so a changed recipe never hits.
     key = (recipe.sha256, split, shard_index, arm)
     with _SHARD_CACHE_LOCK:
         cached = _SHARD_CACHE.get(key)
         if cached is not None:
-            _SHARD_CACHE.move_to_end(key)
-            return cached
+            shard, stored = cached
+            # A frozen record can still be rebound with object.__setattr__; never reuse one that was.
+            if all(now is then for now, then in zip(_shard_fields(shard), stored)):
+                _SHARD_CACHE.move_to_end(key)
+                return shard
+            del _SHARD_CACHE[key]
     shard = _generate_scenario_shard(recipe, split=split, shard_index=shard_index, arm=arm)
     with _SHARD_CACHE_LOCK:
-        _SHARD_CACHE[key] = shard
+        _SHARD_CACHE[key] = (shard, _shard_fields(shard))
         while len(_SHARD_CACHE) > _SHARD_CACHE_CAPACITY:
             _SHARD_CACHE.popitem(last=False)
     return shard

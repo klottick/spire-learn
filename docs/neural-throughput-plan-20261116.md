@@ -198,6 +198,15 @@ recomputation:
 - The sampler skips revalidation only for the same tuple object of exact
   `NeuralCase` records (entries frozen at construction) that already validated
   against its fixed annotations.
+- Adversarial review found bypasses, all deliberate. Two are now closed:
+  - On every hit, both caches check that each field is still the exact stored
+    object, so a record rebound with `object.__setattr__` is regenerated or
+    revalidated.
+  - The shard cache is skipped for recipe or support subclasses.
+
+  Two stay out of scope: patching generator module constants at runtime, which
+  only tests do and which then clear the cache, and mutating the sampler's
+  private `_annotations`.
 
 **Evidence that training is unchanged.**
 - **Unit tests** (`tests/unit/test_neural_stream_caches.py`) cover:

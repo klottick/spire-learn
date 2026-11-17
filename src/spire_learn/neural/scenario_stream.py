@@ -6,11 +6,12 @@ The recipe describes learner sampling heuristics, not a true Run distribution.
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 import random
+import threading
 
 from .cases import _freeze_json, _parse_case, environment_seed_for
 from .scenario_support import (
@@ -321,6 +322,14 @@ def _build(recipe: ScenarioRecipe, split: str, shard_index: int, arm: str, size:
                          content_sha256(manifest), distribution)
 
 
+# Shards are pure functions of the recipe content hash, split, index and arm, and
+# are deeply frozen, so a generated shard can be reused within a process. Resume
+# and checkpoint provenance checks regenerate the same few shards many times.
+_SHARD_CACHE_CAPACITY = 16
+_SHARD_CACHE: OrderedDict[tuple[str, str, int, str], ScenarioShard] = OrderedDict()
+_SHARD_CACHE_LOCK = threading.Lock()
+
+
 def generate_scenario_shard(recipe: ScenarioRecipe, *, split: str, shard_index: int,
                             arm: str = "mixed") -> ScenarioShard:
     if not isinstance(recipe, ScenarioRecipe):
@@ -330,6 +339,23 @@ def generate_scenario_shard(recipe: ScenarioRecipe, *, split: str, shard_index: 
     if not isinstance(arm, str) or arm not in _ARMS:
         raise ValueError("unsupported scenario arm")
     _integer(shard_index, 0, 2**24 - 1, "shard_index")
+    # Keyed by the recipe's current content hash, so a changed recipe never hits.
+    key = (recipe.sha256, split, shard_index, arm)
+    with _SHARD_CACHE_LOCK:
+        cached = _SHARD_CACHE.get(key)
+        if cached is not None:
+            _SHARD_CACHE.move_to_end(key)
+            return cached
+    shard = _generate_scenario_shard(recipe, split=split, shard_index=shard_index, arm=arm)
+    with _SHARD_CACHE_LOCK:
+        _SHARD_CACHE[key] = shard
+        while len(_SHARD_CACHE) > _SHARD_CACHE_CAPACITY:
+            _SHARD_CACHE.popitem(last=False)
+    return shard
+
+
+def _generate_scenario_shard(recipe: ScenarioRecipe, *, split: str, shard_index: int,
+                             arm: str) -> ScenarioShard:
     # A conservative public-input upper bound gives every shard the same
     # capacity, so byte reduction cannot reset the fractional family carry.
     # Generated decks have <=40 rows, <=4 relics and exactly three potion slots.

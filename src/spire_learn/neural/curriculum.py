@@ -80,6 +80,7 @@ class CurriculumSampler:
                 or len(set(categories)) != len(categories)):
             raise ValueError("categories must be at most 256 unique declared lesson keys")
         self._distribution = distribution_sha256
+        self._validated_cases: tuple[NeuralCase, ...] | None = None
         self._categories = tuple(categories)
         if not isinstance(annotations, Mapping) or not 1 <= len(annotations) <= 256:
             raise ValueError("annotations must describe 1..256 current catalog cases")
@@ -164,6 +165,15 @@ class CurriculumSampler:
 
     def validate_cases(self, cases: Sequence[NeuralCase]) -> None:
         """Reject catalog/annotation mismatches without consuming RNG or state."""
+        # A tuple of frozen NeuralCase records (entries frozen at construction) cannot
+        # change after it validates against these fixed annotations; skip the re-check.
+        if type(cases) is tuple and cases is self._validated_cases:
+            return
+        self._validate_cases(cases)
+        if type(cases) is tuple and all(type(case) is NeuralCase for case in cases):
+            self._validated_cases = cases
+
+    def _validate_cases(self, cases: Sequence[NeuralCase]) -> None:
         if (not _sequence(cases) or len(cases) != len(self._annotations)
                 or any(not isinstance(case, NeuralCase) for case in cases)
                 or len({case.case_id for case in cases}) != len(cases)

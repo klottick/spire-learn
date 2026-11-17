@@ -184,6 +184,18 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertEqual(changed, ["gym_revision", "standalone", "run"])
         self.assertIn("+gym-1.1.1", template)
 
+    def test_v1_1_1_replicate_changes_only_the_seeds(self):
+        plan = baseline_entry.load_plan(ROOT / "configs/neural/baseline-gym-1.1.1-r2/plan.json")
+        first = baseline_entry.load_plan(ROOT / "configs/neural/baseline-gym-1.1.1/plan.json")
+        own = {"baseline_id", "template", "notes"}
+        self.assertEqual({k: v for k, v in plan.items() if k not in own},
+                         {k: v for k, v in first.items() if k not in own})
+        lines = (ROOT / plan["template"]).read_text().splitlines()[1:]
+        first_lines = (ROOT / first["template"]).read_text().splitlines()[1:]
+        self.assertEqual(len(lines), len(first_lines))
+        changed = {new.split("=", 1)[0].strip() for old, new in zip(first_lines, lines) if old != new}
+        self.assertEqual(changed, {"policy", "optimizer", "curriculum", "noncombat"})
+
     def test_fresh_qualification_then_warm_start_and_resume_until_target(self):
         fakes = _Fakes(decisions_per_segment=4096)
         summary, events, written = _run(fakes)

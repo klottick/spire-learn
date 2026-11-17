@@ -23,6 +23,9 @@ from spire_learn.experiments.budget import Budget
 from spire_learn.neural.contracts import NeuralIdentity, PPOConfig, Rollout
 from spire_learn.neural.returns import compute_gae
 
+# Rows per check-only behavior forward pass; bounds activation memory for wide rollouts.
+_VALIDATION_ROWS = 256
+
 
 @dataclass(frozen=True)
 class UpdateMetrics:
@@ -377,21 +380,26 @@ def ppo_update(
         phase = "validate-behavior-data"
         with span("ppo_validate_behavior"), torch.no_grad():
             source_batch = encode_frames(frames, schema, device=str(policy_device))
-            source_output = policy(source_batch)
-            source_distribution = masked_categorical(source_output.logits, source_batch.action_mask)
             actions_device = action_values.to(device=policy_device)
             old_actions_legal = source_batch.action_mask.gather(
                 1, actions_device.unsqueeze(1)
             ).squeeze(1).to(dtype=torch.bool)
             if not torch.all(old_actions_legal).item():
                 raise ContractError("stored action is illegal in its public source frame")
-            # Exercise the same original-index legality contract here without
-            # resampling. Stored log-probabilities remain the frozen PPO ratios;
-            # tests and trusted collectors may intentionally exercise clipped
-            # ratios different from one at entry.
-            _ = source_distribution.log_prob(actions_device)
-            if not torch.isfinite(source_output.values).all().item():
-                raise ContractError("behavior critic values must be finite")
+            # The check-only forward pass runs in row chunks so its activations stay
+            # bounded for wide rollouts; nothing here feeds the update or any RNG.
+            for start in range(0, len(frames), _VALIDATION_ROWS):
+                rows = torch.arange(start, min(start + _VALIDATION_ROWS, len(frames)), dtype=torch.int64)
+                chunk = source_batch.select_rows(rows)
+                source_output = policy(chunk)
+                source_distribution = masked_categorical(source_output.logits, chunk.action_mask)
+                # Exercise the same original-index legality contract here without
+                # resampling. Stored log-probabilities remain the frozen PPO ratios;
+                # tests and trusted collectors may intentionally exercise clipped
+                # ratios different from one at entry.
+                _ = source_distribution.log_prob(actions_device[rows.to(device=policy_device)])
+                if not torch.isfinite(source_output.values).all().item():
+                    raise ContractError("behavior critic values must be finite")
 
         attempted_version_bump = False
         actor_count = len(actor_records)

@@ -124,7 +124,8 @@ not be read as effects.
 
 ## 64-environment arm (2026-11-17)
 
-`configs/neural/baseline-gym-1.1.1-envs64/` is replicate 1's plan and seeds with
+`configs/neural/baseline-gym-1.1.1-envs64/` is replicate 2's plan (with `gpu_wait`
+and the longer runner timeout) using replicate 1's seeds, and
 `rollout.rows = 64` instead of 16. Each 4,096-decision segment then holds two
 2,048-decision rollouts: 2 PPO updates per segment instead of 8, each with 4×
 the optimizer steps. Total decisions, total optimizer steps (about 25,000) and
@@ -159,8 +160,8 @@ replicates differ from each other by only 3 and 2 cases.
 **Reading.** One run cannot establish the effect, but the 64-environment arm is
 not better. Its final score is 5–6 wins below both replicates, and it peaked
 mid-run (37/64) before falling back. At equal total optimizer steps, fewer and
-larger PPO updates trained about 14% faster than replicate 2 but learned worse
-here. **It is not adopted.** Wider rollouts would need their own tuning (for
+larger PPO updates trained about 14% faster than replicate 2 in this one run, but
+scored lower. **It is not adopted.** Wider rollouts would need their own tuning (for
 example epochs, learning rate or minibatch size) to be reconsidered.
 
 ## Limits

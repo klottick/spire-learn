@@ -325,7 +325,7 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertEqual(len(lines), len(first))
         self.assertEqual([(old, new) for old, new in zip(first, lines) if old != new],
                          [("rows = 16", "rows = 64")])
-        # Whole rollouts fill each segment: 2 x (64 x 32) = 4,096 environment actions.
+        # Whole 64 x 32 rollouts fill each 4,096-action segment.
         self.assertEqual(plan["segment"]["max_environment_actions"] % (64 * 32), 0)
 
     def test_fresh_qualification_then_warm_start_and_resume_until_target(self):

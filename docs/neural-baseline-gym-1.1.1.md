@@ -91,8 +91,9 @@ the GPU-yield gate. Its output is
 `artifacts/development/neural-combat/baseline-gym-1.1.1-r2-20261117-b/`.
 
 The first attempt (`baseline-gym-1.1.1-r2-20261117/`) stopped safely at 229,376
-decisions. Ollama loaded about 25 GB onto the shared GPU, and the runtime's 12 GiB
-free-memory preflight faulted. By user direction training is second class, so
+decisions when the runtime's 12 GiB free-memory preflight faulted. At the time,
+`nvidia-smi` showed ollama's `llama-server` holding about 25 GB of the shared GPU;
+the run artifacts record only the preflight fault. By user direction training is second class, so
 plans now carry `gpu_wait`: runs wait instead of faulting. The relaunch never had
 to wait.
 

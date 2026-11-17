@@ -42,8 +42,19 @@ def _default_dependencies() -> dict[str, Callable]:
         preflight=preflight_checkpoint, load_recipe=load_scenario_recipe,
         build_panel=build_development_panel, summarize=summarize_development_reports,
         disk_free=lambda path: shutil.disk_usage(path).free, tree_bytes=_tree_bytes,
+        gpu_free_bytes=_gpu_free_bytes, release_gpu_cache=_release_gpu_cache, sleep=time.sleep,
         load_checkpoint=load_checkpoint, weights_snapshot=_weights_snapshot, weights_equal=_weights_equal,
     )
+
+
+def _gpu_free_bytes() -> int:
+    import torch
+    return int(torch.cuda.mem_get_info(0)[0])
+
+
+def _release_gpu_cache() -> None:
+    import torch
+    torch.cuda.empty_cache()
 
 
 def _weights_snapshot(runtime) -> dict:
@@ -67,6 +78,15 @@ def load_plan(path: Path) -> dict:
     target = plan.get('target_learned_decisions')
     if type(target) is not int or target < 1:
         raise ValueError('baseline plan needs a positive learned-decision target')
+    wait = plan.get('gpu_wait')
+    if wait is not None:
+        if (not isinstance(wait, dict)
+                or set(wait) != {'min_free_bytes', 'poll_seconds', 'max_total_seconds'}
+                or any(type(wait[key]) is not int or wait[key] < 1 for key in wait)):
+            raise ValueError('gpu_wait needs positive integer min_free_bytes, poll_seconds, max_total_seconds')
+        # The outer runner kill must not pre-empt the summary after the longest allowed wait.
+        if plan.get('runner_timeout_seconds', 0) < plan['wall_seconds']['total'] + wait['max_total_seconds'] + 600:
+            raise ValueError('runner_timeout_seconds must cover the total wall plus the maximum GPU wait')
     return plan
 
 
@@ -116,6 +136,65 @@ def _panel_configs(panel: Mapping, template: Path, directory: Path, plan: Mappin
             stream.write(_toml(document))
         rows.append({'case_id': case['case_id'], 'config': directory / f'config-{ordinal}.toml'})
     return rows
+
+
+class _Budget:
+    """Training and total wall deadlines; GPU waits move both later by the time waited."""
+
+    def __init__(self, *, training: float, total: float):
+        self.training, self.total = training, total
+
+
+class _GpuGate:
+    """Yield the shared GPU: wait, rather than fault, while other services hold it.
+
+    Training is second class on this host. Before each segment and evaluation case
+    the gate waits until the device has ``min_free_bytes`` free, polling every
+    ``poll_seconds``. Waiting does not consume the wall budgets, but the total wait
+    is capped by ``max_total_seconds``. After each unit of work the CUDA cache is
+    released so other services can load into it. Without a ``gpu_wait`` plan entry,
+    or on a non-CUDA device, the gate does nothing.
+    """
+
+    def __init__(self, plan: Mapping, deps: Mapping, clock: Callable[[], float], journal, budget: _Budget):
+        self._settings = plan.get('gpu_wait')
+        self._deps, self._clock, self._journal, self._budget = deps, clock, journal, budget
+        self.waited = 0.0
+
+    def _active(self, config) -> bool:
+        return self._settings is not None and str(getattr(config, 'device', '')).startswith('cuda')
+
+    def wait(self, config, stage: str) -> None:
+        if not self._active(config):
+            return
+        minimum, poll = self._settings['min_free_bytes'], self._settings['poll_seconds']
+        started = None
+        while True:
+            free = self._deps['gpu_free_bytes']()
+            if free >= minimum:
+                break
+            if started is None:
+                started = self._clock()
+                self._journal.write('gpu_wait', stage=stage, free_bytes=free, min_free_bytes=minimum)
+            if self.waited + (self._clock() - started) >= self._settings['max_total_seconds']:
+                self._account(started)
+                raise _Stop('gpu_wait_exhausted')
+            self._deps['sleep'](poll)
+        if started is not None:
+            waited = self._account(started)
+            self._journal.write('gpu_resumed', stage=stage, waited_seconds=round(waited, 3),
+                                total_waited_seconds=round(self.waited, 3))
+
+    def _account(self, started: float) -> float:
+        waited = self._clock() - started
+        self.waited += waited
+        self._budget.training += waited
+        self._budget.total += waited
+        return waited
+
+    def release(self, config) -> None:
+        if self._active(config):
+            self._deps['release_gpu_cache']()
 
 
 def _limits(prefix: Mapping | None, allowance: Mapping, deadline: float):
@@ -183,12 +262,13 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
     plan = load_plan(plan_path if plan_path.is_absolute() else root / plan_path)
     _validate_runner_contract(root, output, plan, require_environment=False)
     started = clock()
-    training_deadline = started + plan['wall_seconds']['training']
-    total_deadline = started + plan['wall_seconds']['total']
+    budget = _Budget(training=started + plan['wall_seconds']['training'],
+                     total=started + plan['wall_seconds']['total'])
+    journal = _Journal(output / 'progress.jsonl', clock, started)
+    gate = _GpuGate(plan, deps, clock, journal, budget)
     template = root / plan['template']
     recipe_path = root / plan['recipe']
     prepared = output / 'prepared'
-    journal = _Journal(output / 'progress.jsonl', clock, started)
     summary: dict = {'schema': 'spire-learn-baseline-summary-v1', 'plan': plan, 'stop_reason': None,
                      'checkpoints': [], 'segments': 0, 'learned_decisions': 0, 'evaluations': {},
                      'result': 'incomplete'}
@@ -211,7 +291,7 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
     try:
         prepared.mkdir()
         try:
-            _train(summary, deps, plan, prepare, storage_stop, recorded, training_deadline, clock,
+            _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock,
                    journal, output)
         except _Stop as stop:
             summary['stop_reason'] = stop.reason
@@ -232,7 +312,7 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
                       learned_decisions=summary['learned_decisions'])
         if fresh_path is not None and summary['stop_reason'] in _EVALUABLE_STOPS:
             try:
-                _evaluate(summary, deps, plan, template, recipe_path, output, total_deadline, clock,
+                _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, clock,
                           journal, storage_stop)
             except Exception as error:
                 # An evaluation fault never rewrites training results; it is reported, not retried.
@@ -260,7 +340,7 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
     return summary
 
 
-def _train(summary, deps, plan, prepare, storage_stop, recorded, deadline, clock, journal, output) -> None:
+def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock, journal, output) -> None:
     reason = storage_stop()
     if reason is not None:
         raise _Stop(reason)
@@ -271,12 +351,14 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, deadline, clock
     summary['config_sha256'] = config.config_sha256
     summary['device'] = getattr(config, 'device', None)
     fresh_path = output / 'fresh-initial'
+    gate.wait(config, 'fresh_initial')
     runtime = deps['create_runtime'](config, purpose='train')
     try:
         before = deps['weights_snapshot'](runtime)
         runtime.save(fresh_path, 'final')
     finally:
         runtime.close()
+        gate.release(config)
     # The saved fresh weights must load back exactly, untrained, before anything trains on them.
     deps['preflight'](fresh_path, config.accepted_identities[0], purpose='evaluate')
     loaded = deps['load_checkpoint'](fresh_path, config.accepted_identities[0], purpose='resume', device='cpu')
@@ -289,8 +371,12 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, deadline, clock
 
     # Qualification: one short warm start validates scenarios, sampling and updates natively.
     config = prepare('qualification', split='train', shard_index=0)
-    result = deps['run_stream_segment'](config, purpose='warm_start', checkpoint=fresh_path,
-        operation_limits=_limits(None, plan['qualification'], min(deadline, clock() + 600)))
+    gate.wait(config, 'qualification')
+    try:
+        result = deps['run_stream_segment'](config, purpose='warm_start', checkpoint=fresh_path,
+            operation_limits=_limits(None, plan['qualification'], min(budget.training, clock() + 600)))
+    finally:
+        gate.release(config)
     if result['checkpoint'] is None:
         journal.write('qualification_failed', report=getattr(result['report'], 'summary', None))
         raise _Stop('qualification_without_checkpoint')
@@ -301,15 +387,19 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, deadline, clock
 
     parent, purpose, shard_index, prefix = fresh_path, 'warm_start', 0, None
     while True:
-        if clock() >= deadline:
+        if clock() >= budget.training:
             raise _Stop('training_wall')
         reason = storage_stop()
         if reason is not None:
             raise _Stop(reason)
         config = prepare(f'train-{summary["segments"]}-shard-{shard_index}', split='train',
                          shard_index=shard_index)
-        result = deps['run_stream_segment'](config, purpose=purpose, checkpoint=parent,
-            operation_limits=_limits(prefix, plan['segment'], min(deadline, clock() + 900)))
+        gate.wait(config, f'segment {summary["segments"]}')
+        try:
+            result = deps['run_stream_segment'](config, purpose=purpose, checkpoint=parent,
+                operation_limits=_limits(prefix, plan['segment'], min(budget.training, clock() + 900)))
+        finally:
+            gate.release(config)
         summary['segments'] += 1
         if result['checkpoint'] is None:
             report = result['report']
@@ -329,7 +419,7 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, deadline, clock
         summary['learned_decisions'] = decisions
         journal.write('segment_complete', **row, prefix=prefix)
         if decisions <= previous:
-            raise _Stop('training_wall' if clock() >= deadline else 'segment_without_progress')
+            raise _Stop('training_wall' if clock() >= budget.training else 'segment_without_progress')
         parent, purpose = result['checkpoint'], 'resume'
         if decisions >= plan['target_learned_decisions']:
             raise _Stop('target_reached')
@@ -376,7 +466,7 @@ def _paired(fresh: Mapping[str, str], final: Mapping[str, str], *, total: int) -
             'exact_mcnemar_two_sided_p': min(1.0, 2 * tail) if discordant else 1.0}
 
 
-def _evaluate(summary, deps, plan, template, recipe_path, output, deadline, clock, journal,
+def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, clock, journal,
               storage_stop) -> None:
     panel = deps['build_panel'](deps['load_recipe'](recipe_path))
     with (output / 'development-panel.json').open('x') as stream:
@@ -387,7 +477,7 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, deadline, cloc
     for label in _EVALUATION_ORDER:
         if label not in labelled:
             continue
-        if clock() >= deadline:
+        if clock() >= budget.total:
             summary['evaluations'][label] = {'status': 'skipped_wall'}
             continue
         checkpoint = Path(labelled[label]['path'])
@@ -396,7 +486,7 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, deadline, cloc
         evaluation = {'status': status, 'checkpoint': str(checkpoint), 'cases': cases, 'device': None}
         summary['evaluations'][label] = evaluation
         for row in rows:
-            if clock() >= deadline:
+            if clock() >= budget.total:
                 status = 'incomplete_wall'
                 break
             reason = storage_stop()
@@ -404,16 +494,24 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, deadline, cloc
                 status = 'stopped_' + reason
                 break
             config = deps['load_config'](row['config'])
+            try:
+                gate.wait(config, f'evaluation {label}')
+            except _Stop as stop:
+                status = stop.reason
+                break
             deps['preflight'](checkpoint, config.accepted_identities[0], purpose='evaluate')
-            runtime = deps['create_runtime'](config, purpose='evaluate', checkpoint=checkpoint,
-                                             policy_kind='checkpoint',
-                                             action_selection=plan['evaluation']['action_selection'])
-            from spire_learn.neural.runner import RuntimeOperationLimits
-            runtime.operation_limits = RuntimeOperationLimits(
-                max_environment_actions=plan['evaluation']['case_actions'],
-                monotonic_deadline=min(deadline, clock() + plan['evaluation']['case_seconds']))
-            # evaluate_policy owns and closes the runtime.
-            report = deps['evaluate'](config, runtime=runtime, clock=clock, allow_final=False)
+            try:
+                runtime = deps['create_runtime'](config, purpose='evaluate', checkpoint=checkpoint,
+                                                 policy_kind='checkpoint',
+                                                 action_selection=plan['evaluation']['action_selection'])
+                from spire_learn.neural.runner import RuntimeOperationLimits
+                runtime.operation_limits = RuntimeOperationLimits(
+                    max_environment_actions=plan['evaluation']['case_actions'],
+                    monotonic_deadline=min(budget.total, clock() + plan['evaluation']['case_seconds']))
+                # evaluate_policy owns and closes the runtime.
+                report = deps['evaluate'](config, runtime=runtime, clock=clock, allow_final=False)
+            finally:
+                gate.release(config)
             reports[row['case_id']] = report
             evaluation['device'] = getattr(config, 'device', None)
             evaluation['cases_evaluated'] = len(reports)

@@ -160,6 +160,107 @@ def _run(fakes, *, clock=None):
         return summary, events, written
 
 
+GIB = 2**30
+
+
+def _gpu_run(fakes, free, *, max_wait=14400, clock=None):
+    """Run with a CUDA config and a gpu_wait plan; ``free(call)`` scripts free bytes."""
+    clock = clock or _Clock()
+    plan = json.loads((ROOT / PLAN).read_text())
+    plan["gpu_wait"] = {"min_free_bytes": 13 * GIB, "poll_seconds": 30, "max_total_seconds": max_wait}
+    plan["runner_timeout_seconds"] = plan["wall_seconds"]["total"] + max_wait + 600
+    load_config = fakes.load_config
+    fakes.load_config = lambda path: SimpleNamespace(**vars(load_config(path)), device="cuda:0")
+    calls = {"free": 0, "release": 0, "sleep": 0}
+
+    def gpu_free():
+        calls["free"] += 1
+        return free(calls["free"])
+
+    def release():
+        calls["release"] += 1
+
+    def sleep(seconds):
+        calls["sleep"] += 1
+        clock.now += seconds
+
+    deps = {**fakes.deps(), "gpu_free_bytes": gpu_free, "release_gpu_cache": release, "sleep": sleep}
+    with tempfile.TemporaryDirectory() as directory:
+        plan_path = Path(directory) / "plan.json"
+        plan_path.write_text(json.dumps(plan))
+        output = Path(directory) / "out"
+        output.mkdir()
+        summary = baseline_entry.run_baseline(ROOT, plan_path, output, dependencies=deps, clock=clock)
+        events = [json.loads(line) for line in (output / "progress.jsonl").read_text().splitlines()]
+    return summary, events, calls
+
+
+class GpuGateTests(unittest.TestCase):
+    def test_waits_instead_of_faulting_and_waiting_does_not_consume_the_wall(self):
+        # The GPU is busy for longer than the whole training wall, then frees up.
+        busy_polls = 500  # 500 x 30 s = 15,000 s > 12,600 s training wall
+        summary, events, calls = _gpu_run(_Fakes(decisions_per_segment=4096),
+                                          lambda n: 1 * GIB if n <= busy_polls else 20 * GIB,
+                                          max_wait=20000)
+        self.assertEqual(summary["stop_reason"], "target_reached")
+        self.assertEqual(summary["result"], "complete")
+        self.assertEqual(calls["sleep"], busy_polls)
+        names = [event["event"] for event in events]
+        self.assertEqual(names.count("gpu_wait"), 1)
+        self.assertEqual(names.count("gpu_resumed"), 1)
+        resumed = next(event for event in events if event["event"] == "gpu_resumed")
+        self.assertGreaterEqual(resumed["waited_seconds"], busy_polls * 30)
+        self.assertGreater(calls["release"], 99)  # after fresh-initial, qualification, segments, cases
+
+    def test_wait_exhaustion_in_training_stops_without_evaluation(self):
+        summary, events, calls = _gpu_run(_Fakes(decisions_per_segment=4096),
+                                          lambda n: 20 * GIB if n <= 3 else 1 * GIB, max_wait=600)
+        self.assertEqual(summary["stop_reason"], "gpu_wait_exhausted")
+        self.assertEqual(summary["evaluation_skipped"], "gpu_wait_exhausted")
+        self.assertEqual(summary["result"], "incomplete")
+        self.assertLessEqual(calls["sleep"], 600 // 30 + 1)
+
+    def test_wait_exhaustion_in_evaluation_marks_the_panel_and_keeps_training(self):
+        fakes = _Fakes(decisions_per_segment=4096)
+        trained = {"done": False}
+        original = fakes.evaluate
+
+        def evaluate(*args, **kwargs):
+            trained["done"] = True
+            return original(*args, **kwargs)
+
+        fakes.evaluate = evaluate
+        # Plenty of memory until the first evaluated case, then the GPU stays busy.
+        summary, events, calls = _gpu_run(
+            fakes, lambda n: 20 * GIB if not trained["done"] else 1 * GIB, max_wait=300)
+        self.assertEqual(summary["stop_reason"], "target_reached")
+        self.assertEqual(summary["evaluations"]["final"]["status"], "gpu_wait_exhausted")
+        self.assertEqual(summary["result"], "incomplete")
+
+    def test_cpu_configs_and_plans_without_gpu_wait_never_poll(self):
+        fakes = _Fakes(decisions_per_segment=4096)
+        deps = {**fakes.deps(), "gpu_free_bytes": lambda: self.fail("polled")}
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "out"
+            output.mkdir()
+            summary = baseline_entry.run_baseline(ROOT, PLAN, output, dependencies=deps, clock=_Clock())
+        self.assertEqual(summary["result"], "complete")
+
+    def test_gpu_wait_plan_validation(self):
+        plan = json.loads((ROOT / PLAN).read_text())
+        cases = {
+            "malformed": {"min_free_bytes": 1, "poll_seconds": 0, "max_total_seconds": 1},
+            "unknown key": {"min_free_bytes": 1, "poll_seconds": 1, "max_total_seconds": 1, "x": 1},
+            "timeout too short": {"min_free_bytes": 1, "poll_seconds": 1, "max_total_seconds": 10**6},
+        }
+        for label, wait in cases.items():
+            with self.subTest(label), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "plan.json"
+                path.write_text(json.dumps({**plan, "gpu_wait": wait}))
+                with self.assertRaises(ValueError):
+                    baseline_entry.load_plan(path)
+
+
 class BaselineEntryTests(unittest.TestCase):
     def test_plan_binds_the_8726d467_template(self):
         plan = baseline_entry.load_plan(ROOT / PLAN)
@@ -187,9 +288,12 @@ class BaselineEntryTests(unittest.TestCase):
     def test_v1_1_1_replicate_changes_only_the_seeds(self):
         plan = baseline_entry.load_plan(ROOT / "configs/neural/baseline-gym-1.1.1-r2/plan.json")
         first = baseline_entry.load_plan(ROOT / "configs/neural/baseline-gym-1.1.1/plan.json")
-        own = {"baseline_id", "template", "notes"}
+        own = {"baseline_id", "template", "notes", "gpu_wait", "runner_timeout_seconds"}
         self.assertEqual({k: v for k, v in plan.items() if k not in own},
                          {k: v for k, v in first.items() if k not in own})
+        self.assertEqual(plan["gpu_wait"], {"min_free_bytes": 13 * 2**30, "poll_seconds": 30,
+                                            "max_total_seconds": 21600})
+        self.assertEqual(plan["runner_timeout_seconds"], 36600)
         lines = (ROOT / plan["template"]).read_text().splitlines()[1:]
         first_lines = (ROOT / first["template"]).read_text().splitlines()[1:]
         self.assertEqual(len(lines), len(first_lines))

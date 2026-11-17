@@ -54,11 +54,11 @@ by the heuristic).
 - The player is at 74/81 HP with a 34-card deck, against Donu and Deca: 500 HP
   between them.
 - The bosses' combined HP falls 500 → 476 → 459 → 438 → 371 over the first
-  turns, roughly 20–60 damage a turn.
+  turns: 17–67 damage a turn.
 - Their attacks grow from 10×2 to 13×2 to 16×2. The player is at 2 HP by turn 5
   and dies. Killing 500 HP at that rate would take more than ten turns.
-- Search also lost this case. The other sampled act 3 bosses ended in deaths
-  within 8–19 decisions from 34–80 HP.
+- Search also lost this case. All 10 sampled act 3 bosses ended in deaths
+  within 7–21 search decisions, from 34–80 starting HP.
 
 The simulator's enemy stats are the real ones. The generated scenarios do not
 give the player the damage or scaling a deck needs at these bosses.

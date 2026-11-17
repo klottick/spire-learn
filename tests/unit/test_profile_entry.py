@@ -211,6 +211,22 @@ class ProfileEntryTests(unittest.TestCase):
         self.assertIs(model.encode_frames, self.stub)
         self.assertIs(features.encode_frames, self.stub)
 
+    def test_phases_partition_the_segment_and_cprofile_is_opt_in(self):
+        fakes = _Fakes()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "out"
+            output.mkdir()
+            profile_entry.run_profile(ROOT, PLAN, output, dependencies=fakes.deps(), clock=_Clock(),
+                                      cprofile_segment=1)
+            written = json.loads((output / "profile.json").read_text())
+        for row in written["segments"]:
+            phases = row["phases"]
+            self.assertEqual(set(phases), {"create_runtime_seconds", "train_seconds", "after_train_seconds"})
+            self.assertAlmostEqual(sum(phases.values()), row["wall_seconds"], places=2)
+            self.assertGreaterEqual(phases["after_train_seconds"], 0)
+        self.assertNotIn("cprofile_top_cumulative", written["segments"][0])
+        self.assertTrue(written["segments"][1]["cprofile_top_cumulative"])
+
     def test_unpatchable_native_driver_is_reported_not_instrumented(self):
         _, written = self.run_profile(_Fakes(driver=_SlottedDriver()))
         self.assertEqual(written["status"], "complete")

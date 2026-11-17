@@ -171,6 +171,70 @@ The builds differ. v1.1.1's `DELIVERY.md` states that observation and action
 layouts are unchanged, and its captured descriptors match v1.1.0's apart from
 `rules_id`, so validation reads the same tensors. Per-segment overhead (fix 3) is now the largest single cost.
 
+## Result: per-segment setup (fix 3, revised) — 2026-11-17
+
+Fix 3 as planned would have lengthened segments, but that changes the training
+data mix. Each segment is bound to one 256-scenario stream shard: the config pins
+`shard_index`, and the successor offered is the next index
+(`stream_runner.py`, `run_stream_segment`). A segment draws about 186 episodes
+(case choices) from its shard. Longer segments would draw more episodes per shard
+and visit fewer distinct shards over a fixed budget, so the idea was dropped.
+
+**Diagnosis.** `profile_entry.py` now splits each segment into runtime creation,
+training and finalization, and can run cProfile over one segment
+(`--cprofile-segment`). The roughly 7 s of setup per segment was deterministic
+recomputation:
+- `generate_scenario_shard` ran about 19 times per segment. Config admission,
+  `stream_identity`, resume validation and checkpoint provenance regenerate the
+  same current and next shards through pure-Python canonical-JSON hashing.
+- `CurriculumSampler.validate_cases` revalidated all 256 cases, rehashing every
+  deck, on each of about 186 case choices (episodes) per segment.
+
+**Change.**
+- Shards are deeply frozen, and pure functions of the recipe's content hash,
+  split, index and arm, each with its own derived RNG. A 16-entry in-process
+  cache keyed by exactly those values reuses them, so a changed recipe never
+  hits.
+- The sampler skips revalidation only for the same tuple object of exact
+  `NeuralCase` records (entries frozen at construction) that already validated
+  against its fixed annotations.
+- Adversarial review found bypasses, all deliberate. Two are now closed:
+  - On every hit, both caches check that each field is still the exact stored
+    object, so a record rebound with `object.__setattr__` is regenerated or
+    revalidated.
+  - The shard cache is skipped for recipe or support subclasses.
+
+  Two stay out of scope: patching generator module constants at runtime, which
+  only tests do and which then clear the cache, and mutating the sampler's
+  private `_annotations`.
+
+**Evidence that training is unchanged.**
+- **Unit tests** (`tests/unit/test_neural_stream_caches.py`) cover:
+  - cache identity, key misses (including a changed recipe), bounds and
+    uncached failures;
+  - memo identity rules;
+  - identical curriculum choices with and without the memo.
+- **CPU byte comparison.** CPU training is deterministic. Three 1,024-decision
+  segments from fresh weights, using `configs/neural/baseline-gym-1.1.1/` with
+  `device = "cpu"`, ran on `main` (`c17e560`) and on this change (`25e3eb3`,
+  twice). All three runs produced byte-identical `model.pt` and `training.pt`
+  for every segment. The checkpoint stream, sampler and training state differ
+  only in wall-clock `elapsed_seconds`. The GPU path is not byte-checked, because
+  CUDA kernels are not deterministic run to run, but the caches act only on CPU
+  stream work, which is the same on both paths.
+
+**Throughput** (same profile plan as above, on the RTX 5090):
+
+| | Validation fast path (overhead run) | Plus stream caches |
+| --- | ---: | ---: |
+| Runtime creation per segment | 5.1 s | 0.13 s |
+| Finalization per segment | 1.8 s | 0.03 s |
+| Segment wall (segment 2, unsynchronized) | 24.0 s | 14.4 s |
+| Decisions/s | 170.7 | 285.4 |
+
+That is about 4.5× the original 64 decisions/s. Training is now mostly the
+policy, PPO and validation spans.
+
 ## Evidence
 
 All of this is outside Git, under `artifacts/development/neural-combat/`:
@@ -185,6 +249,9 @@ All of this is outside Git, under `artifacts/development/neural-combat/`:
   The differential gave identical counts and agreement. The profile gave
   170.6 decisions/s in segment 2 (193.4 and 178.9 in the synchronized
   segments), with validation at 2.1 s.
+- `profile-gym-1.1.1-overhead-20261117/` holds the phase split and cProfile;
+  `profile-gym-1.1.1-caches-20261117/` holds the cached result;
+  `cache-equivalence-20261117/` holds the CPU byte-comparison runs and inputs.
 
 One profile run and one cProfile run, on a shared host with the co-resident GPU
 services running.

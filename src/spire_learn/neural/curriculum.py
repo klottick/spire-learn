@@ -8,6 +8,7 @@ policy tensors, RNG state, or historical case registry are retained here.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import fields
 import random
 import re
 
@@ -54,6 +55,20 @@ def _cycle_choice(cycle: tuple[str, ...], cursor: int, present: set[str]) -> tup
     raise ValueError("catalog has no represented curriculum family/kind")
 
 
+_CASE_FIELDS = tuple(field.name for field in fields(NeuralCase))
+
+
+def _case_fields(cases: tuple[NeuralCase, ...]) -> tuple[tuple[object, ...], ...]:
+    """The field objects themselves; holding them keeps identity comparison exact."""
+    return tuple(tuple(getattr(case, name) for name in _CASE_FIELDS) for case in cases)
+
+
+def _same_objects(now: tuple[tuple[object, ...], ...], then: tuple[tuple[object, ...], ...]) -> bool:
+    # A record rebound via object.__setattr__ holds a different object and revalidates.
+    return len(now) == len(then) and all(
+        len(a) == len(b) and all(x is y for x, y in zip(a, b)) for a, b in zip(now, then))
+
+
 class CurriculumSampler:
     """Allocate 70/20/10 families, then 50/30/20 lesson kinds, when present.
 
@@ -80,6 +95,8 @@ class CurriculumSampler:
                 or len(set(categories)) != len(categories)):
             raise ValueError("categories must be at most 256 unique declared lesson keys")
         self._distribution = distribution_sha256
+        self._validated_cases: tuple[NeuralCase, ...] | None = None
+        self._validated_fields: tuple[tuple[object, ...], ...] | None = None
         self._categories = tuple(categories)
         if not isinstance(annotations, Mapping) or not 1 <= len(annotations) <= 256:
             raise ValueError("annotations must describe 1..256 current catalog cases")
@@ -164,6 +181,16 @@ class CurriculumSampler:
 
     def validate_cases(self, cases: Sequence[NeuralCase]) -> None:
         """Reject catalog/annotation mismatches without consuming RNG or state."""
+        # A tuple of frozen NeuralCase records (entries frozen at construction) cannot
+        # change after it validates against these fixed annotations; skip the re-check.
+        if (type(cases) is tuple and cases is self._validated_cases
+                and _same_objects(_case_fields(cases), self._validated_fields)):
+            return
+        self._validate_cases(cases)
+        if type(cases) is tuple and all(type(case) is NeuralCase for case in cases):
+            self._validated_cases, self._validated_fields = cases, _case_fields(cases)
+
+    def _validate_cases(self, cases: Sequence[NeuralCase]) -> None:
         if (not _sequence(cases) or len(cases) != len(self._annotations)
                 or any(not isinstance(case, NeuralCase) for case in cases)
                 or len({case.case_id for case in cases}) != len(cases)

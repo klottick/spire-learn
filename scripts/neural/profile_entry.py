@@ -10,10 +10,12 @@ recorder. Checkpoints stay in the output; nothing here is a training result.
 from __future__ import annotations
 
 import argparse
+import cProfile
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 import json
 import os
+import pstats
 from pathlib import Path
 import sys
 import time
@@ -108,8 +110,16 @@ def _top(rows: Mapping[str, Mapping], wall: float) -> list[dict]:
             for name, value in sorted(seconds.items(), key=lambda item: -item[1])]
 
 
+def _cprofile_rows(profiler, limit: int = 60) -> list[dict]:
+    rows = []
+    for (filename, line, name), (_, calls, own, cumulative, _) in pstats.Stats(profiler).stats.items():
+        rows.append({'function': f'{Path(filename).name}:{line}:{name}', 'calls': calls,
+                     'own_seconds': round(own, 4), 'cumulative_seconds': round(cumulative, 4)})
+    return sorted(rows, key=lambda row: -row['cumulative_seconds'])[:limit]
+
+
 def run_profile(root: Path, plan_path: Path, output: Path, *, checkpoint: Path | None = None,
-                synchronized=DEFAULT_SYNCHRONIZED,
+                synchronized=DEFAULT_SYNCHRONIZED, cprofile_segment: int | None = None,
                 dependencies: Mapping[str, Callable] | None = None,
                 clock: Callable[[], float] = time.monotonic) -> dict:
     from scripts.neural.baseline_entry import _limits
@@ -138,22 +148,36 @@ def run_profile(root: Path, plan_path: Path, output: Path, *, checkpoint: Path |
             row: dict = {'segment': index, 'shard_index': shard_index, 'synchronized': sync}
             profile['segments'].append(row)
 
+            phases = row['phases'] = {}
+            timer = clock  # train() receives its own clock argument; phases use this one
+
             def create_runtime(*args, **kwargs):
-                runtime = deps['create_runtime'](*args, **kwargs)
+                begun = timer()
+                try:
+                    runtime = deps['create_runtime'](*args, **kwargs)
+                finally:
+                    phases['create_runtime_seconds'] = round(timer() - begun, 3)
                 row['device'] = str(runtime.config.device)
                 row['_timing'] = _recorder(runtime, sync)
                 return runtime
 
             def train(config, *, runtime, clock):
                 timing = row['_timing']
-                with ExitStack() as stack:
-                    row['not_instrumented'] = instrument(runtime, timing, stack)
-                    _encoding(timing, stack)
-                    with observe(timing):
-                        return deps['train'](config, runtime=runtime, clock=clock)
+                begun = timer()
+                try:
+                    with ExitStack() as stack:
+                        row['not_instrumented'] = instrument(runtime, timing, stack)
+                        _encoding(timing, stack)
+                        with observe(timing):
+                            return deps['train'](config, runtime=runtime, clock=clock)
+                finally:
+                    phases['train_seconds'] = round(timer() - begun, 3)
 
+            profiler = cProfile.Profile() if index == cprofile_segment else None
             started = clock()
             try:
+                if profiler is not None:
+                    profiler.enable()
                 result = deps['run_stream_segment'](
                     config, purpose=purpose, checkpoint=parent,
                     operation_limits=_limits(prefix, plan['segment'], clock() + 900),
@@ -161,6 +185,14 @@ def run_profile(root: Path, plan_path: Path, output: Path, *, checkpoint: Path |
             finally:
                 # A faulting segment still reports the time it spent and where.
                 wall = clock() - started
+                if profiler is not None:
+                    profiler.disable()
+                    try:
+                        row['cprofile_top_cumulative'] = _cprofile_rows(profiler)
+                    except Exception as error:  # never mask the segment's own outcome
+                        row['cprofile_error'] = f'{type(error).__name__}: {error}'
+                phases['after_train_seconds'] = round(
+                    wall - phases.get('create_runtime_seconds', 0) - phases.get('train_seconds', 0), 3)
                 timing = row.pop('_timing', None)
                 rows = timing.snapshot() if timing is not None else {}
                 row.update(wall_seconds=round(wall, 3), spans=rows, ranked=_top(rows, wall))
@@ -195,6 +227,8 @@ def main(argv=None) -> int:
     parser.add_argument('--plan', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--checkpoint', type=Path, help='fresh-initial checkpoint to warm-start from')
+    parser.add_argument('--cprofile-segment', type=int,
+                        help='also run cProfile over this segment index (slows that segment)')
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[2])
     arguments = parser.parse_args(argv)
     if not arguments.root.is_absolute() or not arguments.output.is_absolute():
@@ -204,7 +238,8 @@ def main(argv=None) -> int:
     if expected is not None and Path(expected).resolve() != arguments.output.resolve():
         print('output must match SPIRE_LEARN_RUNNER_OUTPUT', file=sys.stderr)
         return 2
-    profile = run_profile(arguments.root, arguments.plan, arguments.output, checkpoint=arguments.checkpoint)
+    profile = run_profile(arguments.root, arguments.plan, arguments.output, checkpoint=arguments.checkpoint,
+                          cprofile_segment=arguments.cprofile_segment)
     print(json.dumps({'status': profile['status'], 'segments': [
         {key: row.get(key) for key in ('segment', 'synchronized', 'wall_seconds', 'decisions_per_second')}
         for row in profile['segments']]}, sort_keys=True))

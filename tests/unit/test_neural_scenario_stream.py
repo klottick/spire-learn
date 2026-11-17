@@ -21,6 +21,9 @@ class ScenarioStreamTests(unittest.TestCase):
         except ModuleNotFoundError as exc:
             self.fail(f"scenario generation is not implemented: {exc}")
         self.recipe = self.stream.load_scenario_recipe(CONFIG / "recipe.json")
+        # Tests below patch generator internals; keep each test's shards its own.
+        self.stream._SHARD_CACHE.clear()
+        self.addCleanup(self.stream._SHARD_CACHE.clear)
 
     def shard(self, **kwargs):
         return self.stream.generate_scenario_shard(
@@ -238,6 +241,7 @@ class ScenarioStreamTests(unittest.TestCase):
 
         with patch.object(self.stream, "_rng", side_effect=same_first_training_deck), \
              patch.object(self.stream, "_composition_split", side_effect=observe_partition):
+            self.stream._SHARD_CACHE.clear()  # regenerate under the patched internals
             selection = self.shard(split="selection")
         self.assertTrue(rejected)
         self.assertNotIn(training_first, {

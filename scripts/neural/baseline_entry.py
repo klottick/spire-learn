@@ -85,8 +85,11 @@ def load_plan(path: Path) -> dict:
                 or any(type(wait[key]) is not int or wait[key] < 1 for key in wait)):
             raise ValueError('gpu_wait needs positive integer min_free_bytes, poll_seconds, max_total_seconds')
         # The outer runner kill must not pre-empt the summary after the longest allowed wait.
-        if plan.get('runner_timeout_seconds', 0) < plan['wall_seconds']['total'] + wait['max_total_seconds'] + 600:
-            raise ValueError('runner_timeout_seconds must cover the total wall plus the maximum GPU wait')
+        # One poll can overshoot the cap, and overrunning units share the remaining slack.
+        needed = plan['wall_seconds']['total'] + wait['max_total_seconds'] + wait['poll_seconds'] + 1200
+        if plan.get('runner_timeout_seconds', 0) < needed:
+            raise ValueError('runner_timeout_seconds must cover the total wall, the maximum GPU wait, '
+                             'one poll and 1200 s of slack')
     return plan
 
 
@@ -153,7 +156,8 @@ class _GpuGate:
     ``poll_seconds``. Waiting does not consume the wall budgets, but the total wait
     is capped by ``max_total_seconds``. After each unit of work the CUDA cache is
     released so other services can load into it. Without a ``gpu_wait`` plan entry,
-    or on a non-CUDA device, the gate does nothing.
+    or on a non-CUDA device, the gate does nothing. Memory taken by another service
+    in the middle of a unit can still fault that unit; faults are never retried.
     """
 
     def __init__(self, plan: Mapping, deps: Mapping, clock: Callable[[], float], journal, budget: _Budget):

@@ -37,7 +37,7 @@
     135168,
     270336
   ],
-  "runner_timeout_seconds": 36600,
+  "runner_timeout_seconds": 37800,
   "schema": "spire-learn-baseline-plan-v1",
   "segment": {
     "max_environment_actions": 4096,

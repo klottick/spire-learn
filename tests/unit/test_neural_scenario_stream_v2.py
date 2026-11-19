@@ -190,6 +190,49 @@ class ScenarioStreamV2Tests(unittest.TestCase):
         self.assertLess(low_share, base_share * 0.6)
         self.assertEqual(low_coverage, base_coverage)
 
+    def profiles_with(self, acts, **changes):
+        profiles = json_value(self.v2.prepared_profiles)
+        for act in acts:
+            for row in profiles[act].values():
+                row.update(changes)
+        return profiles
+
+    def test_profiles_whose_mandatory_part_exceeds_the_stage_are_rejected(self):
+        # Review repro: core_cards [12, 12] with no removals gave a 23-card early deck (maximum 15).
+        repro = self.profiles_with(("act1", "act2", "act3"), core_cards=[12, 12], starter_removals=0)
+        with self.assertRaisesRegex(ValueError, "maximum_size"):
+            replace(self.v2, prepared_profiles=repro)
+        support = (ROOT / "configs/neural/curriculum-v1/support.json").resolve()
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "recipe.json"
+            path.write_text(json.dumps({**json.loads(V2.read_text()), "support_file": str(support),
+                                        "prepared_profiles": repro}))
+            with self.assertRaisesRegex(ValueError, "maximum_size"):
+                stream.load_scenario_recipe(path)
+        # (10 - removals) + core maximum + 1 coverage card against each act's stage maximum.
+        # Early (maximum 15): 10 + 4 + 1 fits and 10 + 5 + 1 does not. Middle (24) and
+        # developed (35) always fit within the core_cards cap: 10 + 12 + 1 = 23.
+        replace(self.v2, prepared_profiles=self.profiles_with(("act1",), starter_removals=0, core_cards=[0, 4]))
+        with self.assertRaisesRegex(ValueError, "act1 profile cannot fit"):
+            replace(self.v2, prepared_profiles=self.profiles_with(
+                ("act1",), starter_removals=0, core_cards=[0, 5]))
+        replace(self.v2, prepared_profiles=self.profiles_with(
+            ("act2", "act3"), starter_removals=0, core_cards=[12, 12]))
+
+    def test_oversized_prepared_lesson_deck_is_an_error_not_an_entry(self):
+        # The mandatory part exactly fills the early stage; any act1 boss/elite lesson target overflows.
+        full = replace(self.v2, prepared_profiles=self.profiles_with(
+            ("act1",), starter_removals=3, core_cards=[7, 7]))
+        with self.assertRaisesRegex(ValueError, r"scenario entry \d+ \(\w+, train shard 0\).*maximum_size"):
+            stream._generate_scenario_shard(full, split="train", shard_index=0, arm="mixed")
+
+    def test_integer_and_float_tier_weights_hash_alike(self):
+        integers = replace(self.v2, tier_weights={tier: 1 for tier in self.v2.tier_weights})
+        self.assertEqual(integers.sha256, self.v2.sha256)
+        self.assertTrue(all(type(w) is float for w in integers.payload["tier_weights"].values()))
+        half = {**json_value(self.v2.tier_weights), "act3:boss": 0.5}
+        self.assertNotEqual(replace(self.v2, tier_weights=half).sha256, self.v2.sha256)
+
     def test_unit_tier_weights_keep_v1_kind_mix(self):
         def mix(recipe):
             kinds = Counter(a["encounter_tier"].split(":")[1]

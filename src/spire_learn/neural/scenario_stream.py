@@ -133,7 +133,7 @@ class ScenarioRecipe:
                 or any(not isinstance(by_kind, dict) or set(by_kind) != set(_PREPARED_KINDS)
                        for by_kind in profiles.values())):
             raise ValueError("prepared profiles must be keyed act1..act3 by boss/elite")
-        for by_kind in profiles.values():
+        for act, by_kind in profiles.items():
             for profile in by_kind.values():
                 if not isinstance(profile, dict) or set(profile) != {
                         "core_cards", "starter_removals", "upgrade_percent",
@@ -155,6 +155,10 @@ class ScenarioRecipe:
                 # Every core group must be drawable under these weights.
                 if any(sum(weights[cards[c]["rarity"]] for c in group) == 0 for group in core_groups):
                     raise ValueError("prepared rarity weights leave a core group undrawable")
+                # Remaining starters, the most core cards and the coverage card must fit the stage.
+                stage = self.stage_profiles[_STAGES[_PREPARED_ACTS.index(act)]]
+                if len(_STARTER) - profile["starter_removals"] + core[1] + 1 > stage["maximum_size"]:
+                    raise ValueError(f"prepared {act} profile cannot fit its stage maximum_size")
         object.__setattr__(self, "prepared_profiles", _freeze_json(profiles))
         tiers = {f"act{e['act']}:{e['kind']}" for e in self.support.encounters.values()}
         tier_weights = json_value(self.tier_weights)
@@ -164,6 +168,8 @@ class ScenarioRecipe:
             if (type(weight) not in (int, float) or not math.isfinite(weight)
                     or not 0 < weight <= 1):
                 raise ValueError("tier weights must be finite in (0, 1]")
+        # 1 and 1.0 are the same weight; give them the same payload and hash.
+        tier_weights = {tier: float(weight) for tier, weight in tier_weights.items()}
         object.__setattr__(self, "tier_weights", _freeze_json(tier_weights))
 
     @property
@@ -483,6 +489,11 @@ def _build_v2(recipe: ScenarioRecipe, split: str, shard_index: int, arm: str, si
                     deck = _prepared_deck(recipe, prepared, profile, deck_rng, targets,
                                           {"card": coverage_card, "upgrades": coverage_upgrade}
                                           if local < 38 else None)
+                    if len(deck) > profile["maximum_size"]:
+                        # Lesson targets can push past the validated mandatory part; never emit it.
+                        raise ValueError(f"prepared deck for scenario entry {local} ({encounter_id}, "
+                                         f"{split} shard {shard_index}) has {len(deck)} cards, over "
+                                         f"the {stage} maximum_size {profile['maximum_size']}")
                 else:
                     if family == "unusual":
                         deck = []

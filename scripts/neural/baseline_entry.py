@@ -78,6 +78,12 @@ def load_plan(path: Path) -> dict:
     target = plan.get('target_learned_decisions')
     if type(target) is not int or target < 1:
         raise ValueError('baseline plan needs a positive learned-decision target')
+    additional_panels = plan.get('additional_panels')
+    if additional_panels is not None and (
+            not isinstance(additional_panels, list)
+            or any(not isinstance(recipe, str) or not recipe.strip() for recipe in additional_panels)
+            or len(set(additional_panels)) != len(additional_panels)):
+        raise ValueError('additional_panels must be a list of unique non-empty recipe paths')
     wait = plan.get('gpu_wait')
     if wait is not None:
         if (not isinstance(wait, dict)
@@ -325,6 +331,21 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
                 for evaluation in summary['evaluations'].values():
                     if evaluation.get('status') == 'running':
                         evaluation['status'] = 'fault'  # partial rows kept; panel not complete
+            summary['additional_panels'] = {}
+            for index, extra_recipe in enumerate(plan.get('additional_panels', [])):
+                panel_result = {'evaluations': {}}
+                summary['additional_panels'][extra_recipe] = panel_result
+                panel_output = output / 'additional-panels' / f'panel-{index:02d}'
+                try:
+                    _evaluate(summary, deps, plan, template, root / extra_recipe, panel_output, budget,
+                              gate, clock, journal, storage_stop, result_container=panel_result,
+                              labels=('final', 'fresh-initial'))
+                except Exception as error:
+                    panel_result['fault'] = {'type': type(error).__name__, 'message': str(error)[:2000]}
+                    journal.write('additional_panel_fault', recipe=extra_recipe, **panel_result['fault'])
+                    for evaluation in panel_result['evaluations'].values():
+                        if evaluation.get('status') == 'running':
+                            evaluation['status'] = 'fault'
         else:
             summary['evaluation_skipped'] = summary['stop_reason']
         evaluated = summary['evaluations']
@@ -332,6 +353,10 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
                              and 'evaluation_fault' not in summary
                              and all(evaluated.get(row['label'], {}).get('status') == 'complete'
                                      for row in summary['checkpoints'])
+                             and all(
+                                 all(panel['evaluations'].get(label, {}).get('status') == 'complete'
+                                     for label in ('final', 'fresh-initial'))
+                                 for panel in summary.get('additional_panels', {}).values())
                              else 'incomplete')
     except BaseException as interrupt:
         # Process control (interrupt, exit) still publishes what is known, then propagates.
@@ -471,24 +496,27 @@ def _paired(fresh: Mapping[str, str], final: Mapping[str, str], *, total: int) -
 
 
 def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, clock, journal,
-              storage_stop) -> None:
+              storage_stop, *, result_container=None, labels=_EVALUATION_ORDER) -> None:
+    result_container = summary if result_container is None else result_container
+    evaluations = result_container.setdefault('evaluations', {})
+    output.mkdir(parents=True, exist_ok=True)
     panel = deps['build_panel'](deps['load_recipe'](recipe_path))
     with (output / 'development-panel.json').open('x') as stream:
         stream.write(json.dumps(_json(panel), sort_keys=True) + '\n')
     rows = _panel_configs(panel, template, output / 'panel', plan)
     labelled = {row['label']: row for row in summary['checkpoints']}
     outcomes: dict[str, dict[str, str]] = {}
-    for label in _EVALUATION_ORDER:
+    for label in labels:
         if label not in labelled:
             continue
         if clock() >= budget.total:
-            summary['evaluations'][label] = {'status': 'skipped_wall'}
+            evaluations[label] = {'status': 'skipped_wall'}
             continue
         checkpoint = Path(labelled[label]['path'])
         reports, cases, status = {}, {}, 'running'
         # Registered before the first case so exceptional exits still publish partial rows.
         evaluation = {'status': status, 'checkpoint': str(checkpoint), 'cases': cases, 'device': None}
-        summary['evaluations'][label] = evaluation
+        evaluations[label] = evaluation
         for row in rows:
             if clock() >= budget.total:
                 status = 'incomplete_wall'
@@ -541,7 +569,8 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, 
         if status != 'complete':
             break
     if 'fresh-initial' in outcomes and 'final' in outcomes:
-        summary['paired_fresh_vs_final'] = _paired(outcomes['fresh-initial'], outcomes['final'], total=len(rows))
+        result_container['paired_fresh_vs_final'] = _paired(
+            outcomes['fresh-initial'], outcomes['final'], total=len(rows))
 
 
 class _Stop(Exception):

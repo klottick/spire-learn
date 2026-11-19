@@ -23,8 +23,8 @@ V1_TRAIN_SHARD_37 = "8df900ac9a7ec8375c39628675ee799d8def93d445f0fe70bdc0cdcdf20
 V1_PANEL_MANIFEST = "435a236e60ac54f0b04f742b6d019023f49670c7730ba47545b73b23d2fb620e"
 
 # Pin of the shipped recipe; each deliberate tuning commit updates these literals.
-V2_RECIPE_SHA256 = "6a0d017d63fc610b3e19c764137db55fe1a756158213648edf360fdf1a31c260"
-V2_TRAIN_SHARD_0 = "cf63b338fb5953c06903bc3a883e941c1a063b639a20edece5bf265e26b26f60"
+V2_RECIPE_SHA256 = "1b4395ac736cdc15aa1c5b5ad7cac6f6660eedc9e61bc809273b6d1efa696900"
+V2_TRAIN_SHARD_0 = "571756d099aac1ccd619a61e59bbd4e5207643ee4a22d5020df12072d302b5c5"
 
 _STAGE_FOR_ACT = {1: "early", 2: "middle", 3: "developed", 4: "developed"}
 

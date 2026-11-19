@@ -151,8 +151,8 @@
     "act2": {
       "boss": {
         "core_cards": [
-          6,
-          9
+          2,
+          4
         ],
         "starter_removals": 7,
         "upgrade_percent": 90,
@@ -165,7 +165,7 @@
         "hp_floor_percent": 85,
         "deck_size": [
           12,
-          16
+          14
         ]
       },
       "elite": {
@@ -198,10 +198,10 @@
           "uncommon": 4,
           "rare": 5
         },
-        "hp_floor_percent": 90,
+        "hp_floor_percent": 100,
         "deck_size": [
-          12,
-          15
+          10,
+          13
         ]
       },
       "elite": {

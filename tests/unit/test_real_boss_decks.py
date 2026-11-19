@@ -183,6 +183,34 @@ class ExtractTests(unittest.TestCase):
                         real_boss_deck_table=json.loads(path.read_bytes()))
 
 
+class DeckChangingRelicTests(unittest.TestCase):
+    """Relics that change the deck without a record drop decks rebuilt before they were obtained."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.document, cls.stats = rbd.extract(ROOT / "tests/fixtures/neural/real-boss-runs-relics",
+                                              load_scenario_support(SUPPORT_PATH))
+
+    def kept(self):
+        return sorted((d["run_id"], d["floor"]) for d in self.document["decks"])
+
+    def test_mirror_bought_after_the_floor_drops_only_earlier_decks(self):
+        self.assertNotIn(("201", 33), self.kept())
+        self.assertIn(("201", 50), self.kept())
+
+    def test_whetstone_after_the_floor_drops_the_deck(self):
+        self.assertNotIn(("202", 33), self.kept())
+        self.assertNotIn(("202", 50), self.kept())
+
+    def test_relic_obtained_before_the_floor_keeps_the_deck(self):
+        self.assertIn(("203", 33), self.kept())
+        self.assertEqual(self.kept(), [("201", 50), ("203", 33)])
+
+    def test_drops_are_counted_separately(self):
+        self.assertEqual(self.stats["excluded_deck_changing_relic"], 3)
+        self.assertEqual(self.stats["excluded_untracked_boss_relic"], 0)
+
+
 class _Response(io.BytesIO):
     def __enter__(self):
         return self

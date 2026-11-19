@@ -53,8 +53,14 @@ RELIC_ALIASES = {'Paper Frog': 'paper_phrog', 'Champion Belt': 'champions_belt',
                  'Mark of the Bloom': 'mark_of_bloom'}
 # Neow's Lament only lasts three combats, so it is spent long before any boss floor.
 SPENT_RELICS = {'NeowsBlessing', "Neow's Lament"}
-# Boss relics that change the deck without a record in the run file.
-UNTRACKED_DECK_RELICS = {'Astrolabe', "Pandora's Box", 'Empty Cage', 'Calling Bell', 'Tiny House'}
+# Relics that add, copy, remove, transform or upgrade deck cards when obtained, with
+# no record of the change in the run file. A deck rebuilt before such a relic was
+# obtained cannot be recovered, so it is dropped. Boss relics (counted apart):
+UNTRACKED_DECK_BOSS_RELICS = {'Astrolabe', "Pandora's Box", 'Empty Cage', 'Calling Bell', 'Tiny House'}
+# Shop, chest/combat and event relics. Not listed, because their deck changes are
+# recorded or happen only in combat: Orrery (its picks are card_choices), the eggs
+# (they only upgrade later cards, whose picks are undone anyway) and Nilry's Codex.
+UNTRACKED_DECK_RELICS = {'DollysMirror', 'Whetstone', 'War Paint', 'Necronomicon'}
 CARD_EVENT_KEYS = ('cards_obtained', 'cards_removed', 'cards_transformed', 'cards_upgraded')
 
 
@@ -196,8 +202,13 @@ def relics_at(run: dict, floor: int) -> list[str]:
 
 
 def _untracked_deck_relic(run: dict, floor: int) -> bool:
-    return any(17 * (index + 1) >= floor and row.get('picked') in UNTRACKED_DECK_RELICS
+    return any(17 * (index + 1) >= floor and row.get('picked') in UNTRACKED_DECK_BOSS_RELICS
                for index, row in enumerate(run.get('boss_relics') or []))
+
+
+def _deck_changing_relic(run: dict, floor: int) -> bool:
+    """A non-boss relic with unrecorded deck changes, obtained on ``floor`` or later."""
+    return bool(_later_relics(run, floor) & UNTRACKED_DECK_RELICS)
 
 
 # ---------------------------------------------------------------- extract
@@ -237,6 +248,9 @@ def extract(raw_dir: Path, support: ScenarioSupport) -> tuple[dict, dict]:
             for at, encounter, deck_floor, name in fights:
                 if _untracked_deck_relic(run, deck_floor):
                     stats['excluded_untracked_boss_relic'] += 1
+                    continue
+                if _deck_changing_relic(run, deck_floor):
+                    stats['excluded_deck_changing_relic'] += 1
                     continue
                 deck, misses = deck_at(run, deck_floor)
                 stats['rebuild_misses'] += misses
@@ -290,7 +304,8 @@ def extract(raw_dir: Path, support: ScenarioSupport) -> tuple[dict, dict]:
         'unmapped_cards': dict(unmapped_cards.most_common()),
         'unmapped_relics': dict(unmapped_relics.most_common()),
         **{key: stats[key] for key in ('skipped_other_character', 'excluded_invalid',
-                                       'excluded_untracked_boss_relic', 'rebuild_misses',
+                                       'excluded_untracked_boss_relic',
+                                       'excluded_deck_changing_relic', 'rebuild_misses',
                                        'malformed_runs')},
         'decks': len(rows),
     }

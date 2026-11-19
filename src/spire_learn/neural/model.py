@@ -10,6 +10,7 @@ import math
 from typing import Any
 
 from spire_learn.contracts import ContractError
+from spire_learn.neural.config import OBJECTIVE_IDS, WINLOSS_OBJECTIVE_ID
 from spire_learn.neural.contracts import CombatFrame, ModelConfig
 from spire_learn.neural.features import EncodedBatch, FeatureContract, encode_frames, feature_contract
 from spire_learn.neural.schema import CombatSchema
@@ -17,7 +18,8 @@ from spire_learn.neural.schema import CombatSchema
 
 MODEL_ID = "spire-learn-combat-ff-v1"
 _ACTION_ID = "spire-learn-combat-dispatch-v1"
-_OBJECTIVE_ID = "spire-learn-combat-winloss-v1"
+# The default objective; callers pass the config's accepted objective ID otherwise.
+_OBJECTIVE_ID = WINLOSS_OBJECTIVE_ID
 _HARD_PARAMETER_CAP = 10_000_000
 
 
@@ -270,11 +272,18 @@ def build_policy(
     *,
     seed: int,
     device: str,
+    objective_id: str = _OBJECTIVE_ID,
 ) -> Any:
-    """Compile a capped shared candidate actor and public-state critic lazily."""
+    """Compile a capped shared candidate actor and public-state critic lazily.
+
+    ``objective_id`` labels the reward the policy is trained under; it does not
+    change the architecture, but checkpoints and rollouts carry and check it.
+    """
     plan = _compile_model_plan(schema, model_config)
     if type(seed) is not int:
         raise ContractError("policy seed must be a primitive integer")
+    if not isinstance(objective_id, str) or objective_id not in OBJECTIVE_IDS:
+        raise ContractError("policy objective_id must be a supported combat objective")
     if not isinstance(device, str) or not device:
         raise ContractError("policy device must be a non-empty string")
     import torch
@@ -304,7 +313,7 @@ def build_policy(
             self.model_id = MODEL_ID
             self.features_id = plan.feature_contract.features_id
             self.action_id = _ACTION_ID
-            self.objective_id = _OBJECTIVE_ID
+            self.objective_id = objective_id
 
             self.category_embeddings = torch.nn.ModuleDict()
             for (group, field_index), vocabulary_size in plan.category_sizes.items():

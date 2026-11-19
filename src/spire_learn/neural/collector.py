@@ -24,7 +24,7 @@ from spire_learn.neural.contracts import (
     StepRecord,
 )
 from spire_learn.neural.envs import DriverFault, DriverRow, DriverTransition
-from spire_learn.neural.returns import task_signal
+from spire_learn.neural.returns import shaped_reward, task_signal
 
 
 _TRAIN_SEED_POLICY = "environment-seed-for-replica0-v1"
@@ -156,6 +156,14 @@ class Collector:
             )
             if len(identities) != 1:
                 raise ContractError("reference policy requires one configured transport identity")
+
+        # Win/loss (no [objective] table) never reads frames for reward.
+        self._objective = config.objective
+        self._shaping_schema = None
+        if self._objective is not None:
+            self._shaping_schema = getattr(driver, "schema", None)
+            if self._shaping_schema is None:
+                raise ContractError("hp-shaped objective requires the driver's public combat schema")
 
         self.driver = driver
         self.policy = policy
@@ -691,6 +699,13 @@ class Collector:
                 terminated=result.terminated,
                 truncated=result.truncated,
             )
+            if self._objective is not None:
+                # Shaping changes only the reward; boundary flags stay as derived.
+                signal = replace(signal, reward=shaped_reward(
+                    signal.reward, result.source.frame, result.successor.frame,
+                    terminal=signal.task_terminal, gamma=self.config.ppo.gamma,
+                    beta=self._objective.coefficient, schema=self._shaping_schema,
+                ))
             task_id = self._task_id(slot, source)
             decision_id = f"decision-{self._decision_ordinals[slot]}"
             learned = self._learned_combat_policy and slot in policy_slots

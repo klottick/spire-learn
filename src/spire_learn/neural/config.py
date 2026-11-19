@@ -48,6 +48,10 @@ LEARNER_IDENTITY_IDS = (
     "spire-learn-combat-dispatch-v1",
     "spire-learn-combat-winloss-v1",
 )
+WINLOSS_OBJECTIVE_ID = LEARNER_IDENTITY_IDS[3]
+# Win/loss plus a potential-based enemy-HP term; requires the [objective] table.
+HP_SHAPED_OBJECTIVE_ID = "spire-learn-combat-winloss-hpshaped-v1"
+OBJECTIVE_IDS = (WINLOSS_OBJECTIVE_ID, HP_SHAPED_OBJECTIVE_ID)
 _SHA256 = re.compile(r"[0-9a-fA-F]{64}\Z")
 _DEVICE = re.compile(r"(?:cpu|cuda:0)\Z")
 _CALIBRATION_GPU_UUID = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"
@@ -102,6 +106,26 @@ class SeedStreams:
 
 
 @dataclass(frozen=True)
+class HpShapedObjective:
+    """Potential-based enemy-HP shaping coefficient; gamma is the PPO discount."""
+
+    coefficient: float
+
+    def __post_init__(self) -> None:
+        value = self.coefficient
+        if type(value) not in (int, float) or not math.isfinite(value) or not 0 < value <= 1:
+            raise ValueError("objective.coefficient must be a finite number in (0, 1]")
+        object.__setattr__(self, "coefficient", float(value))
+
+
+def _objective(raw: object) -> HpShapedObjective:
+    table = _exact_keys(raw, {"kind", "coefficient"}, "objective")
+    if table["kind"] != "hp_shaped":
+        raise ValueError('objective.kind must be "hp_shaped"')
+    return HpShapedObjective(coefficient=table["coefficient"])
+
+
+@dataclass(frozen=True)
 class NeuralBudget:
     max_optimizer_steps: int
     max_training_decisions: int
@@ -148,6 +172,8 @@ class NeuralConfig:
     runtime_gpu_uuid: str | None = None
     scenario_stream: Mapping[str, object] | None = None
     workers: int = 1
+    # None is the win/loss objective; configs without [objective] keep it.
+    objective: HpShapedObjective | None = None
 
 
 def _stream_runtime_projection(config: NeuralConfig) -> dict[str, object]:
@@ -197,8 +223,8 @@ def _identity(raw: object, *, model_hash: str, ppo_hash: str, contract: GymContr
         accepted_raw_mode_mappings=mappings,
         config_hashes=hashes,
     )
-    if (identity.model_id, identity.features_id, identity.action_id, identity.objective_id
-            ) != LEARNER_IDENTITY_IDS:
+    if ((identity.model_id, identity.features_id, identity.action_id) != LEARNER_IDENTITY_IDS[:3]
+            or identity.objective_id not in OBJECTIVE_IDS):
         raise ValueError("identity must use the supported combat learner model/features/action/objective IDs")
     return identity
 
@@ -234,6 +260,8 @@ def load_neural_config(path: Path) -> NeuralConfig:
     expected_root = set(required)
     if isinstance(raw, dict) and "scenario_stream" in raw:
         expected_root.add("scenario_stream")
+    if isinstance(raw, dict) and "objective" in raw:
+        expected_root.add("objective")
     if isinstance(raw, dict) and raw.get("operation") == "calibrate":
         expected_root.add("calibration")
     elif isinstance(raw, dict) and raw.get("device") == "cuda:0":
@@ -403,6 +431,12 @@ def load_neural_config(path: Path) -> NeuralConfig:
     ]
     if len(set(identity_keys)) != len(identity_keys):
         raise ValueError("duplicate accepted identity")
+    objective = _objective(raw["objective"]) if "objective" in raw else None
+    expected_objective_id = WINLOSS_OBJECTIVE_ID if objective is None else HP_SHAPED_OBJECTIVE_ID
+    if any(identity.objective_id != expected_objective_id for identity in identities):
+        raise ValueError(
+            "the hp-shaped objective ID requires the [objective] table, and the table requires that ID"
+        )
 
     manifest_raw = raw["manifest_path"]
     output_raw = raw["output_root"]
@@ -475,6 +509,7 @@ def load_neural_config(path: Path) -> NeuralConfig:
         runtime_gpu_uuid=runtime_gpu_uuid,
         scenario_stream=scenario_stream,
         workers=workers,
+        objective=objective,
     )
     if scenario_stream is not None:
         # Bind only after this parser has accepted and normalized every setting.
@@ -489,6 +524,8 @@ __all__ = [
     "ACCEPTED_GYM_REVISION",
     "ACCEPTED_RUNTIME_GYM_REVISIONS",
     "FIXED_GYM_REVISION",
+    "HP_SHAPED_OBJECTIVE_ID",
+    "HpShapedObjective",
     "COMMON_VIEW_FINGERPRINT",
     "COMMON_VIEW_ID",
     "NeuralBudget",
@@ -499,6 +536,7 @@ __all__ = [
     "RUN_PROFILE_ID",
     "RUN_REPLAY_VERSION",
     "SeedStreams",
+    "WINLOSS_OBJECTIVE_ID",
     "load_neural_config",
     "mode_family",
 ]

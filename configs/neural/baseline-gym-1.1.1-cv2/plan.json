@@ -1,0 +1,55 @@
+{
+  "additional_panels": [
+    "configs/neural/curriculum-v1/recipe.json"
+  ],
+  "arm": "mixed",
+  "baseline_id": "baseline-gym-1.1.1-cv2-20261119",
+  "evaluation": {
+    "action_selection": "deterministic",
+    "case_actions": 256,
+    "case_seconds": 30
+  },
+  "gpu_wait": {
+    "max_total_seconds": 21600,
+    "min_free_bytes": 13958643712,
+    "poll_seconds": 30
+  },
+  "gym_revision": "e3c13836bd1458be8a87b93160f5c350f78fcd80",
+  "max_new_output_bytes": 12884901888,
+  "notes": [
+    "runner_timeout_seconds exceeds wall_seconds.total plus the maximum GPU wait, one poll and slack so the entry can publish summary.json",
+    "retention labels checkpoints; nothing is deleted",
+    "panel evaluation runs on cuda:0; record this when comparing",
+    "curriculum v2 training with curriculum v1 development panel for a paired curriculum comparison",
+    "GPU wait follows the shared-host gate used by replicate 2"
+  ],
+  "qualification": {
+    "max_environment_actions": 512,
+    "max_updates": 1
+  },
+  "qualifications": [
+    "RNG-001",
+    "TIME-001",
+    "standalone Ironclad only",
+    "one replicate",
+    "simulator only; no original-game transfer claim",
+    "not comparable with panel scores from earlier Gym builds (rules epoch gym-1.1.1)"
+  ],
+  "recipe": "configs/neural/curriculum-v2/recipe.json",
+  "retain_near_decisions": [
+    135168,
+    270336
+  ],
+  "runner_timeout_seconds": 37800,
+  "schema": "spire-learn-baseline-plan-v1",
+  "segment": {
+    "max_environment_actions": 4096,
+    "max_updates": 8
+  },
+  "target_learned_decisions": 405504,
+  "template": "configs/neural/baseline-gym-1.1.1-cv2/template.toml",
+  "wall_seconds": {
+    "total": 14400,
+    "training": 12600
+  }
+}

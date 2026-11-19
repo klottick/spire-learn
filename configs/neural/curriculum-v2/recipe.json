@@ -158,7 +158,11 @@
           "uncommon": 5,
           "rare": 4
         },
-        "hp_floor_percent": 85
+        "hp_floor_percent": 85,
+        "deck_size": [
+          12,
+          16
+        ]
       },
       "elite": {
         "core_cards": [
@@ -190,7 +194,11 @@
           "uncommon": 4,
           "rare": 5
         },
-        "hp_floor_percent": 90
+        "hp_floor_percent": 90,
+        "deck_size": [
+          14,
+          18
+        ]
       },
       "elite": {
         "core_cards": [

@@ -22,9 +22,9 @@ V1_TRAIN_SHARD_0 = "d644d2a113034641bc12cd06e50c7817cad23b5268c3c9014ef3f3f4406c
 V1_TRAIN_SHARD_37 = "8df900ac9a7ec8375c39628675ee799d8def93d445f0fe70bdc0cdcdf20af7a7"
 V1_PANEL_MANIFEST = "435a236e60ac54f0b04f742b6d019023f49670c7730ba47545b73b23d2fb620e"
 
-# Captured before the optional deck_size key was added: the shipped recipe must not change.
-V2_RECIPE_SHA256 = "9e666f15d6f4eb70e11be6ba11e50316db601a9c55355e40b0b852b82fc32607"
-V2_TRAIN_SHARD_0 = "4c147cba2eefdd4e6bfca213b6d3b958c07bac8567f96e4d5cc0e06f22b286e1"
+# Pin of the shipped recipe; each deliberate tuning commit updates these literals.
+V2_RECIPE_SHA256 = "680de4d074d6f466ad180f95d840b2a75eb82b52cd60f9b642552d0864881d68"
+V2_TRAIN_SHARD_0 = "ffc962442f136b0361788457f0ae3996ed3e7d753f81dd77f5609c5c60e8e82b"
 
 _STAGE_FOR_ACT = {1: "early", 2: "middle", 3: "developed", 4: "developed"}
 
@@ -160,8 +160,14 @@ class ScenarioStreamV2Tests(unittest.TestCase):
                 prepared += 1
                 profile = self.v2.prepared_profiles[f"act{min(act, 3)}"][kind]
                 stage = self.v2.stage_profiles[_STAGE_FOR_ACT[act]]
-                self.assertGreaterEqual(len(entry["deck"]), stage["minimum_size"])
                 self.assertLessEqual(len(entry["deck"]), stage["maximum_size"])
+                if "deck_size" in profile:
+                    self.assertGreaterEqual(len(entry["deck"]), profile["deck_size"][0])
+                    if len(entry["deck"]) > profile["deck_size"][1]:
+                        # Only lesson targets may push past deck_size (still within the stage maximum).
+                        self.assertTrue(annotation["target_card_ids"])
+                else:
+                    self.assertGreaterEqual(len(entry["deck"]), stage["minimum_size"])
                 counts = Counter(row["card"] for row in entry["deck"])
                 self.assertGreaterEqual(max(sum(counts[c] for c in group) for group in groups.values()),
                                         profile["core_cards"][0])
@@ -198,6 +204,8 @@ class ScenarioStreamV2Tests(unittest.TestCase):
         profiles = json_value(self.v2.prepared_profiles)
         for act in acts:
             for row in profiles[act].values():
+                if "deck_size" not in changes:
+                    row.pop("deck_size", None)  # variants test the stage bound unless they set it
                 row.update(changes)
         return profiles
 

@@ -29,7 +29,7 @@ from spire_learn.neural.checkpoint import (
     save_checkpoint,
 )
 from spire_learn.neural.collector import Collector, CollectorRecovery
-from spire_learn.neural.config import NeuralConfig, mode_family
+from spire_learn.neural.config import WINLOSS_OBJECTIVE_ID, NeuralConfig, mode_family
 from spire_learn.neural.contracts import (
     CollectionDiagnostics,
     CombatFrame,
@@ -2200,9 +2200,15 @@ def create_runtime(
             policy_generator = random.Random(config.seed_streams.policy)
         else:
             assert torch is not None
+            # The policy follows the config's accepted objective; win/loss keeps
+            # the historical call exactly.
+            objective_kwargs = (
+                {} if selected_identity.objective_id == WINLOSS_OBJECTIVE_ID
+                else {"objective_id": selected_identity.objective_id}
+            )
             policy = build_policy(
                 driver.schema, config.model, seed=config.seed_streams.policy,
-                device=device_plan.device,
+                device=device_plan.device, **objective_kwargs,
             )
             if loaded is not None:
                 policy.load_state_dict(dict(loaded.model_tensors), strict=True)

@@ -7,7 +7,15 @@ from collections.abc import Sequence
 import math
 
 from spire_learn.contracts import ContractError
-from spire_learn.neural.contracts import Lifecycle, ReturnBatch, StepRecord, TaskSignal
+from spire_learn.neural.contracts import (
+    BufferArray,
+    CombatFrame,
+    Lifecycle,
+    ReturnBatch,
+    StepRecord,
+    TaskSignal,
+)
+from spire_learn.neural.schema import TensorSpec, _unpack
 
 
 _NATURAL_OUTCOMES = {"victory": 1.0, "death": -1.0, "escaped": 0.0}
@@ -68,6 +76,83 @@ def task_signal(
     if truncated:
         return TaskSignal(0.0, False, True, False)
     return TaskSignal(0.0, False, True, True)
+
+
+def _enemy_tensor(frame: CombatFrame, key: str | None, spec_shape: tuple[int, ...],
+                  dtype: str) -> tuple[int, ...]:
+    array = frame.tensors.get(key) if key is not None else None
+    if not isinstance(array, BufferArray) or array.dtype != dtype or array.shape != spec_shape:
+        raise ContractError(f"hp shaping requires the public {key} tensor")
+    return _unpack(array)
+
+
+def hp_potential(frame: CombatFrame, schema: object) -> float:
+    """Return minus the summed enemy HP fraction of a public combat frame.
+
+    Only occupied ``enemies`` rows whose ``hp`` and ``max_hp`` cells are both
+    known and whose ``max_hp`` is positive count. Columns are located by their
+    descriptor field names. With no qualifying row the potential is zero.
+    """
+    if not isinstance(frame, CombatFrame):
+        raise ContractError("hp_potential requires a public CombatFrame")
+    tensors = getattr(schema, "tensors", None)
+    spec = tensors.get("enemies") if hasattr(tensors, "get") else None
+    if (not isinstance(spec, TensorSpec) or len(spec.shape) != 2 or spec.known_key is None
+            or spec.occupied_key is None):
+        raise ContractError("hp shaping requires the descriptor enemies row tensor")
+    if frame.schema_fingerprint != getattr(schema, "schema_fingerprint", frame.schema_fingerprint):
+        raise ContractError("frame schema fingerprint does not match the shaping schema")
+    fields = tuple(column.field for column in spec.columns)
+    if "hp" not in fields or "max_hp" not in fields:
+        raise ContractError("hp shaping requires enemies hp and max_hp columns")
+    hp_index, max_index = fields.index("hp"), fields.index("max_hp")
+    rows, columns = spec.shape
+    values = _enemy_tensor(frame, "enemies", spec.shape, "int64")
+    known = _enemy_tensor(frame, spec.known_key, spec.shape, "int8")
+    occupied = _enemy_tensor(frame, spec.occupied_key, (rows,), "int8")
+    hp_total = 0
+    max_total = 0
+    for row in range(rows):
+        if occupied[row] != 1:
+            continue
+        hp_cell, max_cell = row * columns + hp_index, row * columns + max_index
+        if known[hp_cell] != 1 or known[max_cell] != 1:
+            continue
+        maximum = values[max_cell]
+        if maximum <= 0:
+            continue
+        hp_total += values[hp_cell]
+        max_total += maximum
+    if max_total == 0:
+        return 0.0
+    return -(hp_total / max_total)
+
+
+def shaped_reward(
+    reward: float,
+    source_frame: CombatFrame,
+    successor_frame: CombatFrame,
+    *,
+    terminal: bool,
+    gamma: float,
+    beta: float,
+    schema: object,
+) -> float:
+    """Add ``beta * (gamma * phi(successor) - phi(source))`` to a task reward.
+
+    The successor potential is zero at a task terminal. Source and successor
+    are one transition's own frames, so shaping never spans a reset.
+    """
+    if type(reward) not in (int, float) or not math.isfinite(reward):
+        raise ValueError("reward must be a finite number")
+    if type(terminal) is not bool:
+        raise ValueError("terminal must be a boolean")
+    gamma_value = _parameter(gamma, "gamma")
+    if type(beta) not in (int, float) or not math.isfinite(beta) or not 0 < beta <= 1:
+        raise ValueError("beta must be a finite number in (0, 1]")
+    successor = 0.0 if terminal else hp_potential(successor_frame, schema)
+    source = hp_potential(source_frame, schema)
+    return float(reward) + float(beta) * (gamma_value * successor - source)
 
 
 def _parameter(value: object, name: str) -> float:
@@ -164,4 +249,4 @@ def compute_gae(
                        tuple(row.decision_id for row in rows))
 
 
-__all__ = ["compute_gae", "task_signal"]
+__all__ = ["compute_gae", "hp_potential", "shaped_reward", "task_signal"]

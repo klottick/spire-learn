@@ -332,6 +332,27 @@ class BaselineEntryTests(unittest.TestCase):
                 cv2_template = (ROOT / cv2["template"]).read_text()
                 self.assertEqual(cv2_template, existing_template)
 
+    def test_cv2_hp_plans_differ_from_cv2_only_in_objective_and_baseline_id(self):
+        for suffix in ("", "-r2"):
+            with self.subTest(replicate=suffix):
+                cv2 = baseline_entry.load_plan(ROOT / f"configs/neural/baseline-gym-1.1.1-cv2{suffix}/plan.json")
+                hp = baseline_entry.load_plan(ROOT / f"configs/neural/baseline-gym-1.1.1-cv2-hp{suffix}/plan.json")
+                own = {"baseline_id", "template"}
+                self.assertEqual({k: v for k, v in hp.items() if k not in own},
+                                 {k: v for k, v in cv2.items() if k not in own})
+                self.assertEqual(hp["baseline_id"], f"baseline-gym-1.1.1-cv2-hp{suffix}-20261119")
+                self.assertEqual(hp["template"],
+                                 f"configs/neural/baseline-gym-1.1.1-cv2-hp{suffix}/template.toml")
+                cv2_template = (ROOT / cv2["template"]).read_text()
+                hp_template = (ROOT / hp["template"]).read_text()
+                winloss = 'objective_id = "spire-learn-combat-winloss-v1"'
+                self.assertEqual(cv2_template.count(winloss), 1)
+                self.assertEqual(
+                    hp_template,
+                    cv2_template.replace(
+                        winloss, 'objective_id = "spire-learn-combat-winloss-hpshaped-v1"')
+                    + '\n[objective]\nkind = "hp_shaped"\ncoefficient = 0.5\n')
+
 
     def test_v1_1_1_envs64_arm_changes_only_the_rollout_width(self):
         plan = baseline_entry.load_plan(ROOT / "configs/neural/baseline-gym-1.1.1-envs64/plan.json")

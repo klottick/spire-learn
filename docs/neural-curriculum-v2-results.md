@@ -151,8 +151,8 @@ decks, all from learner `2e8ad0d`.
   were re-evaluated with `--reevaluate`, without retraining, into
   `…-r2-20261119-reeval/`.
 - All runs ended `target_reached` with `learner_changed: false`. Training waited
-  for the shared GPU for 240–810 s per run. Training took 1,960–2,542 s of
-  elapsed time, and waiting does not count against the wall budget.
+  for the shared GPU for 240–810 s per run. Elapsed time to the end of
+  training, including those waits, was 1,960–2,542 s.
 
 **Panel wins.** Untrained-to-final wins on each panel, out of 64; the
 fresh-vs-final columns are fresh-only / final-only cases and the exact McNemar p.
@@ -179,8 +179,8 @@ matched seeds:
   consistent direction.
 - **Curriculum v2 vs v1 on the v1 panel**, comparing cv2 against each baseline
   with matching seeds. r1: v1-only 2, cv2-only 4 (p = 0.69). r2: 4 vs 2
-  (p = 0.69). No difference: the v1-panel scores stay at the level the v1
-  baselines reached, near that panel's search ceiling.
+  (p = 0.69). No significant difference: the v1-panel scores (36–41) stay at
+  the level the v1 baselines reached (38–39), around that panel's search ceiling.
 - **Replicate agreement on the v2 panel.** cv2 vs cv2-r2: 5 vs 3. cv2-hp vs
   cv2-hp-r2: 3 vs 5.
 
@@ -193,7 +193,13 @@ matched seeds:
 | cv2-hp | 5/6 | 5/6 | 0/6 | 4/6 | 0/6 | 1/4 | 0/1 |
 | cv2-hp-r2 | 5/6 | 6/6 | 0/6 | 2/6 | 0/6 | 1/4 | 1/1 |
 
-**Training-time boss wins**, from segments 66–98 of each training stream:
+**Training-time boss wins** over the last third of each training stream: prepared
+shards `train-66` to `train-98`, from each segment's standalone fight outcomes.
+Tiers are assigned by encounter: act 1 slime_boss/guardian/hexaghost, act 2
+bronze_automaton/collector/champ, act 3 awakened_one/donu_and_deca/time_eater,
+act 4 corrupt_heart. These are sampled-policy rates on different deck
+distributions: v2 boss fights use real winning decks. So they measure how often
+boss fights produce wins to learn from, not policy strength.
 
 | Run | Act 1 boss | Act 2 boss | Act 3 boss | Act 4 boss |
 | --- | ---: | ---: | ---: | ---: |
@@ -204,17 +210,19 @@ matched seeds:
 | cv2-hp-r2 | 167/321 (52%) | 45/326 (14%) | 24/343 (7%) | 0/43 |
 
 **Reading.**
-- **Bosses now teach something.** Curriculum v2's goal was to make boss fights
-  give a learning signal. In training, act 1 boss wins roughly double and act 2
-  and 3 bosses go from almost never to sometimes won. Under curriculum v1, act 3
-  bosses had 0 wins in 1,033 training fights.
+- **Boss fights now yield wins to learn from.** That was curriculum v2's goal.
+  In training, act 1 boss wins roughly double, and act 2 and 3 boss wins rise
+  about 5 to 10 times, from near zero. Curriculum v1 baseline r1 had 0 act 3 boss
+  wins in 1,033 training fights; r2 had 1 in 1,069. This shows the signal
+  exists, not that the policy is stronger.
 - **The panels move less.** On the v2 panel, act 2 and act 3 bosses are still
   won 0–1 of 6 at the end of training. On the v1 panel, curriculum v2 neither
   helps nor hurts.
-- **Shaping is a possible gain.** The HP-shaped objective is consistently
-  slightly higher on the v2 panel in both seed pairs, but not significantly.
+- **Shaping is a possible gain.** The HP-shaped objective is slightly higher on
+  the v2 panel in both seed pairs (p = 0.73 and 0.11), but not on the v1 panel.
   More replicates would be needed to tell.
-- **Both objectives learn far beyond the fresh policy** on both panels.
+- **Both objectives learn far beyond the fresh policy** on both panels, as the
+  v1 baselines also did.
 
 ## Limits
 

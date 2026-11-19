@@ -116,17 +116,21 @@
       "boss": {
         "core_cards": [
           2,
-          4
+          3
         ],
-        "starter_removals": 3,
-        "upgrade_percent": 40,
+        "starter_removals": 5,
+        "upgrade_percent": 70,
         "rarity_weights": {
           "starter": 0,
-          "common": 5,
-          "uncommon": 4,
-          "rare": 1
+          "common": 3,
+          "uncommon": 5,
+          "rare": 2
         },
-        "hp_floor_percent": 65
+        "hp_floor_percent": 80,
+        "deck_size": [
+          10,
+          12
+        ]
       },
       "elite": {
         "core_cards": [
@@ -150,15 +154,19 @@
           3,
           5
         ],
-        "starter_removals": 4,
-        "upgrade_percent": 60,
+        "starter_removals": 7,
+        "upgrade_percent": 90,
         "rarity_weights": {
           "starter": 0,
-          "common": 4,
-          "uncommon": 4,
-          "rare": 2
+          "common": 1,
+          "uncommon": 5,
+          "rare": 4
         },
-        "hp_floor_percent": 70
+        "hp_floor_percent": 85,
+        "deck_size": [
+          12,
+          16
+        ]
       },
       "elite": {
         "core_cards": [
@@ -179,18 +187,22 @@
     "act3": {
       "boss": {
         "core_cards": [
-          5,
-          8
+          2,
+          4
         ],
-        "starter_removals": 6,
-        "upgrade_percent": 80,
+        "starter_removals": 9,
+        "upgrade_percent": 100,
         "rarity_weights": {
           "starter": 0,
-          "common": 3,
-          "uncommon": 5,
-          "rare": 3
+          "common": 1,
+          "uncommon": 4,
+          "rare": 5
         },
-        "hp_floor_percent": 75
+        "hp_floor_percent": 100,
+        "deck_size": [
+          12,
+          15
+        ]
       },
       "elite": {
         "core_cards": [
@@ -221,5 +233,10 @@
     "act3:monster": 1.0,
     "act4:boss": 1.0,
     "act4:elite": 1.0
+  },
+  "real_boss_decks": {
+    "path": "../../../artifacts/development/neural-combat/real-boss-decks/real-boss-decks.json",
+    "sha256": "fd28ab417875fb80955076d55e9cdb84583b2aadcaca5d615b7a1df8c7c7526a",
+    "tiers": ["act2:boss", "act3:boss"]
   }
 }

@@ -1,0 +1,13 @@
+{
+  "_note": "Hand-authored synthetic run for tests; another character, so it is ignored.",
+  "character_chosen": "THE_SILENT",
+  "ascension_level": 20,
+  "floor_reached": 33,
+  "victory": false,
+  "killed_by": "Champ",
+  "master_deck": ["Strike_G", "Defend_G", "Neutralize"],
+  "relics": ["Ring of the Snake"],
+  "damage_taken": [{"floor": 33, "enemies": "Champ", "damage": 50, "turns": 7}],
+  "current_hp_per_floor": [],
+  "max_hp_per_floor": []
+}

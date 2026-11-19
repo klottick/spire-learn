@@ -164,6 +164,22 @@ def _run(fakes, *, clock=None, plan_path=PLAN, dependencies=None):
 GIB = 2**30
 
 
+def _budget_exhausted():
+    """A clean fixed-case budget exhaustion, shaped like the gym-1.1.1 cv2 fresh-initial report."""
+    return SimpleNamespace(exit_code=1, run_dir=None, summary={
+        "status": "incomplete", "stop_reason": "fixed_case_budget_incomplete", "fault": None,
+        "exit_code": 1, "mode": "standalone",
+        "case_accounting": {"cases": [{"case_id": "dev-x", "status": "incomplete"}],
+                            "complete": 0, "incomplete": 1},
+        "collection": {"fault": None, "faults": 0, "uncertain_environment_slots": 0,
+                       "stop_reason": "environment_action_budget"},
+        "fights": {"standalone_fights": {"reached_combat_denominator": 1, "completed": 0,
+                                         "victories": 0, "deaths": 0, "escaped": 0, "fights": []}},
+        "lifecycle": {"schema_id": "spire-learn-neural-lifecycle-v1", "status": "incomplete",
+                      "exit_code": 1, "close_errors": []},
+    })
+
+
 def _gpu_run(fakes, free, *, max_wait=14400, clock=None, additional_panels=None):
     """Run with a CUDA config and a gpu_wait plan; ``free(call)`` scripts free bytes."""
     clock = clock or _Clock()
@@ -743,6 +759,68 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertEqual(paired["excluded_censored"], 1)
         self.assertEqual(paired["excluded_failed_invalid_or_missing"], 0)
         self.assertEqual(paired["final_only_win"], 2)
+
+    def test_clean_case_budget_exhaustion_is_censored_and_evaluation_continues(self):
+        fakes = _Fakes(decisions_per_segment=4096, panel_cases=3)
+        original = fakes.evaluate
+
+        def censor_fresh_second_case(config, **kwargs):
+            report = original(config, **kwargs)
+            # Final runs cases 1-3; fresh-initial runs 4-6; its second case exhausts the case budget.
+            return _budget_exhausted() if len(fakes.evaluated) == 5 else report
+
+        fakes.evaluate = censor_fresh_second_case
+        summary, events, _ = _run(fakes)
+        fresh = summary["evaluations"]["fresh-initial"]
+        self.assertEqual(fresh["status"], "complete")
+        self.assertEqual(fresh["cases_evaluated"], 3)
+        self.assertEqual(fresh["cases"]["dev-1"]["outcome"], "incomplete")
+        self.assertEqual(len(fakes.evaluated), 12)  # every label still evaluated every case
+        paired = summary["paired_fresh_vs_final"]
+        self.assertEqual((paired["paired_cases"], paired["excluded_censored"],
+                          paired["excluded_failed_invalid_or_missing"]), (2, 1, 0))
+        self.assertEqual(summary["result"], "complete")
+
+    def test_unclean_incomplete_reports_still_fail(self):
+        variants = {
+            "fault": lambda s: s.update(fault={"type": "RuntimeError", "message": "boom"}),
+            "other stop reason": lambda s: s.update(stop_reason="wall_budget"),
+            "missing stop reason": lambda s: s.pop("stop_reason"),
+            "close error": lambda s: s["lifecycle"].update(close_errors=[{"type": "OSError"}]),
+            "lifecycle operation error": lambda s: s["lifecycle"].update(operation_error={"type": "X"}),
+            "lifecycle not incomplete": lambda s: s["lifecycle"].update(status="operational_failure"),
+            "lifecycle receipt pending": lambda s: s["lifecycle"].update(status="receipt_pending"),
+            "receipt write error": lambda s: s.update(lifecycle_receipt_error={"type": "OSError"}),
+            "collection fault": lambda s: s["collection"].update(fault={"type": "X"}, faults=1),
+            "uncertain slots": lambda s: s["collection"].update(uncertain_environment_slots=1),
+            "status not incomplete": lambda s: s.update(status="operational_failure"),
+        }
+        for name, mutate in variants.items():
+            with self.subTest(name):
+                report = _budget_exhausted()
+                mutate(report.summary)
+                self.assertEqual(baseline_entry._case_outcome(report), "failed")
+        self.assertEqual(baseline_entry._case_outcome(_budget_exhausted()), "incomplete")
+
+    def test_faulted_incomplete_case_stops_as_operational_failure(self):
+        fakes = _Fakes(decisions_per_segment=4096, panel_cases=3)
+        original = fakes.evaluate
+
+        def faulted_second_case(config, **kwargs):
+            report = original(config, **kwargs)
+            if len(fakes.evaluated) != 2:
+                return report
+            faulted = _budget_exhausted()
+            faulted.summary["fault"] = {"type": "RuntimeError", "message": "simulator fault"}
+            return faulted
+
+        fakes.evaluate = faulted_second_case
+        summary, _, _ = _run(fakes)
+        self.assertEqual(summary["evaluations"]["final"]["status"], "operational_failure")
+        self.assertEqual(summary["evaluations"]["final"]["cases"]["dev-1"]["outcome"], "failed")
+        self.assertEqual(len(fakes.evaluated), 2)
+        self.assertNotIn("fresh-initial", summary["evaluations"])
+        self.assertEqual(summary["result"], "incomplete")
 
     def test_failed_retention_panel_keeps_result_incomplete(self):
         fakes = _Fakes(decisions_per_segment=4096, panel_cases=3)

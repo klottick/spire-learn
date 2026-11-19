@@ -316,6 +316,37 @@ def run_stream_segment(config: NeuralConfig, *, purpose: str, checkpoint: Path |
     return result
 
 
+CENSORED_STOP_REASON = 'fixed_case_budget_incomplete'
+
+
+def is_censored_case_report(report: object) -> bool:
+    """A clean fixed-case budget exhaustion: censored, not an operational failure.
+
+    The case ran out of its action/wall allowance without a terminal outcome, and
+    nothing else went wrong: no fault, no uncertain or faulted collection, and a
+    lifecycle receipt that closed cleanly with the same incomplete status.
+    """
+    summary = getattr(report, 'summary', None)
+    if not isinstance(summary, Mapping):
+        return False
+    lifecycle = summary.get('lifecycle')
+    collection = summary.get('collection')
+    fight = (summary.get('fights') or {}).get('standalone_fights') \
+        if isinstance(summary.get('fights'), Mapping) else None
+    return (summary.get('status') == 'incomplete'
+            and summary.get('stop_reason') == CENSORED_STOP_REASON
+            and summary.get('fault') is None and summary.get('fatal_error') is None
+            and 'lifecycle_receipt_error' not in summary
+            and isinstance(lifecycle, Mapping) and lifecycle.get('status') == 'incomplete'
+            and lifecycle.get('close_errors') == []
+            and not any(key in lifecycle for key in ('clock_error', 'operation_error'))
+            and lifecycle.get('exit_code') == getattr(report, 'exit_code', None)
+            and isinstance(collection, Mapping) and collection.get('fault') is None
+            and collection.get('faults', 0) == 0
+            and collection.get('uncertain_environment_slots', 0) == 0
+            and isinstance(fight, Mapping) and fight.get('completed') == 0)
+
+
 def summarize_development_reports(panel: Mapping[str, object], reports: Mapping[str, object]) -> Mapping[str, object]:
     """Aggregate one actual standalone report per case with explicit missing data."""
     from .runner import NeuralReport
@@ -324,7 +355,7 @@ def summarize_development_reports(panel: Mapping[str, object], reports: Mapping[
             or set(reports) - {c['case_id'] for c in cases}):
         raise ValueError('reports must bind cases in the 64-case development panel')
     strata = {name: {} for name in ('cohort', 'family', 'deck_stage', 'encounter', 'encounter_tier', 'card')}
-    failures = []
+    failures, censored_cases = [], []
     for case in cases:
         case_id = case['case_id']
         annotation = panel['annotations'][case_id]
@@ -335,8 +366,12 @@ def summarize_development_reports(panel: Mapping[str, object], reports: Mapping[
             if not isinstance(report, NeuralReport) or report.summary.get('mode') != 'standalone':
                 raise ValueError('development inputs must be actual standalone NeuralReports')
             summary = report.summary
-            failed = int(report.exit_code != 0 or summary.get('status') != 'complete'
-                         or summary.get('collection', {}).get('uncertain_environment_slots', 0) > 0)
+            censored_case = is_censored_case_report(report)
+            failed = int(not censored_case and (
+                report.exit_code != 0 or summary.get('status') != 'complete'
+                or summary.get('collection', {}).get('uncertain_environment_slots', 0) > 0))
+            if censored_case:
+                censored_cases.append(case_id)
             rows = summary.get('case_accounting', {}).get('cases')
             if (rows is not None and (len(rows) != 1 or rows[0]['case_id'] != case_id)
                     or rows is None and not failed):
@@ -409,10 +444,10 @@ def summarize_development_reports(panel: Mapping[str, object], reports: Mapping[
         'worst_strata': worst,
         'status': ('operational_failure' if failures else 'complete'
                    if sum(row['completed'] for row in strata['cohort'].values()) == 64 else 'incomplete'),
-        'failures': failures, 'potion_use_availability': 'unavailable in accepted reports',
+        'failures': failures, 'censored_cases': censored_cases, 'potion_use_availability': 'unavailable in accepted reports',
         'denominator_scope': 'fight counts cover reports with supplied fight metrics only',
         'claim': 'standalone diagnostics; small strata; historical exposure unknown; no full-Run/transfer claim'}
 
 
-__all__ = ['prepare_stream', 'build_development_panel', 'pilot_plan',
+__all__ = ['prepare_stream', 'build_development_panel', 'pilot_plan', 'is_censored_case_report',
            'run_stream_segment', 'summarize_development_reports']

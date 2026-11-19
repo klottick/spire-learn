@@ -460,9 +460,15 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, c
 
 
 def _case_outcome(report) -> str:
+    """Win/loss/escaped settle a case; 'incomplete' is censored; anything unhealthy fails.
+
+    A clean fixed-case budget exhaustion (no fault, clean lifecycle) is censoring,
+    not an operational failure: the evaluation continues and pairing excludes it.
+    """
+    from spire_learn.neural.stream_runner import is_censored_case_report
     summary = getattr(report, 'summary', {}) or {}
     if getattr(report, 'exit_code', 1) != 0 or summary.get('status') != 'complete':
-        return 'failed'
+        return 'incomplete' if is_censored_case_report(report) else 'failed'
     fight = (summary.get('fights') or {}).get('standalone_fights')
     if not isinstance(fight, Mapping):
         return 'invalid'  # a healthy report must carry its fight metrics

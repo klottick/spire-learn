@@ -452,7 +452,13 @@ def _build_v2(recipe: ScenarioRecipe, split: str, shard_index: int, arm: str, si
         elif local < 11:
             encounter_id = encounters[((shard_index % 4) * 11 + local) % 43]["id"]
         else:
-            encounter_id = encounter_rng.choices(encounters, weights=encounter_weights, k=1)[0]["id"]
+            # v1's selection rule (stage-cycle act pool, 20% any act), with tier
+            # weights multiplying each candidate, so v2's tier mix stays v1-like.
+            cycle_act = recipe.stage_profiles[_STAGES[(local + shard_index) % 3]]["preferred_act"]
+            pool = (list(range(len(encounters))) if encounter_rng.randrange(5) == 0
+                    else [i for i, e in enumerate(encounters) if e["act"] == cycle_act])
+            chosen = encounter_rng.choices(pool, weights=[encounter_weights[i] for i in pool], k=1)[0]
+            encounter_id = encounters[chosen]["id"]
         encounter = recipe.support.encounters[encounter_id]
         # Stage follows the encounter: act 1 early, act 2 middle, acts 3-4 developed.
         act = min(encounter["act"], 3)

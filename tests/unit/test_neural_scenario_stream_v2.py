@@ -190,6 +190,22 @@ class ScenarioStreamV2Tests(unittest.TestCase):
         self.assertLess(low_share, base_share * 0.6)
         self.assertEqual(low_coverage, base_coverage)
 
+    def test_unit_tier_weights_keep_v1_kind_mix(self):
+        def mix(recipe):
+            kinds = Counter(a["encounter_tier"].split(":")[1]
+                            for i in range(8)
+                            for a in stream.generate_scenario_shard(recipe, split="train",
+                                                                    shard_index=i).annotations.values())
+            stream._SHARD_CACHE.clear()
+            total = sum(kinds.values())
+            return {kind: kinds[kind] / total for kind in ("monster", "elite", "boss")}
+
+        self.assertEqual(set(json_value(self.v2.tier_weights).values()), {1.0})
+        v1_mix, v2_mix = mix(self.v1), mix(self.v2)
+        for kind in v1_mix:
+            with self.subTest(kind=kind):
+                self.assertLessEqual(abs(v1_mix[kind] - v2_mix[kind]), 0.02)
+
     def test_v2_shards_are_deterministic_and_unique(self):
         again = stream._generate_scenario_shard(self.v2, split="train", shard_index=0, arm="mixed")
         self.assertEqual(again.manifest_sha256, self.mixed[0].manifest_sha256)

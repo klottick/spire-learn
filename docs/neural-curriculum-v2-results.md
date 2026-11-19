@@ -48,7 +48,8 @@ By user decision, act 2 and act 3 boss scenarios use real winning decks.
 
 **Source.** Public Slay the Spire run files from baalorlord.tv (profile 0),
 fetched politely: one request per second, with an identifying User-Agent. That
-gave 676 Ironclad runs, all at A20. `scripts/neural/real_boss_decks.py`
+gave 676 Ironclad runs, all at A20. The table's decks come from 503 of those
+runs; the rest never reached a boss floor or were excluded. `scripts/neural/real_boss_decks.py`
 rebuilds each deck as it stood entering the act 2 boss (floor 33) or the act 3
 bosses (floors 50 and 51):
 - picks, purchases, purges, smiths and event changes after that floor are
@@ -80,10 +81,22 @@ holds 1,245 decks; the won/total counts are:
 | Cleaned table | 8/60 | 10/60 |
 | **Pooled** | **16/120 = 13%** | **44/180 = 24%** |
 
-Decks that Baalorlord won with 97% of the time at A20 reach only these rates
-with the gate search. So the gate's search, not the decks, caps boss
-winnability. The act 2 and act 3 boss thresholds were therefore re-anchored at
-75% of these references (rulings 14 and 18): act 2 boss 2/20, act 3 boss 4/20.
+In the table, Baalorlord won 871 of 894 of these act 3 fights (97%) at A20.
+The same decks, played by the gate search at A0, reach only the rates above.
+That is consistent with the gate search, more than the decks, limiting
+measured boss winnability.
+
+The comparison is not exact:
+- the decks lose their out-of-support cards and relics;
+- they are played under Standard rules, at A0.
+
+The pooled rates mix three table versions. Two of the act 3 measurements used
+tables later found to include a few post-floor relic changes (rulings 15 and
+17).
+
+The act 2 and act 3 boss thresholds were therefore re-anchored at 75% of these
+references (rulings 14 and 18). That is 1 and 2 per 10 cases in code, which at
+the 20 cases used here means act 2 boss 2/20 and act 3 boss 4/20.
 
 **Gate on the real-deck v2 recipe (passed).** Recipe commit `0935f03`, 20 cases
 per tier:
@@ -110,9 +123,10 @@ The search player played all 64 development-panel cases (`--panel`).
 | v1 | 39/64 | 11/16 | 11/16 | 11/16 | 6/16 |
 | v2 | 39/64 | 14/16 | 11/16 | 10/16 | 4/16 |
 
-The v1 panel's search ceiling (39) equals both v1.1.1 baselines' final scores
-(39 and 38). On that panel, the trained policy already matches this lower-bound
-ceiling.
+The v1 panel's search ceiling (39) is within one win of both v1.1.1 baselines'
+final scores (39 and 38). Differences of one or two wins are not effects, and
+the search plays Standard rules at A0, not M10. So this suggests, but does not
+show, that v1-panel scores leave little room to improve.
 
 ## Limits
 

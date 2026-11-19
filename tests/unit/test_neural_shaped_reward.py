@@ -446,5 +446,119 @@ class ObjectiveIdentityTests(unittest.TestCase):
                                          hp.accepted_identities[0], purpose="evaluate")
 
 
+class ShapingBoundaryTests(unittest.TestCase):
+    def test_truncated_nonterminal_transition_uses_successor_potential(self):
+        previous, current = _lifecycle(), _lifecycle()
+        signal = task_signal(previous, current, terminated=False, truncated=True,
+                             supports_truncation=True)
+        self.assertEqual((signal.task_terminal, signal.bootstrap, signal.continuation),
+                         (False, True, False))
+        source = enemy_frame(((400, 400),))
+        successor = enemy_frame(((300, 400),))
+        # The collector's composition: terminal is the task signal's own flag.
+        shaped = replace(signal, reward=shaped_reward(
+            signal.reward, source, successor, terminal=signal.task_terminal,
+            gamma=0.99, beta=0.5, schema=_SCHEMA))
+        self.assertEqual(shaped.reward, 0.0 + 0.5 * (0.99 * (-0.75) - (-1.0)))
+        self.assertEqual((shaped.task_terminal, shaped.bootstrap, shaped.continuation),
+                         (signal.task_terminal, signal.bootstrap, signal.continuation))
+
+    def test_run_combat_entry_is_unshaped_but_active_combat_steps_are_shaped(self):
+        from spire_learn.neural.collector import Collector
+        from tests.unit import test_neural_collector as fixtures
+
+        run = _hp_config(replace(load_neural_config(ROOT / "configs/neural/run.toml"),
+                                 rollout_rows=1, rollout_steps=2))
+        noncombat = replace(fixtures.row(1, active=False),
+                            frame=enemy_frame((), player=1))
+        entered = replace(fixtures.row(2, active=True, entered=1, visit=0),
+                          frame=enemy_frame(((400, 400),), player=2))
+        damaged = replace(fixtures.row(3, active=True, entered=1, visit=0),
+                          frame=enemy_frame(((300, 400),), player=3))
+        driver = fixtures.ScriptedDriver(
+            "run", 1, initial_rows=(noncombat,),
+            steps=(lambda rows, actions: (fixtures.transition(rows[0], entered),),
+                   lambda rows, actions: (fixtures.transition(rows[0], damaged),)),
+        )
+        driver.schema = _SCHEMA
+        collector = Collector(driver, fixtures.FakePolicy(run), run,
+                             controller_rng=random.Random(1), curriculum_rng=random.Random(2),
+                             budget=Budget(60.0, lambda: 0.0), policy_generator=object())
+        records = collector.collect(max_learned_decisions=8, max_env_actions=2,
+                                    policy_version=0).records
+        self.assertEqual(len(records), 2)
+        entry, step = records
+        collector.close()
+        self.assertFalse(entry.actor_training_mask)
+        self.assertEqual(entry.task_signal, task_signal(
+            noncombat.lifecycle, entered.lifecycle, terminated=False, truncated=False))
+        self.assertTrue(step.actor_training_mask)
+        self.assertEqual(step.task_signal.reward,
+                         0.0 + 0.5 * (run.ppo.gamma * (-0.75) - (-1.0)))
+        self.assertEqual((step.task_signal.task_terminal, step.task_signal.bootstrap,
+                          step.task_signal.continuation), (False, True, True))
+
+
+def _stream_config(directory: Path, *, coefficient=None) -> Path:
+    from spire_learn.neural.scenario_stream import generate_scenario_shard, load_scenario_recipe
+    from spire_learn.neural.scenario_support import json_value
+
+    recipe_path = (ROOT / "configs/neural/curriculum-v1/recipe.json").resolve()
+    shard = generate_scenario_shard(load_scenario_recipe(recipe_path), split="train",
+                                    shard_index=0, arm="fixed")
+    manifest = directory / "manifest.json"
+    manifest.write_text(json.dumps(json_value(shard.manifest)))
+    text = _STANDALONE.read_text().replace(
+        'manifest_path = "../cases/neural/train.json"', f'manifest_path = "{manifest}"',
+    ).replace(
+        'output_root = "../../artifacts/development/neural-combat/runs/standalone"',
+        f'output_root = "{(ROOT / "artifacts/development/neural-combat/runs/shaped-test").resolve()}"',
+    )
+    text += ('\n[scenario_stream]\nschema = "spire-learn-scenario-stream-v1"\narm = "fixed"\n'
+             f'shard_index = 0\nrecipe_path = "{recipe_path}"\n'
+             f'distribution_sha256 = "{shard.distribution_sha256}"\n')
+    if coefficient is not None:
+        text = text.replace(f'objective_id = "{WINLOSS_OBJECTIVE_ID}"',
+                            f'objective_id = "{HP_SHAPED_OBJECTIVE_ID}"')
+        text += _HP_TABLE.format(coefficient=coefficient)
+    path = directory / f"config-{coefficient}.toml"
+    path.write_text(text)
+    return path
+
+
+class ObjectiveStreamIdentityTests(unittest.TestCase):
+    def test_winloss_runtime_projection_has_no_objective_key(self):
+        from spire_learn.neural.config import _stream_runtime_projection
+
+        projection = _stream_runtime_projection(load_neural_config(_STANDALONE))
+        self.assertNotIn("objective", projection)
+
+    def test_coefficient_changes_stream_identity_and_resume_rejects_it(self):
+        from spire_learn.neural.config import _stream_runtime_projection
+        from spire_learn.neural.stream_resume import (
+            stream_checkpoint_state, stream_identity, validate_stream_resume,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            half = load_neural_config(_stream_config(root, coefficient="0.5"))
+            full = load_neural_config(_stream_config(root, coefficient="1.0"))
+            self.assertEqual(_stream_runtime_projection(half)["objective"],
+                             {"kind": "hp_shaped", "coefficient": 0.5})
+            self.assertNotEqual(stream_identity(half), stream_identity(full))
+            metadata = {"scenario_stream": stream_checkpoint_state(half, {}),
+                        "config_sha256": half.config_sha256,
+                        "manifest_sha256": half.manifest_sha256}
+            validate_stream_resume(metadata, half)
+            with self.assertRaisesRegex(ValueError, "identity changed"):
+                validate_stream_resume(metadata, full)
+            # An in-memory coefficient swap no longer matches the loader binding.
+            mutated = replace(half, objective=HpShapedObjective(coefficient=1.0))
+            with self.assertRaises(ValueError):
+                stream_identity(mutated)
+            with self.assertRaises(ValueError):
+                validate_stream_resume(metadata, mutated)
+
+
 if __name__ == "__main__":
     unittest.main()

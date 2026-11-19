@@ -192,6 +192,9 @@ def _stream_runtime_projection(config: NeuralConfig) -> dict[str, object]:
         'accepted_raw_mode_mappings': dict(identity.accepted_raw_mode_mappings),
         'config_hashes': dict(identity.config_hashes),
     } for identity in config.accepted_identities]
+    if config.objective is not None:
+        # Only shaped configs gain this key; win/loss projections stay byte-identical.
+        runtime['objective'] = {'kind': 'hp_shaped', 'coefficient': config.objective.coefficient}
     return runtime
 
 

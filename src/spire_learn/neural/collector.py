@@ -699,8 +699,9 @@ class Collector:
                 terminated=result.terminated,
                 truncated=result.truncated,
             )
-            if self._objective is not None:
-                # Shaping changes only the reward; boundary flags stay as derived.
+            if self._objective is not None and source.lifecycle.active:
+                # Shape only steps taken from an active combat row: never at combat
+                # entry or on noncombat rows. Only the reward changes; flags stay.
                 signal = replace(signal, reward=shaped_reward(
                     signal.reward, result.source.frame, result.successor.frame,
                     terminal=signal.task_terminal, gamma=self.config.ppo.gamma,

@@ -233,5 +233,10 @@
     "act3:monster": 1.0,
     "act4:boss": 1.0,
     "act4:elite": 1.0
+  },
+  "real_boss_decks": {
+    "path": "../../../artifacts/development/neural-combat/real-boss-decks/real-boss-decks.json",
+    "sha256": "fd28ab417875fb80955076d55e9cdb84583b2aadcaca5d615b7a1df8c7c7526a",
+    "tiers": ["act2:boss", "act3:boss"]
   }
 }

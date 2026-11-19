@@ -18,7 +18,9 @@ from spire_learn.neural import scenario_stream as stream
 from spire_learn.neural.scenario_support import (
     canonical_bytes, content_sha256, json_value, load_scenario_support,
 )
-from tests.unit.test_neural_scenario_stream_v2 import V2_RECIPE_SHA256, V2_TRAIN_SHARD_0
+from tests.unit.test_neural_scenario_stream_v2 import (
+    V2_PREPARED_RECIPE_SHA256, V2_PREPARED_TRAIN_SHARD_0, load_v2_prepared, v2_prepared_raw,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNS = ROOT / "tests/fixtures/neural/real-boss-runs"
@@ -176,7 +178,7 @@ class ExtractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp, "decks.json")
             sha = rbd.write_document(self.document, path)
-            v2 = stream.load_scenario_recipe(V2)
+            v2 = load_v2_prepared()
             # Lost-only encounters cannot be sampled; act 3 has wins for both encounters drawn below.
             with self.assertRaisesRegex(ValueError, "won deck"):
                 replace(v2, real_boss_decks={"sha256": sha, "tiers": ["act3:boss"]},
@@ -283,7 +285,7 @@ def _synthetic_table(support, seed=7, won_per_encounter=150):
 class GeneratorTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.v2 = stream.load_scenario_recipe(V2)
+        cls.v2 = load_v2_prepared()
         cls.table = _synthetic_table(cls.v2.support)
         cls.tmp = tempfile.TemporaryDirectory()
         cls.dir = Path(cls.tmp.name)
@@ -420,8 +422,8 @@ class GeneratorTests(unittest.TestCase):
     def test_absent_table_keeps_v2_bytes_and_payload(self):
         self.assertIsNone(self.v2.real_boss_decks)
         self.assertNotIn("real_boss_decks", self.v2.payload)
-        self.assertEqual(self.v2.sha256, V2_RECIPE_SHA256)
-        self.assertEqual(self.shard(self.v2).manifest_sha256, V2_TRAIN_SHARD_0)
+        self.assertEqual(self.v2.sha256, V2_PREPARED_RECIPE_SHA256)
+        self.assertEqual(self.shard(self.v2).manifest_sha256, V2_PREPARED_TRAIN_SHARD_0)
         with_table = stream.load_scenario_recipe(self.recipe_path())
         self.assertNotEqual(with_table.sha256, self.v2.sha256)
         self.assertEqual({k: v for k, v in json_value(with_table.payload).items() if k != "real_boss_decks"},
@@ -433,7 +435,8 @@ if __name__ == "__main__":
 
 
 ARTIFACTS = ROOT / "artifacts/development/neural-combat"
-# Raw-byte inventory of prepare_stream(mixed, train, shard 0), captured before real-deck packaging.
+# Raw-byte inventory of prepare_stream(mixed, train, shard 0) for v1 and for v2 without real decks,
+# captured before real-deck packaging.
 PREPARED_INVENTORY = {
     "v1": "423c04e5ecc09d16e24fcf3783c8db45eaa79f535171cc4678e559ad673679e8",
     "v2": "53bde9b5b6972eb9a2f4c61d30f659a7bda1aba674604824d82a6089d9a43b9b",
@@ -449,7 +452,10 @@ class PreparationTests(unittest.TestCase):
         from spire_learn.neural.stream_runner import prepare_stream
         for version, digest in PREPARED_INVENTORY.items():
             with self.subTest(version=version), tempfile.TemporaryDirectory(dir=ARTIFACTS) as tmp:
-                recipe = ROOT / f"configs/neural/curriculum-{version}/recipe.json"
+                recipe = ROOT / "configs/neural/curriculum-v1/recipe.json"
+                if version == "v2":  # the shipped v2 recipe without its real-deck table
+                    recipe = Path(tmp) / "recipe.json"
+                    recipe.write_text(json.dumps(v2_prepared_raw()))
                 result = prepare_stream(recipe, Path(tmp) / "prepared", arm="mixed", split="train", shard_index=0)
                 inventory = {name: row["raw_sha256"] for name, row in result["inventory"].items()}
                 self.assertNotIn("real-boss-decks.json", inventory)

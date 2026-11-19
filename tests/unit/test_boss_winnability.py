@@ -209,7 +209,7 @@ class BossWinnabilityTests(unittest.TestCase):
                     "heuristic": {"victory": heuristic_wins, "death": total - heuristic_wins},
                     "random": {"death": total}}
 
-        floors = {"act1:boss": 5, "act2:boss": 4, "act3:boss": 3, "act3:elite": 3, "act1:elite": 8}
+        floors = {"act1:boss": 5, "act2:boss": 1, "act3:boss": 2, "act3:elite": 3, "act1:elite": 8}
 
         def passing():
             return {name: tier(floor, 8 if name.endswith(":boss") else 10) for name, floor in floors.items()}
@@ -243,7 +243,7 @@ class BossWinnabilityTests(unittest.TestCase):
             return {"search": {"victory": search_wins, "death": total - search_wins},
                     "heuristic": {"victory": heuristic_wins, "death": total - heuristic_wins}}
 
-        floors = {"act1:boss": 10, "act2:boss": 8, "act3:boss": 6, "act3:elite": 6, "act1:elite": 16}
+        floors = {"act1:boss": 10, "act2:boss": 2, "act3:boss": 4, "act3:elite": 6, "act1:elite": 16}
 
         def passing():
             return {n: tier(f, 16 if n.endswith(":boss") else 20, 20) for n, f in floors.items()}

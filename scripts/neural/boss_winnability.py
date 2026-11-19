@@ -27,7 +27,9 @@ _ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = 'spire-learn-boss-winnability-v1'
 PLAYERS = ('random', 'heuristic', 'search')
 # Winnability gate: minimum search wins per tier, and a heuristic win ceiling on boss tiers (out of 10).
-GATE_SEARCH_MIN = {'act1:boss': 5, 'act2:boss': 4, 'act3:boss': 3, 'act3:elite': 3, 'act1:elite': 8}
+# The act 2 and act 3 boss minimums are 75% of the gate search's measured win rate on real
+# (Baalorlord) boss decks, measured 2026-11-19: act2 16/120 = 13%, act3 44/180 = 24%.
+GATE_SEARCH_MIN = {'act1:boss': 5, 'act2:boss': 1, 'act3:boss': 2, 'act3:elite': 3, 'act1:elite': 8}
 GATE_HEURISTIC_MAX = 8
 
 

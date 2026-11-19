@@ -23,17 +23,58 @@ V1_TRAIN_SHARD_37 = "8df900ac9a7ec8375c39628675ee799d8def93d445f0fe70bdc0cdcdf20
 V1_PANEL_MANIFEST = "435a236e60ac54f0b04f742b6d019023f49670c7730ba47545b73b23d2fb620e"
 
 # Pin of the shipped recipe; each deliberate tuning commit updates these literals.
-V2_RECIPE_SHA256 = "cdc90ac332bf2f3832012e0ba45bb9e4c4d5e0f02bd897673ebbb736cbb3a0a4"
-V2_TRAIN_SHARD_0 = "ae006f14f0184e2e4377cb169ae515844105ac686d022ca4a8414a6cbc468302"
+V2_RECIPE_SHA256 = "d83e05c992fe492d52e17d404d82657227975cf2812ade1babbacee6c2562ce4"
+V2_TRAIN_SHARD_0 = "62b84b053b41c338c898a467cfce6a44ee9d59335cb5a8a1c9cae2ac83723b40"
+# Pin of the shipped recipe without its real_boss_decks table (the prepared-deck generator);
+# unchanged since tuning iteration 6 (6f05583), so adding the table changed nothing else.
+V2_PREPARED_RECIPE_SHA256 = "cdc90ac332bf2f3832012e0ba45bb9e4c4d5e0f02bd897673ebbb736cbb3a0a4"
+V2_PREPARED_TRAIN_SHARD_0 = "ae006f14f0184e2e4377cb169ae515844105ac686d022ca4a8414a6cbc468302"
+
+SUPPORT = (ROOT / "configs/neural/curriculum-v1/support.json").resolve()
+REAL_BOSS_DECKS = (V2.parent / json.loads(V2.read_text())["real_boss_decks"]["path"]).resolve()
+needs_real_boss_decks = unittest.skipUnless(
+    REAL_BOSS_DECKS.is_file(),
+    "real boss decks table not generated; run scripts/neural/real_boss_decks.py extract")
 
 _STAGE_FOR_ACT = {1: "early", 2: "middle", 3: "developed", 4: "developed"}
 
 
+def v2_prepared_raw() -> dict:
+    """The shipped v2 recipe document without its local real-deck table (support path absolute)."""
+    raw = json.loads(V2.read_text())
+    del raw["real_boss_decks"]
+    return {**raw, "support_file": str(SUPPORT)}
+
+
+def load_v2_prepared() -> stream.ScenarioRecipe:
+    """The shipped v2 recipe without real_boss_decks: every boss case uses prepared decks."""
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "recipe.json"
+        path.write_text(json.dumps(v2_prepared_raw()))
+        return stream.load_scenario_recipe(path)
+
+
+@needs_real_boss_decks
+class ShippedV2Tests(unittest.TestCase):
+    def test_shipped_v2_recipe_and_shard_are_pinned(self):
+        stream._SHARD_CACHE.clear()
+        self.addCleanup(stream._SHARD_CACHE.clear)
+        shipped = stream.load_scenario_recipe(V2)
+        self.assertEqual(shipped.sha256, V2_RECIPE_SHA256)
+        self.assertEqual(json_value(shipped.payload["real_boss_decks"])["tiers"], ["act2:boss", "act3:boss"])
+        self.assertEqual({k: v for k, v in json_value(shipped.payload).items() if k != "real_boss_decks"},
+                         json_value(load_v2_prepared().payload))
+        self.assertEqual(stream._generate_scenario_shard(shipped, split="train", shard_index=0,
+                                                         arm="mixed").manifest_sha256, V2_TRAIN_SHARD_0)
+
+
 class ScenarioStreamV2Tests(unittest.TestCase):
+    """The v2 prepared-deck generator, on the shipped recipe without its real-deck table."""
+
     @classmethod
     def setUpClass(cls):
         cls.v1 = stream.load_scenario_recipe(V1)
-        cls.v2 = stream.load_scenario_recipe(V2)
+        cls.v2 = load_v2_prepared()
         stream._SHARD_CACHE.clear()
         cls.mixed = [stream._generate_scenario_shard(cls.v2, split="train", shard_index=i, arm="mixed")
                      for i in range(4)]
@@ -116,9 +157,9 @@ class ScenarioStreamV2Tests(unittest.TestCase):
             with self.subTest(bad_weights=index), self.assertRaises(ValueError):
                 replace(self.v2, tier_weights=value)
 
-        support = (ROOT / "configs/neural/curriculum-v1/support.json").resolve()
+        support = SUPPORT
         v1_raw = json.loads(V1.read_text())
-        v2_raw = json.loads(V2.read_text())
+        v2_raw = v2_prepared_raw()
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "recipe.json"
             cases = [
@@ -217,8 +258,7 @@ class ScenarioStreamV2Tests(unittest.TestCase):
         support = (ROOT / "configs/neural/curriculum-v1/support.json").resolve()
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "recipe.json"
-            path.write_text(json.dumps({**json.loads(V2.read_text()), "support_file": str(support),
-                                        "prepared_profiles": repro}))
+            path.write_text(json.dumps({**v2_prepared_raw(), "prepared_profiles": repro}))
             with self.assertRaisesRegex(ValueError, "maximum_size"):
                 stream.load_scenario_recipe(path)
         # (10 - removals) + core maximum + 1 coverage card against each act's stage maximum.
@@ -231,9 +271,9 @@ class ScenarioStreamV2Tests(unittest.TestCase):
         replace(self.v2, prepared_profiles=self.profiles_with(
             ("act2", "act3"), starter_removals=0, core_cards=[12, 12]))
 
-    def test_shipped_v2_recipe_and_shard_are_pinned(self):
-        self.assertEqual(self.v2.sha256, V2_RECIPE_SHA256)
-        self.assertEqual(self.mixed[0].manifest_sha256, V2_TRAIN_SHARD_0)
+    def test_v2_without_real_decks_is_pinned(self):
+        self.assertEqual(self.v2.sha256, V2_PREPARED_RECIPE_SHA256)
+        self.assertEqual(self.mixed[0].manifest_sha256, V2_PREPARED_TRAIN_SHARD_0)
 
     def test_deck_size_validation(self):
         # Stage maxima: early 15, middle 24, developed 35.

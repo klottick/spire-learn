@@ -151,7 +151,8 @@ decks, all from learner `2e8ad0d`.
   were re-evaluated with `--reevaluate`, without retraining, into
   `…-r2-20261119-reeval/`.
 - All runs ended `target_reached` with `learner_changed: false`. Training waited
-  for the shared GPU at times; for example, cv2 waited twice.
+  for the shared GPU for 240–810 s per run. Training took 1,960–2,542 s of
+  elapsed time, and waiting does not count against the wall budget.
 
 **Panel wins.** Untrained-to-final wins on each panel, out of 64; the
 fresh-vs-final columns are fresh-only / final-only cases and the exact McNemar p.

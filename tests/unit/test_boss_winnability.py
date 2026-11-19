@@ -238,6 +238,28 @@ class BossWinnabilityTests(unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertIn("act2:boss", result["failures"][0])
 
+    def test_gate_report_thresholds_scale_with_cases_per_tier(self):
+        def tier(search_wins, heuristic_wins, total):
+            return {"search": {"victory": search_wins, "death": total - search_wins},
+                    "heuristic": {"victory": heuristic_wins, "death": total - heuristic_wins}}
+
+        floors = {"act1:boss": 10, "act2:boss": 8, "act3:boss": 6, "act3:elite": 6, "act1:elite": 16}
+
+        def passing():
+            return {n: tier(f, 16 if n.endswith(":boss") else 20, 20) for n, f in floors.items()}
+
+        self.assertEqual(bw.gate_report(passing(), cases_per_tier=20), {"passed": True, "failures": []})
+        # The default of 10 cases keeps the 20-case results failing on their heuristic wins.
+        for name, floor in floors.items():
+            low = passing()
+            low[name] = tier(floor - 1, 16, 20)
+            result = bw.gate_report(low, cases_per_tier=20)
+            self.assertFalse(result["passed"], name)
+            self.assertIn(name, result["failures"][0])
+        easy = passing()
+        easy["act1:boss"] = tier(10, 17, 20)
+        self.assertFalse(bw.gate_report(easy, cases_per_tier=20)["passed"])
+
     def test_panel_mode_plays_every_panel_case_with_search_only(self):
         import tempfile
         cohorts = ("familiar_new_seed", "novel_deck", "reserved_pair", "resource_later_tier")

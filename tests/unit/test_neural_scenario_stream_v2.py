@@ -22,6 +22,10 @@ V1_TRAIN_SHARD_0 = "d644d2a113034641bc12cd06e50c7817cad23b5268c3c9014ef3f3f4406c
 V1_TRAIN_SHARD_37 = "8df900ac9a7ec8375c39628675ee799d8def93d445f0fe70bdc0cdcdf20af7a7"
 V1_PANEL_MANIFEST = "435a236e60ac54f0b04f742b6d019023f49670c7730ba47545b73b23d2fb620e"
 
+# Captured before the optional deck_size key was added: the shipped recipe must not change.
+V2_RECIPE_SHA256 = "9e666f15d6f4eb70e11be6ba11e50316db601a9c55355e40b0b852b82fc32607"
+V2_TRAIN_SHARD_0 = "4c147cba2eefdd4e6bfca213b6d3b958c07bac8567f96e4d5cc0e06f22b286e1"
+
 _STAGE_FOR_ACT = {1: "early", 2: "middle", 3: "developed", 4: "developed"}
 
 
@@ -218,6 +222,56 @@ class ScenarioStreamV2Tests(unittest.TestCase):
                 ("act1",), starter_removals=0, core_cards=[0, 5]))
         replace(self.v2, prepared_profiles=self.profiles_with(
             ("act2", "act3"), starter_removals=0, core_cards=[12, 12]))
+
+    def test_shipped_v2_recipe_and_shard_are_pinned(self):
+        self.assertEqual(self.v2.sha256, V2_RECIPE_SHA256)
+        self.assertEqual(self.mixed[0].manifest_sha256, V2_TRAIN_SHARD_0)
+
+    def test_deck_size_validation(self):
+        # Stage maxima: early 15, middle 24, developed 35.
+        replace(self.v2, prepared_profiles=self.profiles_with(("act1", "act2", "act3"), deck_size=[8, 15]))
+        replace(self.v2, prepared_profiles=self.profiles_with(("act3",), deck_size=[12, 35]))
+        bad = [([7, 12], "deck_size"), ([8, 16], "deck_size"), ([12, 8], "deck_size"),
+               ([8.5, 12], "deck_size"), ([True, 12], "deck_size"), ([8], "deck_size"), ("8-12", "deck_size")]
+        for value, message in bad:
+            with self.assertRaisesRegex(ValueError, message, msg=str(value)):
+                replace(self.v2, prepared_profiles=self.profiles_with(("act1",), deck_size=value))
+        with self.assertRaisesRegex(ValueError, "deck_size"):
+            replace(self.v2, prepared_profiles=self.profiles_with(("act2",), deck_size=[8, 25]))
+        with self.assertRaisesRegex(ValueError, "deck_size"):
+            replace(self.v2, prepared_profiles=self.profiles_with(("act3",), deck_size=[8, 36]))
+        # Mandatory part (10 - 0) + 4 + 1 = 15 does not fit a deck_size maximum of 14.
+        with self.assertRaisesRegex(ValueError, "deck_size"):
+            replace(self.v2, prepared_profiles=self.profiles_with(
+                ("act1",), starter_removals=0, core_cards=[0, 4], deck_size=[8, 14]))
+        replace(self.v2, prepared_profiles=self.profiles_with(
+            ("act1",), starter_removals=0, core_cards=[0, 4], deck_size=[8, 15]))
+        # Unknown keys are still rejected.
+        with self.assertRaisesRegex(ValueError, "fields"):
+            replace(self.v2, prepared_profiles=self.profiles_with(("act1",), deck_sizes=[8, 12]))
+
+    def test_deck_size_bounds_every_prepared_deck(self):
+        sizes = {"act1": [9, 11], "act2": [14, 16], "act3": [18, 20]}
+        profiles = json_value(self.v2.prepared_profiles)
+        for act, by_kind in profiles.items():
+            for row in by_kind.values():
+                row["deck_size"] = sizes[act]
+                row["core_cards"] = [min(row["core_cards"][0], 3), min(row["core_cards"][1], 3)]
+                row["starter_removals"] = max(row["starter_removals"], 5)
+        recipe = replace(self.v2, prepared_profiles=profiles)
+        prepared = 0
+        for index in range(4):
+            shard = stream._generate_scenario_shard(recipe, split="train", shard_index=index, arm="mixed")
+            for case in shard.manifest["cases"]:
+                entry = case["entry"]
+                act, kind = self.tier(entry["encounter"])
+                if kind == "monster" or shard.annotations[case["case_id"]]["family"] == "unusual":
+                    continue
+                prepared += 1
+                low, high = sizes[f"act{min(act, 3)}"]
+                self.assertGreaterEqual(len(entry["deck"]), low)
+                self.assertLessEqual(len(entry["deck"]), high)
+        self.assertGreater(prepared, 100)
 
     def test_oversized_prepared_lesson_deck_is_an_error_not_an_entry(self):
         # The mandatory part exactly fills the early stage; any act1 boss/elite lesson target overflows.

@@ -135,9 +135,9 @@ class ScenarioRecipe:
             raise ValueError("prepared profiles must be keyed act1..act3 by boss/elite")
         for act, by_kind in profiles.items():
             for profile in by_kind.values():
-                if not isinstance(profile, dict) or set(profile) != {
-                        "core_cards", "starter_removals", "upgrade_percent",
-                        "rarity_weights", "hp_floor_percent"}:
+                base = {"core_cards", "starter_removals", "upgrade_percent",
+                        "rarity_weights", "hp_floor_percent"}
+                if not isinstance(profile, dict) or set(profile) not in (base, base | {"deck_size"}):
                     raise ValueError("invalid prepared profile fields")
                 core = profile["core_cards"]
                 if not isinstance(core, list) or len(core) != 2:
@@ -159,6 +159,14 @@ class ScenarioRecipe:
                 stage = self.stage_profiles[_STAGES[_PREPARED_ACTS.index(act)]]
                 if len(_STARTER) - profile["starter_removals"] + core[1] + 1 > stage["maximum_size"]:
                     raise ValueError(f"prepared {act} profile cannot fit its stage maximum_size")
+                if "deck_size" in profile:
+                    size = profile["deck_size"]
+                    if not isinstance(size, list) or len(size) != 2:
+                        raise ValueError("deck_size must be [minimum, maximum]")
+                    _integer(size[0], 8, stage["maximum_size"], "deck_size minimum")
+                    _integer(size[1], size[0], stage["maximum_size"], "deck_size maximum")
+                    if len(_STARTER) - profile["starter_removals"] + core[1] + 1 > size[1]:
+                        raise ValueError(f"prepared {act} profile cannot fit its deck_size maximum")
         object.__setattr__(self, "prepared_profiles", _freeze_json(profiles))
         tiers = {f"act{e['act']}:{e['kind']}" for e in self.support.encounters.values()}
         tier_weights = json_value(self.tier_weights)
@@ -409,7 +417,7 @@ def _prepared_deck(recipe: ScenarioRecipe, prepared: Mapping[str, object], stage
         deck.append(dict(coverage))
     cards = sorted(metadata)
     fill_weights = [rarity[metadata[c]["rarity"]] for c in cards]
-    desired_size = rng.randint(stage["minimum_size"], stage["maximum_size"])
+    desired_size = rng.randint(*prepared.get("deck_size", (stage["minimum_size"], stage["maximum_size"])))
     while len(deck) < desired_size:
         deck.append({"card": rng.choices(cards, weights=fill_weights, k=1)[0], "upgrades": upgrade()})
     return deck

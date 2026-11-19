@@ -193,10 +193,15 @@ def _wins(counts: dict) -> int:
     return int(counts.get('victory', 0))
 
 
-def gate_report(by_tier: dict) -> dict:
-    """Apply the winnability gate to ``run()``'s ``by_tier``: {tier: {player: {outcome: count}}}."""
+def gate_report(by_tier: dict, cases_per_tier: int = 10) -> dict:
+    """Apply the winnability gate to ``run()``'s ``by_tier``: {tier: {player: {outcome: count}}}.
+
+    The thresholds are rates defined at 10 cases per tier and scale with ``cases_per_tier``.
+    """
     failures = []
-    for tier, minimum in GATE_SEARCH_MIN.items():
+    heuristic_max = GATE_HEURISTIC_MAX * cases_per_tier // 10
+    for tier, base in GATE_SEARCH_MIN.items():
+        minimum = -(-base * cases_per_tier // 10)
         if tier not in by_tier:
             failures.append(f'{tier}: missing from results')
             continue
@@ -205,8 +210,8 @@ def gate_report(by_tier: dict) -> dict:
             failures.append(f'{tier}: search wins {search} < {minimum}')
         if tier.endswith(':boss'):
             heuristic = _wins(by_tier[tier].get('heuristic', {}))
-            if heuristic > GATE_HEURISTIC_MAX:
-                failures.append(f'{tier}: heuristic wins {heuristic} > {GATE_HEURISTIC_MAX}')
+            if heuristic > heuristic_max:
+                failures.append(f'{tier}: heuristic wins {heuristic} > {heuristic_max}')
     return {'passed': not failures, 'failures': failures}
 
 
@@ -347,7 +352,7 @@ def run(output: Path, *, recipe: Path, shards: range, tiers: set[str], per_tier:
               'search_stats': dict(stats), 'population': population_stats(recipe, shards=shards),
               'by_tier': {tier: {player: dict(counts) for player, counts in players.items()}
                           for tier, players in sorted(by_tier.items())}}
-    result['gate'] = gate_report(result['by_tier'])
+    result['gate'] = gate_report(result['by_tier'], per_tier)
     (output / 'winnability.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
     return result
 

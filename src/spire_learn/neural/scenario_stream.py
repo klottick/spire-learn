@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import Counter, OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields
+import math
 from pathlib import Path
 import random
 import threading
@@ -27,6 +28,11 @@ _FIXED_ENCOUNTERS = ("cultist", "gremlin_nob", "guardian", "hexaghost", "jaw_wor
                      "lagavulin", "large_slime", "lots_of_slimes", "slime_boss",
                      "small_slimes", "three_louse", "three_sentries", "two_louse")
 _ATTEMPTS = 4096
+_V1 = "ironclad-curriculum-v1"
+_V2 = "ironclad-curriculum-v2"
+_PREPARED_ACTS = ("act1", "act2", "act3")
+_PREPARED_KINDS = ("boss", "elite")
+_RARITIES = ("starter", "common", "uncommon", "rare")
 
 
 def _integer(value: object, minimum: int, maximum: int, name: str) -> None:
@@ -45,13 +51,21 @@ class ScenarioRecipe:
     mechanic_groups: Mapping[str, tuple[str, ...]]
     stage_profiles: Mapping[str, Mapping[str, int]]
     rarity_weights: Mapping[str, int]
-    generator_version: str = "ironclad-curriculum-v1"
+    generator_version: str = _V1
+    # v2-only tables; both None for v1, both required for v2.
+    prepared_profiles: Mapping[str, Mapping[str, Mapping[str, object]]] | None = None
+    tier_weights: Mapping[str, float] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.support, ScenarioSupport):
             raise ValueError("recipe requires validated finite support")
-        if self.generator_version != "ironclad-curriculum-v1":
+        if self.generator_version not in (_V1, _V2):
             raise ValueError("unsupported scenario generator version")
+        v2_tables = (self.prepared_profiles, self.tier_weights)
+        if self.generator_version == _V1 and v2_tables != (None, None):
+            raise ValueError("v1 recipes do not accept prepared_profiles or tier_weights")
+        if self.generator_version == _V2 and None in v2_tables:
+            raise ValueError("v2 recipes require prepared_profiles and tier_weights")
         _integer(self.generator_seed, 0, 2**64 - 1, "generator_seed")
         _integer(self.shard_size, 1, 256, "shard_size")
         _integer(self.maximum_catalog_bytes, 1, 1_048_576, "maximum_catalog_bytes")
@@ -106,6 +120,57 @@ class ScenarioRecipe:
         object.__setattr__(self, "rarity_weights", _freeze_json(weights))
         if len(self.category_keys) > 256:
             raise ValueError("lesson category universe exceeds 256")
+        if self.generator_version == _V2:
+            self._validate_v2_tables()
+
+    def _validate_v2_tables(self) -> None:
+        cards = self.support.cards
+        core_groups = [g for name, g in self.mechanic_groups.items() if name != "status"]
+        if not core_groups:
+            raise ValueError("v2 requires a non-status mechanic group")
+        profiles = json_value(self.prepared_profiles)
+        if (not isinstance(profiles, dict) or set(profiles) != set(_PREPARED_ACTS)
+                or any(not isinstance(by_kind, dict) or set(by_kind) != set(_PREPARED_KINDS)
+                       for by_kind in profiles.values())):
+            raise ValueError("prepared profiles must be keyed act1..act3 by boss/elite")
+        for act, by_kind in profiles.items():
+            for profile in by_kind.values():
+                if not isinstance(profile, dict) or set(profile) != {
+                        "core_cards", "starter_removals", "upgrade_percent",
+                        "rarity_weights", "hp_floor_percent"}:
+                    raise ValueError("invalid prepared profile fields")
+                core = profile["core_cards"]
+                if not isinstance(core, list) or len(core) != 2:
+                    raise ValueError("core_cards must be [minimum, maximum]")
+                _integer(core[0], 0, 12, "core_cards minimum")
+                _integer(core[1], core[0], 12, "core_cards maximum")
+                _integer(profile["starter_removals"], 0, 9, "starter_removals")
+                _integer(profile["upgrade_percent"], 0, 100, "upgrade_percent")
+                _integer(profile["hp_floor_percent"], 1, 100, "hp_floor_percent")
+                weights = profile["rarity_weights"]
+                if not isinstance(weights, dict) or set(weights) != set(_RARITIES):
+                    raise ValueError("invalid prepared rarity weights")
+                for weight in weights.values():
+                    _integer(weight, 0, 100, "prepared rarity weight")
+                # Every core group must be drawable under these weights.
+                if any(sum(weights[cards[c]["rarity"]] for c in group) == 0 for group in core_groups):
+                    raise ValueError("prepared rarity weights leave a core group undrawable")
+                # Remaining starters, the most core cards and the coverage card must fit the stage.
+                stage = self.stage_profiles[_STAGES[_PREPARED_ACTS.index(act)]]
+                if len(_STARTER) - profile["starter_removals"] + core[1] + 1 > stage["maximum_size"]:
+                    raise ValueError(f"prepared {act} profile cannot fit its stage maximum_size")
+        object.__setattr__(self, "prepared_profiles", _freeze_json(profiles))
+        tiers = {f"act{e['act']}:{e['kind']}" for e in self.support.encounters.values()}
+        tier_weights = json_value(self.tier_weights)
+        if not isinstance(tier_weights, dict) or set(tier_weights) != tiers:
+            raise ValueError("tier weights must cover exactly the support's encounter tiers")
+        for weight in tier_weights.values():
+            if (type(weight) not in (int, float) or not math.isfinite(weight)
+                    or not 0 < weight <= 1):
+                raise ValueError("tier weights must be finite in (0, 1]")
+        # 1 and 1.0 are the same weight; give them the same payload and hash.
+        tier_weights = {tier: float(weight) for tier, weight in tier_weights.items()}
+        object.__setattr__(self, "tier_weights", _freeze_json(tier_weights))
 
     @property
     def category_keys(self) -> tuple[str, ...]:
@@ -115,10 +180,13 @@ class ScenarioRecipe:
 
     @property
     def payload(self) -> Mapping[str, object]:
+        # v2 tables join the payload only for v2, so v1 hashes stay unchanged.
+        v2 = ("prepared_profiles", "tier_weights") if self.generator_version == _V2 else ()
         return _freeze_json({"schema": "spire-learn-scenario-recipe-v1",
             "generator_version": self.generator_version, "support_sha256": self.support.sha256,
             **{k: getattr(self, k) for k in ("generator_seed", "shard_size", "maximum_catalog_bytes",
-               "reserved_pairs", "lesson_pairs", "mechanic_groups", "stage_profiles", "rarity_weights")}})
+               "reserved_pairs", "lesson_pairs", "mechanic_groups", "stage_profiles", "rarity_weights",
+               *v2)}})
 
     @property
     def sha256(self) -> str:
@@ -130,6 +198,8 @@ def load_scenario_recipe(path: Path) -> ScenarioRecipe:
     fields = {"schema", "generator_version", "support_file", "support_sha256", "generator_seed",
               "shard_size", "maximum_catalog_bytes", "reserved_pairs", "lesson_pairs",
               "mechanic_groups", "stage_profiles", "rarity_weights"}
+    if raw.get("generator_version") == _V2:
+        fields |= {"prepared_profiles", "tier_weights"}
     if set(raw) != fields or raw["schema"] != "spire-learn-scenario-recipe-v1":
         raise ValueError("recipe has missing, unknown or unsupported schema fields")
     if not isinstance(raw["support_file"], str) or not raw["support_file"]:
@@ -322,6 +392,184 @@ def _build(recipe: ScenarioRecipe, split: str, shard_index: int, arm: str, size:
                          content_sha256(manifest), distribution)
 
 
+def _prepared_deck(recipe: ScenarioRecipe, prepared: Mapping[str, object], stage: Mapping[str, int],
+                   rng: random.Random, targets: Sequence[str],
+                   coverage: Mapping[str, object] | None) -> list[dict[str, object]]:
+    """A boss/elite deck built around one core mechanic group, replacing the random fill."""
+    metadata = recipe.support.cards
+    rarity = prepared["rarity_weights"]
+    upgrade = lambda: int(rng.randrange(100) < prepared["upgrade_percent"])
+    # _STARTER lists Strikes first, so slicing removes Strikes before other starters.
+    deck = [{"card": c, "upgrades": upgrade()} for c in _STARTER[prepared["starter_removals"]:]]
+    group = recipe.mechanic_groups[rng.choice(sorted(g for g in recipe.mechanic_groups if g != "status"))]
+    core = rng.choices(group, weights=[rarity[metadata[c]["rarity"]] for c in group],
+                       k=rng.randint(*prepared["core_cards"]))
+    deck += [{"card": c, "upgrades": upgrade()} for c in (*core, *targets)]
+    if coverage is not None and coverage not in deck:
+        deck.append(dict(coverage))
+    cards = sorted(metadata)
+    fill_weights = [rarity[metadata[c]["rarity"]] for c in cards]
+    desired_size = rng.randint(stage["minimum_size"], stage["maximum_size"])
+    while len(deck) < desired_size:
+        deck.append({"card": rng.choices(cards, weights=fill_weights, k=1)[0], "upgrades": upgrade()})
+    return deck
+
+
+def _build_v2(recipe: ScenarioRecipe, split: str, shard_index: int, arm: str, size: int) -> ScenarioShard:
+    """Curriculum v2: the encounter is drawn first and sets the stage; boss/elite
+    run-like and lesson entries get prepared decks. Copies the v1 loop so that the
+    v1 builder's RNG draw order, and so its bytes, stay untouched."""
+    cards = sorted(recipe.support.cards)
+    card_metadata = recipe.support.cards
+    encounters = tuple(recipe.support.encounters.values())
+    weights = [recipe.rarity_weights[card_metadata[c]["rarity"]] for c in cards]
+    encounter_weights = [recipe.tier_weights[f"act{e['act']}:{e['kind']}"] for e in encounters]
+    n_run, n_lesson, _ = _quotas(size, shard_index, arm)
+    single_count = (n_lesson + 1) // 2
+    pair_count = n_lesson * 3 // 10
+    cases, entries, annotations = [], [], {}
+    seen_compositions = set()
+    distribution = content_sha256({"recipe": recipe.payload, "split": split, "arm": arm,
+                                    "composition_rule": "novel-deck-partition-v1"})
+    for local in range(size):
+        family = "run_like" if local < n_run else "lesson" if local < n_run + n_lesson else "unusual"
+        lesson_index = local - n_run
+        kind, category, targets = None, None, ()
+        if family == "lesson":
+            if lesson_index < single_count:
+                kind = "single"
+                targets = (cards[(shard_index * 26 + lesson_index) % len(cards)],)
+                category = "card:" + targets[0]
+            elif lesson_index < single_count + pair_count and recipe.lesson_pairs:
+                kind = "pair"
+                targets = recipe.lesson_pairs[(shard_index * 15 + lesson_index - single_count) % len(recipe.lesson_pairs)]
+                category = "pair:" + "+".join(targets)
+            else:
+                kind = "group"
+                group = sorted(recipe.mechanic_groups)[(shard_index * 10 + lesson_index) % len(recipe.mechanic_groups)]
+                targets = recipe.mechanic_groups[group]
+                category = "group:" + group
+        coverage_ordinal = (shard_index % 4) * 38 + local
+        coverage_card = cards[(coverage_ordinal // 2) % len(cards)]
+        coverage_upgrade = coverage_ordinal % 2
+        encounter_rng = _rng(recipe, split, arm, shard_index, f"v2-encounter:{local}")
+        if arm == "fixed":
+            encounter_id = _FIXED_ENCOUNTERS[(shard_index * size + local) % 13]
+        elif local < 11:
+            encounter_id = encounters[((shard_index % 4) * 11 + local) % 43]["id"]
+        else:
+            # v1's selection rule (stage-cycle act pool, 20% any act), with tier
+            # weights multiplying each candidate, so v2's tier mix stays v1-like.
+            cycle_act = recipe.stage_profiles[_STAGES[(local + shard_index) % 3]]["preferred_act"]
+            pool = (list(range(len(encounters))) if encounter_rng.randrange(5) == 0
+                    else [i for i, e in enumerate(encounters) if e["act"] == cycle_act])
+            chosen = encounter_rng.choices(pool, weights=[encounter_weights[i] for i in pool], k=1)[0]
+            encounter_id = encounters[chosen]["id"]
+        encounter = recipe.support.encounters[encounter_id]
+        # Stage follows the encounter: act 1 early, act 2 middle, acts 3-4 developed.
+        act = min(encounter["act"], 3)
+        stage = _STAGES[act - 1]
+        profile = recipe.stage_profiles[stage]
+        prepared = (recipe.prepared_profiles[f"act{act}"][encounter["kind"]]
+                    if arm != "fixed" and family in ("run_like", "lesson")
+                    and encounter["kind"] in _PREPARED_KINDS else None)
+        accepted = None
+        deck_rng = _rng(recipe, split, arm, shard_index, f"v2-deck:{local}")
+        resource_rng = _rng(recipe, split, arm, shard_index, f"v2-resources:{local}")
+        for _attempt in range(_ATTEMPTS):
+            if arm == "fixed":
+                deck = [{"card": c, "upgrades": 0} for c in _STARTER]
+                template = (shard_index * size + local) % 3
+                if template == 1:
+                    deck += [{"card": "warcry", "upgrades": 0}, {"card": "whirlwind", "upgrades": 0}]
+                elif template == 2:
+                    deck += [{"card": "immolate", "upgrades": 1}, {"card": "armaments", "upgrades": 1}]
+            else:
+                if prepared is not None:
+                    deck = _prepared_deck(recipe, prepared, profile, deck_rng, targets,
+                                          {"card": coverage_card, "upgrades": coverage_upgrade}
+                                          if local < 38 else None)
+                    if len(deck) > profile["maximum_size"]:
+                        # Lesson targets can push past the validated mandatory part; never emit it.
+                        raise ValueError(f"prepared deck for scenario entry {local} ({encounter_id}, "
+                                         f"{split} shard {shard_index}) has {len(deck)} cards, over "
+                                         f"the {stage} maximum_size {profile['maximum_size']}")
+                else:
+                    if family == "unusual":
+                        deck = []
+                        desired_size = deck_rng.randint(5, 40)
+                    else:
+                        starter = list(_STARTER)
+                        for _ in range(deck_rng.randint(0, profile["starter_removals"])):
+                            starter.pop(deck_rng.randrange(len(starter)))
+                        deck = [{"card": c, "upgrades": int(deck_rng.randrange(100) < profile["upgrade_percent"])}
+                                for c in starter]
+                        desired_size = (max(8, len(deck) + len(targets)) if family == "lesson"
+                                        else deck_rng.randint(profile["minimum_size"], profile["maximum_size"]))
+                    deck += [{"card": c, "upgrades": int(deck_rng.randrange(100) < profile["upgrade_percent"])}
+                             for c in targets]
+                    if local < 38:
+                        row = {"card": coverage_card, "upgrades": coverage_upgrade}
+                        if row not in deck:
+                            deck.append(row)
+                    coherent = recipe.mechanic_groups[deck_rng.choice(sorted(recipe.mechanic_groups))]
+                    while len(deck) < desired_size:
+                        card = (deck_rng.choice(coherent) if deck_rng.randrange(6) == 0
+                                else deck_rng.choices(cards, weights=weights, k=1)[0])
+                        deck.append({"card": card, "upgrades": int(deck_rng.randrange(100) < profile["upgrade_percent"])})
+                ids = {row["card"] for row in deck}
+                if split == "train" and any(set(pair) <= ids for pair in recipe.reserved_pairs):
+                    continue
+                if _composition_split(deck) != split:
+                    continue
+            deck.sort(key=lambda row: (row["card"], row["upgrades"]))
+            composition = content_sha256(deck)
+            if arm != "fixed" and composition in seen_compositions:
+                continue
+            if arm == "fixed":
+                hp, max_hp = (80 if local % 2 == 0 else 64), 80
+                relics, potions = ["burning_blood"], [None, None, None]
+            else:
+                max_hp = resource_rng.randint(80, 120)
+                hp = resource_rng.randint(24, max_hp)
+                if prepared is not None:
+                    hp = max(hp, -(-max_hp * prepared["hp_floor_percent"] // 100))
+                available = [r for r in recipe.support.relics if r not in
+                             {"burning_blood", "black_blood", "neows_lament"}]
+                relics = ["burning_blood"] + resource_rng.sample(available, resource_rng.randrange(4))
+                potions = [resource_rng.choice(recipe.support.potions) if resource_rng.randrange(3) == 0 else None
+                           for _ in range(3)]
+            lineage = "deck-" + composition
+            identity = content_sha256([distribution, shard_index, local, composition])
+            entry_id = "s-" + identity[:48]
+            entry = {"id": entry_id, "encounter": encounter_id, "hp": hp, "max_hp": max_hp,
+                     "deck": deck, "relics": sorted(relics), "potions": potions, "relic_counters": {}}
+            recipe.support.validate_entry(entry)
+            case = {"case_id": entry_id, "lineage_id": lineage if arm != "fixed" else lineage + f"-{local}",
+                    "mode": "standalone", "environment_seed": environment_seed_for(
+                        split, replica=0, ordinal=shard_index * 256 + local),
+                    "cohort": "fixed_control" if arm == "fixed" else "novel_composition",
+                    "entry_id": entry_id, "entry": entry}
+            _parse_case(case, split=split)
+            accepted = case
+            seen_compositions.add(composition)
+            break
+        if accepted is None:
+            raise ValueError(f"scenario entry {local} exhausted 4096 bounded construction attempts")
+        cases.append(accepted)
+        entries.append(accepted["entry"])
+        annotations[accepted["case_id"]] = {
+            "family": "fixed" if arm == "fixed" else family, "deck_stage": stage,
+            "lesson_kind": kind, "category": category, "target_card_ids": targets,
+            "encounter_tier": f"act{encounter['act']}:{encounter['kind']}",
+            "lineage_id": accepted["lineage_id"], "composition_sha256": composition,
+            "composition_scope": "seen_composition_control" if arm == "fixed" else "novel_composition",
+        }
+    manifest = {"schema": "spire-learn-neural-cases-v1", "split": split, "partition": split, "cases": cases}
+    return ScenarioShard(manifest, {"entries": entries}, annotations, shard_index, arm,
+                         content_sha256(manifest), distribution)
+
+
 # Shards are pure functions of the recipe content hash, split, index and arm, and
 # are deeply frozen, so a generated shard can be reused within a process. Resume
 # and checkpoint provenance checks regenerate the same few shards many times.
@@ -383,7 +631,8 @@ def _generate_scenario_shard(recipe: ScenarioRecipe, *, split: str, shard_index:
     size = min(recipe.shard_size, capacity, 78 if arm == "fixed" else 256)
     if not size:
         raise ValueError("no scenario entry can fit the catalog byte bound")
-    shard = _build(recipe, split, shard_index, arm, size)
+    build = _build_v2 if recipe.generator_version == _V2 else _build
+    shard = build(recipe, split, shard_index, arm, size)
     if len(canonical_bytes(shard.catalog)) > recipe.maximum_catalog_bytes:
         raise ValueError("scenario catalog exceeds byte bound")
     return shard

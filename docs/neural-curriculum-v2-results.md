@@ -1,8 +1,7 @@
 # Curriculum v2: winnability gate, real boss decks and panel ceilings
 
 Started 2026-11-19 under `docs/superpowers/specs/2026-11-19-curriculum-v2-design.md`.
-This note covers the curriculum and its gate. The four training arms are added
-when they finish. Everything here is a simulator-only diagnostic. The search
+This note covers the curriculum, its gate and the four training arms. Everything here is a simulator-only diagnostic. The search
 player sees public information only and is never a training input.
 
 ## Gate history
@@ -128,6 +127,94 @@ final scores (39 and 38). Differences of one or two wins are not effects, and
 the search plays Standard rules at A0, not M10. So this suggests, but does not
 show, that v1-panel scores leave little room to improve.
 
+## Training arms (Task 5)
+
+Four fresh-weight runs on Gym v1.1.1 trained on curriculum v2 with real boss
+decks, all from learner `2e8ad0d`.
+
+**Setup.**
+- Each run used 405,504 learned decisions. Budgets and the model are the v1.1.1
+  baselines'.
+- Seed pairs are also the baselines': "r1" uses replicate 1's seeds and "r2"
+  replicate 2's.
+- Arms:
+  - `cv2` and `cv2-r2`: win/loss objective.
+  - `cv2-hp` and `cv2-hp-r2`: the HP-shaped objective
+    (`spire-learn-combat-winloss-hpshaped-v1`, β = 0.5, γ = 0.99). The plan
+    notes don't name it; the template's `[objective]` table and identity do.
+- Each run was evaluated on the v2 panel, its primary panel, and on the v1 panel
+  for continuity.
+- **Re-evaluation.** Both r2 runs first stopped their fresh-initial v2-panel
+  evaluation. A long real-deck fight used all 256 case actions under the untrained
+  policy, and that was misclassified as an operational failure. PR #20 now
+  counts clean budget exhaustion as censored. The r2 runs' recorded checkpoints
+  were re-evaluated with `--reevaluate`, without retraining, into
+  `…-r2-20261119-reeval/`.
+- All runs ended `target_reached` with `learner_changed: false`. Training waited
+  for the shared GPU at times; for example, cv2 waited twice.
+
+**Panel wins.** Untrained-to-final wins on each panel, out of 64; the
+fresh-vs-final columns are fresh-only / final-only cases and the exact McNemar p.
+
+| Arm | v2: fresh → 135k → 270k → final | v2 fresh vs final | v1: fresh → final | v1 fresh vs final |
+| --- | --- | ---: | --- | ---: |
+| cv2 (r1) | 17 → 29 → 35 → **35** | 2 / 20, p < 0.001 | 18 → **41** | 0 / 23, p < 0.001 |
+| cv2-r2 | 10* → 32 → 32 → **33** | 0 / 22, p < 0.001 | 17 → **36** | 0 / 19, p < 0.001 |
+| cv2-hp (r1) | 17 → 31 → 35 → **37** | 2 / 22, p < 0.001 | 18 → **37** | 0 / 19, p < 0.001 |
+| cv2-hp-r2 | 10* → 31 → 32 → **39** | 0 / 28, p < 0.001 | 17 → **39** | 0 / 22, p < 0.001 |
+
+\* One fresh-initial case was censored, so 63 cases are paired.
+
+For reference, the v1.1.1 baselines (curriculum v1) finished at 39 and 38 on
+the v1 panel. Search ceilings are 39/64 on both panels.
+
+**Comparisons.** These are case-level paired tests on final policies with
+matched seeds:
+- **Shaped vs win/loss, v2 panel.** r1: win/loss-only 3, shaped-only 5
+  (p = 0.73). r2: 2 vs 8 (p = 0.11). The shaped arms score higher in both pairs
+  (37 and 39 vs 35 and 33), but neither difference is significant with these
+  replicates.
+- **Shaped vs win/loss, v1 panel.** 5 vs 1 (p = 0.22) and 2 vs 5 (p = 0.45). No
+  consistent direction.
+- **Curriculum v2 vs v1 on the v1 panel**, comparing cv2 against each baseline
+  with matching seeds. r1: v1-only 2, cv2-only 4 (p = 0.69). r2: 4 vs 2
+  (p = 0.69). No difference: the v1-panel scores stay at the level the v1
+  baselines reached, near that panel's search ceiling.
+- **Replicate agreement on the v2 panel.** cv2 vs cv2-r2: 5 vs 3. cv2-hp vs
+  cv2-hp-r2: 3 vs 5.
+
+**Final v2-panel wins by tier.**
+
+| Arm | Act 1 boss | Act 1 elite | Act 2 boss | Act 2 elite | Act 3 boss | Act 3 elite | Act 4 boss |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| cv2 | 4/6 | 5/6 | 1/6 | 2/6 | 1/6 | 0/4 | 0/1 |
+| cv2-r2 | 3/6 | 5/6 | 0/6 | 1/6 | 1/6 | 0/4 | 0/1 |
+| cv2-hp | 5/6 | 5/6 | 0/6 | 4/6 | 0/6 | 1/4 | 0/1 |
+| cv2-hp-r2 | 5/6 | 6/6 | 0/6 | 2/6 | 0/6 | 1/4 | 1/1 |
+
+**Training-time boss wins**, from segments 66–98 of each training stream:
+
+| Run | Act 1 boss | Act 2 boss | Act 3 boss | Act 4 boss |
+| --- | ---: | ---: | ---: | ---: |
+| v1.1.1 baseline r1 (curriculum v1) | 85/395 (22%) | 6/410 (1.5%) | 0/335 (0%) | 0/30 |
+| cv2 | 158/330 (48%) | 34/350 (10%) | 27/293 (9%) | 0/27 |
+| cv2-r2 | 173/344 (50%) | 25/333 (8%) | 7/333 (2%) | 0/37 |
+| cv2-hp | 182/343 (53%) | 36/327 (11%) | 18/265 (7%) | 0/39 |
+| cv2-hp-r2 | 167/321 (52%) | 45/326 (14%) | 24/343 (7%) | 0/43 |
+
+**Reading.**
+- **Bosses now teach something.** Curriculum v2's goal was to make boss fights
+  give a learning signal. In training, act 1 boss wins roughly double and act 2
+  and 3 bosses go from almost never to sometimes won. Under curriculum v1, act 3
+  bosses had 0 wins in 1,033 training fights.
+- **The panels move less.** On the v2 panel, act 2 and act 3 bosses are still
+  won 0–1 of 6 at the end of training. On the v1 panel, curriculum v2 neither
+  helps nor hurts.
+- **Shaping is a possible gain.** The HP-shaped objective is consistently
+  slightly higher on the v2 panel in both seed pairs, but not significantly.
+  More replicates would be needed to tell.
+- **Both objectives learn far beyond the fresh policy** on both panels.
+
 ## Limits
 
 - **Standard rules, not M10.** The search plays standard-combat-v1 rebuilds at
@@ -137,3 +224,10 @@ show, that v1-panel scores leave little room to improve.
 - **Real decks are partial.** They are A20 decks mapped onto a 75-card and
   30-relic support, so out-of-support cards and relics are missing. Selection
   and final splits reuse about 10% of them through the composition partition.
+- **Near-duplicates across splits.** The composition split hashes the real deck
+  together with any lesson targets and coverage card. So the same recorded base
+  deck can appear in train with one extra card and in selection with another,
+  and a v2 "novel deck" panel case may be one card away from a training deck.
+- **Two replicates per arm**, with one seed pair each. The v2 panel's
+  fresh-initial r2 score has one censored case. Training ran on a GPU shared
+  with other services.

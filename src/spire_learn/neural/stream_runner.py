@@ -168,6 +168,15 @@ def _preparation(recipe_path: Path, destination: Path, *, arm: str, split: str,
         files[name] = canonical_bytes(value) + b'\n'
     recipe_document = dict(json_value(recipe.payload))
     recipe_document['support_file'] = 'support.json'
+    if recipe.real_boss_decks is not None:
+        # The payload pins the table by hash only; the prepared recipe carries the
+        # table beside it, as its exact canonical bytes, so it loads on its own.
+        table = canonical_bytes(recipe.real_boss_deck_table)
+        if hashlib.sha256(table).hexdigest() != recipe.real_boss_decks['sha256']:
+            raise ValueError('real boss deck table bytes differ from the recipe pin')
+        recipe_document['real_boss_decks'] = {'path': 'real-boss-decks.json',
+                                              **json_value(recipe.real_boss_decks)}
+        files['real-boss-decks.json'] = table
     put('recipe.json', recipe_document)
     put('support.json', recipe.support.payload)
     for item in shards:

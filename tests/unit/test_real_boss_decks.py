@@ -402,3 +402,67 @@ class GeneratorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+ARTIFACTS = ROOT / "artifacts/development/neural-combat"
+# Raw-byte inventory of prepare_stream(mixed, train, shard 0), captured before real-deck packaging.
+PREPARED_INVENTORY = {
+    "v1": "423c04e5ecc09d16e24fcf3783c8db45eaa79f535171cc4678e559ad673679e8",
+    "v2": "53bde9b5b6972eb9a2f4c61d30f659a7bda1aba674604824d82a6089d9a43b9b",
+}
+
+
+class PreparationTests(unittest.TestCase):
+    def setUp(self):
+        stream._SHARD_CACHE.clear()
+        self.addCleanup(stream._SHARD_CACHE.clear)
+
+    def test_preparation_without_real_decks_is_unchanged(self):
+        from spire_learn.neural.stream_runner import prepare_stream
+        for version, digest in PREPARED_INVENTORY.items():
+            with self.subTest(version=version), tempfile.TemporaryDirectory(dir=ARTIFACTS) as tmp:
+                recipe = ROOT / f"configs/neural/curriculum-{version}/recipe.json"
+                result = prepare_stream(recipe, Path(tmp) / "prepared", arm="mixed", split="train", shard_index=0)
+                inventory = {name: row["raw_sha256"] for name, row in result["inventory"].items()}
+                self.assertNotIn("real-boss-decks.json", inventory)
+                self.assertEqual(content_sha256(inventory), digest)
+
+    def test_prepared_real_deck_recipe_loads_and_generates_identical_shards(self):
+        from spire_learn.neural.config import load_neural_config
+        from spire_learn.neural.stream_runner import prepare_stream
+        with tempfile.TemporaryDirectory(dir=ARTIFACTS) as tmp:
+            root = Path(tmp)
+            table_path = root / "tables/decks.json"
+            sha = rbd.write_document(_synthetic_table(load_scenario_support(SUPPORT_PATH)), table_path)
+            raw = json.loads(V2.read_text())
+            raw["support_file"] = str(SUPPORT_PATH)
+            raw["real_boss_decks"] = {"path": "tables/decks.json", "sha256": sha,
+                                      "tiers": ["act2:boss", "act3:boss"]}
+            source_path = root / "recipe.json"
+            source_path.write_text(json.dumps(raw))
+            source = stream.load_scenario_recipe(source_path)
+            destination = root / "prepared"
+            result = prepare_stream(source_path, destination, arm="mixed", split="train", shard_index=1)
+
+            self.assertEqual((destination / "real-boss-decks.json").read_bytes(), table_path.read_bytes())
+            self.assertIn("real-boss-decks.json", result["inventory"])
+            document = json.loads((destination / "recipe.json").read_text())
+            self.assertEqual(document["real_boss_decks"], {"path": "real-boss-decks.json", "sha256": sha,
+                                                           "tiers": ["act2:boss", "act3:boss"]})
+            prepared = stream.load_scenario_recipe(destination / "recipe.json")
+            self.assertEqual(prepared.sha256, source.sha256)
+            config = load_neural_config(destination / "config.toml")
+            stream._SHARD_CACHE.clear()
+            expected = stream._generate_scenario_shard(source, split="train", shard_index=1, arm="mixed")
+            self.assertEqual(config.manifest_sha256, expected.manifest_sha256)
+            self.assertEqual(result["manifest_sha256"], expected.manifest_sha256)
+            for index in range(4):
+                self.assertEqual(
+                    stream._generate_scenario_shard(prepared, split="train", shard_index=index,
+                                                    arm="mixed").manifest_sha256,
+                    stream._generate_scenario_shard(source, split="train", shard_index=index,
+                                                    arm="mixed").manifest_sha256)
+            # The prepared recipe binds the copied table: changing it fails closed.
+            (destination / "real-boss-decks.json").write_bytes(b"{}")
+            with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
+                stream.load_scenario_recipe(destination / "recipe.json")

@@ -164,6 +164,22 @@ def _run(fakes, *, clock=None, plan_path=PLAN, dependencies=None):
 GIB = 2**30
 
 
+def _budget_exhausted():
+    """A clean fixed-case budget exhaustion, shaped like the gym-1.1.1 cv2 fresh-initial report."""
+    return SimpleNamespace(exit_code=1, run_dir=None, summary={
+        "status": "incomplete", "stop_reason": "fixed_case_budget_incomplete", "fault": None,
+        "exit_code": 1, "mode": "standalone",
+        "case_accounting": {"cases": [{"case_id": "dev-x", "status": "incomplete"}],
+                            "complete": 0, "incomplete": 1},
+        "collection": {"fault": None, "faults": 0, "uncertain_environment_slots": 0,
+                       "stop_reason": "environment_action_budget"},
+        "fights": {"standalone_fights": {"reached_combat_denominator": 1, "completed": 0,
+                                         "victories": 0, "deaths": 0, "escaped": 0, "fights": []}},
+        "lifecycle": {"schema_id": "spire-learn-neural-lifecycle-v1", "status": "incomplete",
+                      "exit_code": 1, "close_errors": []},
+    })
+
+
 def _gpu_run(fakes, free, *, max_wait=14400, clock=None, additional_panels=None):
     """Run with a CUDA config and a gpu_wait plan; ``free(call)`` scripts free bytes."""
     clock = clock or _Clock()
@@ -744,6 +760,68 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertEqual(paired["excluded_failed_invalid_or_missing"], 0)
         self.assertEqual(paired["final_only_win"], 2)
 
+    def test_clean_case_budget_exhaustion_is_censored_and_evaluation_continues(self):
+        fakes = _Fakes(decisions_per_segment=4096, panel_cases=3)
+        original = fakes.evaluate
+
+        def censor_fresh_second_case(config, **kwargs):
+            report = original(config, **kwargs)
+            # Final runs cases 1-3; fresh-initial runs 4-6; its second case exhausts the case budget.
+            return _budget_exhausted() if len(fakes.evaluated) == 5 else report
+
+        fakes.evaluate = censor_fresh_second_case
+        summary, events, _ = _run(fakes)
+        fresh = summary["evaluations"]["fresh-initial"]
+        self.assertEqual(fresh["status"], "complete")
+        self.assertEqual(fresh["cases_evaluated"], 3)
+        self.assertEqual(fresh["cases"]["dev-1"]["outcome"], "incomplete")
+        self.assertEqual(len(fakes.evaluated), 12)  # every label still evaluated every case
+        paired = summary["paired_fresh_vs_final"]
+        self.assertEqual((paired["paired_cases"], paired["excluded_censored"],
+                          paired["excluded_failed_invalid_or_missing"]), (2, 1, 0))
+        self.assertEqual(summary["result"], "complete")
+
+    def test_unclean_incomplete_reports_still_fail(self):
+        variants = {
+            "fault": lambda s: s.update(fault={"type": "RuntimeError", "message": "boom"}),
+            "other stop reason": lambda s: s.update(stop_reason="wall_budget"),
+            "missing stop reason": lambda s: s.pop("stop_reason"),
+            "close error": lambda s: s["lifecycle"].update(close_errors=[{"type": "OSError"}]),
+            "lifecycle operation error": lambda s: s["lifecycle"].update(operation_error={"type": "X"}),
+            "lifecycle not incomplete": lambda s: s["lifecycle"].update(status="operational_failure"),
+            "lifecycle receipt pending": lambda s: s["lifecycle"].update(status="receipt_pending"),
+            "receipt write error": lambda s: s.update(lifecycle_receipt_error={"type": "OSError"}),
+            "collection fault": lambda s: s["collection"].update(fault={"type": "X"}, faults=1),
+            "uncertain slots": lambda s: s["collection"].update(uncertain_environment_slots=1),
+            "status not incomplete": lambda s: s.update(status="operational_failure"),
+        }
+        for name, mutate in variants.items():
+            with self.subTest(name):
+                report = _budget_exhausted()
+                mutate(report.summary)
+                self.assertEqual(baseline_entry._case_outcome(report), "failed")
+        self.assertEqual(baseline_entry._case_outcome(_budget_exhausted()), "incomplete")
+
+    def test_faulted_incomplete_case_stops_as_operational_failure(self):
+        fakes = _Fakes(decisions_per_segment=4096, panel_cases=3)
+        original = fakes.evaluate
+
+        def faulted_second_case(config, **kwargs):
+            report = original(config, **kwargs)
+            if len(fakes.evaluated) != 2:
+                return report
+            faulted = _budget_exhausted()
+            faulted.summary["fault"] = {"type": "RuntimeError", "message": "simulator fault"}
+            return faulted
+
+        fakes.evaluate = faulted_second_case
+        summary, _, _ = _run(fakes)
+        self.assertEqual(summary["evaluations"]["final"]["status"], "operational_failure")
+        self.assertEqual(summary["evaluations"]["final"]["cases"]["dev-1"]["outcome"], "failed")
+        self.assertEqual(len(fakes.evaluated), 2)
+        self.assertNotIn("fresh-initial", summary["evaluations"])
+        self.assertEqual(summary["result"], "incomplete")
+
     def test_failed_retention_panel_keeps_result_incomplete(self):
         fakes = _Fakes(decisions_per_segment=4096, panel_cases=3)
         fakes.fail_evaluation_at = 7  # first case of the third label, after final and fresh-initial
@@ -777,6 +855,179 @@ class BaselineEntryTests(unittest.TestCase):
         summary, _, _ = _run(fakes)
         self.assertEqual(summary["stop_reason"], "fresh_initial_roundtrip_mismatch")
         self.assertEqual(fakes.segments, [])
+
+
+def _prior_output(directory, *, plan=None, stop_reason="target_reached", missing=()):
+    """A finished prior run: summary.json plus checkpoint directories, made read-only by tests."""
+    prior = Path(directory) / "prior"
+    prior.mkdir()
+    checkpoints = []
+    for label, decisions in (("fresh-initial", 0), ("final", 405504),
+                             ("near-135168", 135168), ("near-270336", 270336)):
+        path = prior / label
+        if label not in missing:
+            path.mkdir()
+        checkpoints.append({"label": label, "path": str(path), "learned_decisions": decisions})
+    plan = json.loads((ROOT / PLAN).read_text()) if plan is None else plan
+    summary = {"schema": "spire-learn-baseline-summary-v1", "plan": plan, "stop_reason": stop_reason,
+               "checkpoints": checkpoints, "segments": 99, "learned_decisions": 405504,
+               "config_sha256": "a" * 64, "device": "cuda:0",
+               "evaluations": {"fresh-initial": {"status": "operational_failure"}},
+               "result": "incomplete"}
+    (prior / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    return prior, summary
+
+
+def _tree(path):
+    return sorted((str(p.relative_to(path)), p.stat().st_mtime_ns) for p in Path(path).rglob("*"))
+
+
+class ReevaluateTests(unittest.TestCase):
+    def _reevaluate(self, fakes, prior, directory, *, plan_path=PLAN):
+        output = Path(directory) / "new"
+        output.mkdir()
+        summary = baseline_entry.run_baseline(ROOT, plan_path, output, dependencies=fakes.deps(),
+                                              clock=_Clock(), reevaluate=prior)
+        return summary, output
+
+    def test_reevaluate_writes_only_to_new_output_and_evaluates_prior_checkpoints(self):
+        fakes = _Fakes(panel_cases=2)
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory)
+            before = _tree(prior)
+            summary, output = self._reevaluate(fakes, prior, directory)
+            self.assertEqual(_tree(prior), before)
+            written = json.loads((output / "summary.json").read_text())
+            self.assertTrue((output / "progress.jsonl").is_file())
+            self.assertTrue((output / "panel").is_dir())
+            events = [json.loads(line)["event"] for line in (output / "progress.jsonl").read_text().splitlines()]
+            self.assertIn("reevaluation_started", events)
+            self.assertTrue(all(Path(path).is_relative_to(output) for path in fakes.evaluated))
+        self.assertEqual(fakes.segments, [])  # nothing trains
+        self.assertFalse(any(entry[0] == "save" for entry in fakes.log))
+        evaluated = [str(entry[1]["checkpoint"]) for entry in fakes.log
+                     if entry[0] == "create_runtime" and entry[1].get("purpose") == "evaluate"]
+        expected = [str(prior / label) for label in ("final", "fresh-initial", "near-135168", "near-270336")
+                    for _ in range(2)]
+        self.assertEqual(evaluated, expected)
+        self.assertEqual(set(summary["evaluations"]), {"final", "fresh-initial", "near-135168", "near-270336"})
+        self.assertEqual(summary["result"], "complete")
+        self.assertEqual(written["result"], "complete")
+
+    def test_reevaluate_copies_the_training_record(self):
+        fakes = _Fakes(panel_cases=1)
+        with tempfile.TemporaryDirectory() as directory:
+            prior, previous = _prior_output(directory, stop_reason="training_wall")
+            previous["fault"] = {"type": "X", "message": "recorded"}
+            (prior / "summary.json").write_text(json.dumps(previous))
+            digest = __import__("hashlib").sha256((prior / "summary.json").read_bytes()).hexdigest()
+            summary, _ = self._reevaluate(fakes, prior, directory)
+        for key in ("stop_reason", "learned_decisions", "segments", "checkpoints", "config_sha256",
+                    "device", "fault"):
+            self.assertEqual(summary[key], previous[key], key)
+        self.assertEqual(summary["reevaluated_from"], str(prior))
+        self.assertEqual(summary["reevaluated_from_summary_sha256"], digest)
+        self.assertEqual(summary["evaluations"]["final"]["status"], "complete")
+        self.assertEqual(summary["result"], "incomplete")  # training_wall never completes, as in a normal run
+
+    def test_reevaluate_rejects_plan_mismatch(self):
+        plan = json.loads((ROOT / PLAN).read_text())
+        changed = {**plan, "target_learned_decisions": plan["target_learned_decisions"] + 1}
+        fakes = _Fakes(panel_cases=1)
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory, plan=changed)
+            output = Path(directory) / "new"
+            output.mkdir()
+            with self.assertRaisesRegex(ValueError, "plan"):
+                baseline_entry.run_baseline(ROOT, PLAN, output, dependencies=fakes.deps(),
+                                            clock=_Clock(), reevaluate=prior)
+            self.assertEqual(list(output.iterdir()), [])
+        self.assertEqual(fakes.evaluated, [])
+
+    def test_reevaluate_rejects_unevaluable_stop_and_output_inside_prior(self):
+        fakes = _Fakes(panel_cases=1)
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory, stop_reason="segment_fault")
+            output = Path(directory) / "new"
+            output.mkdir()
+            with self.assertRaisesRegex(ValueError, "stop"):
+                baseline_entry.run_baseline(ROOT, PLAN, output, dependencies=fakes.deps(),
+                                            clock=_Clock(), reevaluate=prior)
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory)
+            for target in (prior, prior / "nested"):
+                target.mkdir(exist_ok=True)
+                with self.assertRaisesRegex(ValueError, "prior output"):
+                    baseline_entry.run_baseline(ROOT, PLAN, target, dependencies=fakes.deps(),
+                                                clock=_Clock(), reevaluate=prior)
+            self.assertFalse((prior / "progress.jsonl").exists())
+        self.assertEqual(fakes.evaluated, [])
+
+    def test_reevaluate_missing_checkpoint_fails_closed(self):
+        fakes = _Fakes(panel_cases=1)
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory, missing=("near-135168",))
+            output = Path(directory) / "new"
+            output.mkdir()
+            with self.assertRaisesRegex(ValueError, "near-135168"):
+                baseline_entry.run_baseline(ROOT, PLAN, output, dependencies=fakes.deps(),
+                                            clock=_Clock(), reevaluate=prior)
+            self.assertEqual(list(output.iterdir()), [])
+        self.assertEqual(fakes.evaluated, [])
+
+    def test_reevaluate_checkpoint_failing_preflight_fails_closed(self):
+        fakes = _Fakes(panel_cases=1)
+
+        def preflight(checkpoint, identity, *, purpose):
+            if Path(checkpoint).name == "near-270336":
+                raise ValueError("checkpoint identity mismatch")
+
+        fakes.preflight = preflight
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory)
+            summary, output = self._reevaluate(fakes, prior, directory)
+            written = json.loads((output / "summary.json").read_text())
+        self.assertEqual(fakes.evaluated, [])
+        self.assertEqual(summary["evaluations"], {})
+        self.assertEqual(summary["reevaluation_refused"]["type"], "ValueError")
+        self.assertIn("near-270336", summary["reevaluation_refused"]["message"])
+        self.assertEqual(summary["result"], "incomplete")
+        self.assertEqual(written["result"], "incomplete")
+
+    def test_reevaluate_respects_the_total_wall(self):
+        fakes = _Fakes(panel_cases=1)
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory)
+            output = Path(directory) / "new"
+            output.mkdir()
+            summary = baseline_entry.run_baseline(ROOT, PLAN, output, dependencies=fakes.deps(),
+                                                  clock=_Clock(step=20000.0), reevaluate=prior)
+        self.assertEqual(summary["evaluations"]["final"]["status"], "skipped_wall")
+        self.assertEqual(fakes.evaluated, [])
+        self.assertEqual(summary["result"], "incomplete")
+
+    def test_cli_passes_reevaluate_and_validates_before_starting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory)
+            output = Path(directory) / "new"
+            output.mkdir()
+            env = {"SPIRE_LEARN_RUNNER_OUTPUT": str(output), "SPIRE_LEARN_RUNNER_TIMEOUT_SECONDS": "15600"}
+            result = {"result": "complete", "stop_reason": "target_reached", "learned_decisions": 1,
+                      "segments": 1}
+            with patch.dict(os.environ, env), \
+                 patch.object(baseline_entry, "run_baseline", return_value=result) as run_baseline:
+                status = baseline_entry.main(["--plan", str(PLAN), "--output", str(output),
+                                              "--root", str(ROOT), "--reevaluate", str(prior)])
+            self.assertEqual(status, 0)
+            self.assertEqual(run_baseline.call_args.kwargs["reevaluate"], prior)
+            stderr = io.StringIO()
+            with patch.dict(os.environ, env), redirect_stderr(stderr), \
+                 patch.object(baseline_entry, "run_baseline", return_value=result) as run_baseline:
+                status = baseline_entry.main(["--plan", str(PLAN), "--output", str(output),
+                                              "--root", str(ROOT), "--reevaluate",
+                                              str(Path(directory) / "absent")])
+            self.assertEqual(status, 2)
+            self.assertFalse(run_baseline.called)
 
 
 class TemplatePreparationTests(unittest.TestCase):

@@ -148,6 +148,36 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(missing['strata']['cohort']['familiar_new_seed']['fight_reports_missing'], 1)
         self.assertEqual(missing['failures'][0]['reason'], 'first setup cause')
 
+    def test_clean_case_budget_exhaustion_is_censored_not_failed(self):
+        from spire_learn.neural.stream_runner import (
+            build_development_panel, is_censored_case_report, summarize_development_reports)
+        panel = build_development_panel(self.recipe)
+        ids = [c['case_id'] for c in panel['manifest']['cases']]
+
+        def exhausted(case_id):
+            return NeuralReport({'status': 'incomplete', 'mode': 'standalone',
+                'stop_reason': 'fixed_case_budget_incomplete', 'fault': None, 'exit_code': 1,
+                'case_accounting': {'cases': [{'case_id': case_id, 'status': 'incomplete'}]},
+                'fights': {'standalone_fights': {'reached_combat_denominator': 1,
+                    'completed': 0, 'victories': 0, 'deaths': 0, 'escaped': 0, 'fights': []}},
+                'collection': {'fault': None, 'faults': 0, 'uncertain_environment_slots': 0},
+                'lifecycle': {'status': 'incomplete', 'exit_code': 1, 'close_errors': []}}, 1, None)
+        report = exhausted(ids[0])
+        self.assertTrue(is_censored_case_report(report))
+        result = summarize_development_reports(panel, {ids[0]: report})
+        row = result['strata']['cohort']['familiar_new_seed']
+        self.assertEqual((row['started'], row['completed'], row['censored'], row['operational_failures']),
+                         (1, 0, 1, 0))
+        self.assertEqual(result['failures'], [])
+        self.assertEqual(result['censored_cases'], [ids[0]])
+        self.assertEqual(result['status'], 'incomplete')
+        faulted = exhausted(ids[0])
+        faulted.summary['fault'] = {'type': 'RuntimeError'}
+        self.assertFalse(is_censored_case_report(faulted))
+        result = summarize_development_reports(panel, {ids[0]: faulted})
+        self.assertEqual(result['status'], 'operational_failure')
+        self.assertEqual(result['censored_cases'], [])
+
 
 class SegmentTests(unittest.TestCase):
     @classmethod

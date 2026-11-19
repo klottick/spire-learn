@@ -5,11 +5,17 @@ Learn's own building blocks: ``prepare_stream``, ``run_stream_segment``,
 ``build_development_panel`` and ``summarize_development_reports``. Faults stop
 the baseline with a recorded reason; nothing is retried and no completed segment
 is replayed.
+
+``--reevaluate PRIOR_OUTPUT`` skips training: it copies the prior summary's training
+record verbatim and re-runs only panel evaluation on its recorded checkpoints,
+writing to the new ``--output`` and never into the prior directory.
 """
 from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping
+import copy
+import hashlib
 import json
 import math
 import os
@@ -258,9 +264,53 @@ _EVALUABLE_STOPS = frozenset({'target_reached', 'training_wall', 'stream_exhaust
                               'segment_without_progress', 'segment_without_checkpoint'})
 
 
+SUMMARY_SCHEMA = 'spire-learn-baseline-summary-v1'
+# Copied verbatim from a prior summary by ``--reevaluate``; nothing here is recomputed.
+_TRAINING_RECORD = ('stop_reason', 'learned_decisions', 'segments', 'checkpoints', 'config_sha256',
+                    'device', 'fault')
+
+
+def load_prior(prior: Path, plan: Mapping, output: Path) -> tuple[dict, str]:
+    """Validate a prior baseline output for evaluate-only reuse; returns (summary, sha256).
+
+    Reads only. The new output must lie outside the prior output, the prior summary
+    must come from the same plan contents, training must have stopped evaluably and
+    every recorded checkpoint path must exist. Anything else fails closed.
+    """
+    prior, output = Path(prior), Path(output)
+    if not prior.is_absolute():
+        raise ValueError('reevaluate path must be absolute')
+    prior_resolved, output_resolved = prior.resolve(strict=True), output.resolve()
+    if (output_resolved == prior_resolved or prior_resolved in output_resolved.parents
+            or output_resolved in prior_resolved.parents):
+        raise ValueError('output must be separate from the prior output directory')
+    data = (prior / 'summary.json').read_bytes()
+    previous = json.loads(data)
+    if not isinstance(previous, dict) or previous.get('schema') != SUMMARY_SCHEMA:
+        raise ValueError('prior summary has an unsupported schema')
+    if previous.get('plan') != _json(plan):
+        raise ValueError('prior summary was produced by a different plan')
+    if previous.get('stop_reason') not in _EVALUABLE_STOPS:
+        raise ValueError(f'prior training stop {previous.get("stop_reason")!r} is not evaluable')
+    checkpoints = previous.get('checkpoints')
+    if (not isinstance(checkpoints, list)
+            or any(not isinstance(row, dict) or not isinstance(row.get('label'), str)
+                   or not isinstance(row.get('path'), str) for row in checkpoints)
+            or len({row['label'] for row in checkpoints}) != len(checkpoints)
+            or 'fresh-initial' not in {row['label'] for row in checkpoints}):
+        raise ValueError('prior summary needs uniquely labelled checkpoints including fresh-initial')
+    for row in checkpoints:
+        path = Path(row['path'])
+        if not path.is_absolute() or not path.exists():
+            raise ValueError(f'prior checkpoint {row["label"]} is missing: {path}')
+    return previous, hashlib.sha256(data).hexdigest()
+
+
 def run_baseline(root: Path, plan_path: Path, output: Path, *,
                  dependencies: Mapping[str, Callable] | None = None,
-                 clock: Callable[[], float] = time.monotonic) -> dict:
+                 clock: Callable[[], float] = time.monotonic,
+                 reevaluate: Path | None = None) -> dict:
+    """Train and evaluate; with ``reevaluate``, only evaluate that prior run's checkpoints."""
     deps = dict(_default_dependencies() if dependencies is None else dependencies)
     root, output = Path(root), Path(output)
     if not root.is_absolute():
@@ -271,6 +321,9 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
     plan_path = Path(plan_path)
     plan = load_plan(plan_path if plan_path.is_absolute() else root / plan_path)
     _validate_runner_contract(root, output, plan, require_environment=False)
+    previous = None
+    if reevaluate is not None:
+        previous, previous_sha256 = load_prior(reevaluate, plan, output)
     started = clock()
     budget = _Budget(training=started + plan['wall_seconds']['training'],
                      total=started + plan['wall_seconds']['total'])
@@ -279,9 +332,15 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
     template = root / plan['template']
     recipe_path = root / plan['recipe']
     prepared = output / 'prepared'
-    summary: dict = {'schema': 'spire-learn-baseline-summary-v1', 'plan': plan, 'stop_reason': None,
+    summary: dict = {'schema': SUMMARY_SCHEMA, 'plan': plan, 'stop_reason': None,
                      'checkpoints': [], 'segments': 0, 'learned_decisions': 0, 'evaluations': {},
                      'result': 'incomplete'}
+    if previous is not None:
+        for key in _TRAINING_RECORD:
+            if key in previous:
+                summary[key] = copy.deepcopy(previous[key])
+        summary['reevaluated_from'] = str(reevaluate)
+        summary['reevaluated_from_summary_sha256'] = previous_sha256
 
     def prepare(name: str, *, split: str, shard_index: int):
         destination = prepared / name
@@ -296,70 +355,22 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
             return 'output_byte_cap'
         return None
 
-    fresh_path = None
-    recorded: list[dict] = []
     try:
         prepared.mkdir()
-        try:
-            _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock,
-                   journal, output)
-        except _Stop as stop:
-            summary['stop_reason'] = stop.reason
-        except Exception as error:
-            summary['stop_reason'] = 'fault'
-            summary['fault'] = {'type': type(error).__name__, 'message': str(error)[:2000]}
-            journal.write('fault', **summary['fault'])
-        fresh_path = next((row['path'] for row in summary['checkpoints']
-                           if row['label'] == 'fresh-initial'), None)
-        if recorded:
-            final = recorded[-1]
-            summary['checkpoints'].append({'label': 'final', **final})
-            for near in plan['retain_near_decisions']:
-                chosen = _nearest(recorded, near)
-                if chosen is not None and chosen is not final:
-                    summary['checkpoints'].append({'label': f'near-{near}', **chosen})
-        journal.write('training_stopped', stop_reason=summary['stop_reason'],
-                      learned_decisions=summary['learned_decisions'])
-        if fresh_path is not None and summary['stop_reason'] in _EVALUABLE_STOPS:
-            try:
-                _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, clock,
-                          journal, storage_stop)
-            except Exception as error:
-                # An evaluation fault never rewrites training results; it is reported, not retried.
-                summary['evaluation_fault'] = {'type': type(error).__name__, 'message': str(error)[:2000]}
-                journal.write('evaluation_fault', **summary['evaluation_fault'])
-                for evaluation in summary['evaluations'].values():
-                    if evaluation.get('status') == 'running':
-                        evaluation['status'] = 'fault'  # partial rows kept; panel not complete
-            summary['additional_panels'] = {}
-            # Extra panels follow all primary labels and share the same total wall budget.
-            for index, extra_recipe in enumerate(plan.get('additional_panels', [])):
-                panel_result = {'evaluations': {}}
-                summary['additional_panels'][extra_recipe] = panel_result
-                panel_output = output / 'additional-panels' / f'panel-{index:02d}'
-                try:
-                    _evaluate(summary, deps, plan, template, root / extra_recipe, panel_output, budget,
-                              gate, clock, journal, storage_stop, result_container=panel_result,
-                              labels=('final', 'fresh-initial'), panel_id=extra_recipe)
-                except Exception as error:
-                    panel_result['fault'] = {'type': type(error).__name__, 'message': str(error)[:2000]}
-                    journal.write('additional_panel_fault', recipe=extra_recipe, **panel_result['fault'])
-                    for evaluation in panel_result['evaluations'].values():
-                        if evaluation.get('status') == 'running':
-                            evaluation['status'] = 'fault'
+        if previous is None:
+            fresh_path = _train_and_label(summary, deps, plan, prepare, storage_stop, budget, gate,
+                                          clock, journal, output)
         else:
-            summary['evaluation_skipped'] = summary['stop_reason']
-        evaluated = summary['evaluations']
-        summary['result'] = ('complete' if summary['stop_reason'] == 'target_reached'
-                             and 'evaluation_fault' not in summary
-                             and all(evaluated.get(row['label'], {}).get('status') == 'complete'
-                                     for row in summary['checkpoints'])
-                             and all(
-                                 summary.get('additional_panels', {}).get(recipe, {}).get('evaluations', {})
-                                 .get(label, {}).get('status') == 'complete'
-                                 for recipe in plan.get('additional_panels', [])
-                                 for label in ('final', 'fresh-initial'))
-                             else 'incomplete')
+            journal.write('reevaluation_started', prior=str(reevaluate), prior_summary_sha256=previous_sha256,
+                          stop_reason=summary['stop_reason'], learned_decisions=summary['learned_decisions'])
+            fresh_path = _reevaluation_preflight(summary, deps, plan, prepare, storage_stop, journal)
+        if fresh_path is not None and summary['stop_reason'] in _EVALUABLE_STOPS:
+            _evaluate_all(summary, deps, plan, root, template, recipe_path, output, budget, gate, clock,
+                          journal, storage_stop)
+        else:
+            summary['evaluation_skipped'] = ('reevaluation_refused' if 'reevaluation_refused' in summary
+                                             else summary['stop_reason'])
+        summary['result'] = _result(summary, plan)
     except BaseException as interrupt:
         # Process control (interrupt, exit) still publishes what is known, then propagates.
         summary['interrupted'] = type(interrupt).__name__
@@ -369,6 +380,102 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
         with (output / 'summary.json').open('x') as stream:
             stream.write(json.dumps(_json(summary), indent=2, sort_keys=True) + '\n')
     return summary
+
+
+def _train_and_label(summary, deps, plan, prepare, storage_stop, budget, gate, clock, journal, output):
+    """Train, label retained checkpoints and return the fresh-initial path (or None)."""
+    recorded: list[dict] = []
+    try:
+        _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock, journal, output)
+    except _Stop as stop:
+        summary['stop_reason'] = stop.reason
+    except Exception as error:
+        summary['stop_reason'] = 'fault'
+        summary['fault'] = {'type': type(error).__name__, 'message': str(error)[:2000]}
+        journal.write('fault', **summary['fault'])
+    fresh_path = next((row['path'] for row in summary['checkpoints']
+                       if row['label'] == 'fresh-initial'), None)
+    if recorded:
+        final = recorded[-1]
+        summary['checkpoints'].append({'label': 'final', **final})
+        for near in plan['retain_near_decisions']:
+            chosen = _nearest(recorded, near)
+            if chosen is not None and chosen is not final:
+                summary['checkpoints'].append({'label': f'near-{near}', **chosen})
+    journal.write('training_stopped', stop_reason=summary['stop_reason'],
+                  learned_decisions=summary['learned_decisions'])
+    return fresh_path
+
+
+def _reevaluation_preflight(summary, deps, plan, prepare, storage_stop, journal):
+    """Preflight every prior checkpoint before any evaluation; refuse (fail closed) on any problem."""
+    label = None
+    try:
+        reason = storage_stop()
+        if reason is not None:
+            raise _Stop(reason)
+        # The same identity the training run used to preflight its fresh-initial checkpoint.
+        config = prepare('reevaluation-identity', split='train', shard_index=0)
+        if config.environment_revision != plan['gym_revision']:
+            raise _Stop('template_revision_differs_from_plan')
+        for row in summary['checkpoints']:
+            label = row['label']
+            deps['preflight'](Path(row['path']), config.accepted_identities[0], purpose='evaluate')
+    except _Stop as stop:
+        summary['reevaluation_refused'] = {'type': 'Stop', 'message': stop.reason}
+    except Exception as error:
+        prefix = f'checkpoint {label} failed preflight: ' if label is not None else ''
+        summary['reevaluation_refused'] = {'type': type(error).__name__,
+                                           'message': (prefix + str(error))[:2000]}
+    if 'reevaluation_refused' in summary:
+        journal.write('reevaluation_refused', **summary['reevaluation_refused'])
+        return None
+    return next(row['path'] for row in summary['checkpoints'] if row['label'] == 'fresh-initial')
+
+
+def _evaluate_all(summary, deps, plan, root, template, recipe_path, output, budget, gate, clock,
+                  journal, storage_stop) -> None:
+    """Primary panel for every label, then each additional panel for final and fresh-initial."""
+    try:
+        _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, clock,
+                  journal, storage_stop)
+    except Exception as error:
+        # An evaluation fault never rewrites training results; it is reported, not retried.
+        summary['evaluation_fault'] = {'type': type(error).__name__, 'message': str(error)[:2000]}
+        journal.write('evaluation_fault', **summary['evaluation_fault'])
+        for evaluation in summary['evaluations'].values():
+            if evaluation.get('status') == 'running':
+                evaluation['status'] = 'fault'  # partial rows kept; panel not complete
+    summary['additional_panels'] = {}
+    # Extra panels follow all primary labels and share the same total wall budget.
+    for index, extra_recipe in enumerate(plan.get('additional_panels', [])):
+        panel_result = {'evaluations': {}}
+        summary['additional_panels'][extra_recipe] = panel_result
+        panel_output = output / 'additional-panels' / f'panel-{index:02d}'
+        try:
+            _evaluate(summary, deps, plan, template, root / extra_recipe, panel_output, budget,
+                      gate, clock, journal, storage_stop, result_container=panel_result,
+                      labels=('final', 'fresh-initial'), panel_id=extra_recipe)
+        except Exception as error:
+            panel_result['fault'] = {'type': type(error).__name__, 'message': str(error)[:2000]}
+            journal.write('additional_panel_fault', recipe=extra_recipe, **panel_result['fault'])
+            for evaluation in panel_result['evaluations'].values():
+                if evaluation.get('status') == 'running':
+                    evaluation['status'] = 'fault'
+
+
+def _result(summary, plan) -> str:
+    evaluated = summary['evaluations']
+    return ('complete' if summary['stop_reason'] == 'target_reached'
+            and 'evaluation_fault' not in summary and 'reevaluation_refused' not in summary
+            and all(evaluated.get(row['label'], {}).get('status') == 'complete'
+                    for row in summary['checkpoints'])
+            and all(
+                summary.get('additional_panels', {}).get(recipe, {}).get('evaluations', {})
+                .get(label, {}).get('status') == 'complete'
+                for recipe in plan.get('additional_panels', [])
+                for label in ('final', 'fresh-initial'))
+            else 'incomplete')
 
 
 def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock, journal, output) -> None:
@@ -460,9 +567,15 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, c
 
 
 def _case_outcome(report) -> str:
+    """Win/loss/escaped settle a case; 'incomplete' is censored; anything unhealthy fails.
+
+    A clean fixed-case budget exhaustion (no fault, clean lifecycle) is censoring,
+    not an operational failure: the evaluation continues and pairing excludes it.
+    """
+    from spire_learn.neural.stream_runner import is_censored_case_report
     summary = getattr(report, 'summary', {}) or {}
     if getattr(report, 'exit_code', 1) != 0 or summary.get('status') != 'complete':
-        return 'failed'
+        return 'incomplete' if is_censored_case_report(report) else 'failed'
     fight = (summary.get('fights') or {}).get('standalone_fights')
     if not isinstance(fight, Mapping):
         return 'invalid'  # a healthy report must carry its fight metrics
@@ -591,6 +704,9 @@ def main(argv=None) -> int:
     parser.add_argument('--plan', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument('--reevaluate', type=Path, metavar='PRIOR_OUTPUT',
+                        help='evaluate-only: re-run panel evaluation on a prior run\'s recorded '
+                             'checkpoints, writing only to --output')
     arguments = parser.parse_args(argv)
     if not arguments.root.is_absolute():
         print('--root must be an absolute path', file=sys.stderr)
@@ -602,10 +718,13 @@ def main(argv=None) -> int:
     try:
         plan = load_plan(plan_path)
         _validate_runner_contract(arguments.root, arguments.output, plan, require_environment=True)
+        if arguments.reevaluate is not None:
+            load_prior(arguments.reevaluate, plan, arguments.output)
     except (OSError, ValueError) as error:
         print(str(error), file=sys.stderr)
         return 2
-    summary = run_baseline(arguments.root, arguments.plan, arguments.output)
+    summary = run_baseline(arguments.root, arguments.plan, arguments.output,
+                           reevaluate=arguments.reevaluate)
     print(json.dumps({'result': summary['result'], 'stop_reason': summary['stop_reason'],
                       'learned_decisions': summary['learned_decisions'],
                       'segments': summary['segments']}, sort_keys=True))

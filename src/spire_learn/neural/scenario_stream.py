@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import Counter, OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields
+import hashlib
 import math
 from pathlib import Path
 import random
@@ -33,6 +34,12 @@ _V2 = "ironclad-curriculum-v2"
 _PREPARED_ACTS = ("act1", "act2", "act3")
 _PREPARED_KINDS = ("boss", "elite")
 _RARITIES = ("starter", "common", "uncommon", "rare")
+_REAL_TIERS = ("act2:boss", "act3:boss")
+_REAL_SCHEMA = "spire-learn-real-boss-decks-v1"
+_REAL_DECK_FIELDS = {"run_id", "encounter", "floor", "won", "ascension", "deck", "relics",
+                     "hp_fraction", "dropped_cards"}
+_REGENERATE = ("regenerate it with: PYTHONPATH=src python3.12 scripts/neural/real_boss_decks.py extract "
+               "--raw <run files> --support configs/neural/curriculum-v1/support.json --output <path>")
 
 
 def _integer(value: object, minimum: int, maximum: int, name: str) -> None:
@@ -55,6 +62,10 @@ class ScenarioRecipe:
     # v2-only tables; both None for v1, both required for v2.
     prepared_profiles: Mapping[str, Mapping[str, Mapping[str, object]]] | None = None
     tier_weights: Mapping[str, float] | None = None
+    # Optional v2 table: {sha256, tiers} joins the payload; the loaded document does not
+    # (its canonical content must hash to that sha256).
+    real_boss_decks: Mapping[str, object] | None = None
+    real_boss_deck_table: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.support, ScenarioSupport):
@@ -122,6 +133,8 @@ class ScenarioRecipe:
             raise ValueError("lesson category universe exceeds 256")
         if self.generator_version == _V2:
             self._validate_v2_tables()
+        if (self.real_boss_decks, self.real_boss_deck_table) != (None, None):
+            self._validate_real_boss_decks()
 
     def _validate_v2_tables(self) -> None:
         cards = self.support.cards
@@ -180,6 +193,57 @@ class ScenarioRecipe:
         tier_weights = {tier: float(weight) for tier, weight in tier_weights.items()}
         object.__setattr__(self, "tier_weights", _freeze_json(tier_weights))
 
+    def _validate_real_boss_decks(self) -> None:
+        if self.generator_version != _V2:
+            raise ValueError("only v2 recipes accept real_boss_decks")
+        if None in (self.real_boss_decks, self.real_boss_deck_table):
+            raise ValueError("real_boss_decks requires its loaded deck table")
+        spec = json_value(self.real_boss_decks)
+        if not isinstance(spec, dict) or set(spec) != {"sha256", "tiers"}:
+            raise ValueError("real_boss_decks must contain exactly sha256 and tiers")
+        if not isinstance(spec["sha256"], str) or len(spec["sha256"]) != 64 or any(
+                c not in "0123456789abcdef" for c in spec["sha256"]):
+            raise ValueError("real_boss_decks sha256 must be 64 lowercase hex digits")
+        tiers = spec["tiers"]
+        if (not isinstance(tiers, list) or not tiers or len(set(tiers)) != len(tiers)
+                or any(t not in _REAL_TIERS for t in tiers)):
+            raise ValueError(f"real_boss_decks tiers must be a non-empty unique subset of {_REAL_TIERS}")
+        table = json_value(self.real_boss_deck_table)
+        if content_sha256(table) != spec["sha256"]:
+            raise ValueError("real boss deck table SHA256 mismatch; " + _REGENERATE)
+        if (not isinstance(table, dict) or set(table) != {"schema", "source", "decks"}
+                or table["schema"] != _REAL_SCHEMA or not isinstance(table["source"], str)
+                or not isinstance(table["decks"], list) or not 1 <= len(table["decks"]) <= 100_000):
+            raise ValueError("invalid real boss deck table schema; " + _REGENERATE)
+        cards, encounters = self.support.cards, self.support.encounters
+        bosses = {e for e, row in encounters.items() if f"act{row['act']}:{row['kind']}" in _REAL_TIERS}
+        for deck in table["decks"]:
+            if (not isinstance(deck, dict) or set(deck) != _REAL_DECK_FIELDS
+                    or not isinstance(deck["run_id"], str) or deck["encounter"] not in bosses
+                    or type(deck["floor"]) is not int or type(deck["won"]) is not bool
+                    or type(deck["ascension"]) is not int
+                    or type(deck["dropped_cards"]) is not int or deck["dropped_cards"] < 0
+                    or type(deck["hp_fraction"]) not in (int, float)
+                    or not 0 < deck["hp_fraction"] <= 1
+                    or not isinstance(deck["deck"], list) or not 1 <= len(deck["deck"]) <= 100
+                    or any(not isinstance(row, dict) or set(row) != {"card", "upgrades"}
+                           or row["card"] not in cards or type(row["upgrades"]) is not int
+                           or not 0 <= row["upgrades"] <= cards[row["card"]]["maximum_upgrades"]
+                           for row in deck["deck"])
+                    or not isinstance(deck["relics"], list) or len(deck["relics"]) > 29
+                    or len(set(deck["relics"])) != len(deck["relics"])
+                    or any(r not in self.support.relics or r == "neows_lament" for r in deck["relics"])
+                    or {"burning_blood", "black_blood"} <= set(deck["relics"])):
+                raise ValueError("invalid real boss deck row; " + _REGENERATE)
+        won = Counter(d["encounter"] for d in table["decks"] if d["won"])
+        for encounter in sorted(bosses):
+            row = encounters[encounter]
+            if f"act{row['act']}:{row['kind']}" in tiers and not won[encounter]:
+                raise ValueError(f"real boss deck table has no won deck for {encounter}")
+        object.__setattr__(self, "real_boss_decks", _freeze_json(
+            {"sha256": spec["sha256"], "tiers": [t for t in _REAL_TIERS if t in tiers]}))
+        object.__setattr__(self, "real_boss_deck_table", _freeze_json(table))
+
     @property
     def category_keys(self) -> tuple[str, ...]:
         return (tuple(f"card:{c}" for c in sorted(self.support.cards))
@@ -190,6 +254,8 @@ class ScenarioRecipe:
     def payload(self) -> Mapping[str, object]:
         # v2 tables join the payload only for v2, so v1 hashes stay unchanged.
         v2 = ("prepared_profiles", "tier_weights") if self.generator_version == _V2 else ()
+        # Only when present, so v2 recipes without real decks keep their bytes.
+        v2 += ("real_boss_decks",) if self.real_boss_decks is not None else ()
         return _freeze_json({"schema": "spire-learn-scenario-recipe-v1",
             "generator_version": self.generator_version, "support_sha256": self.support.sha256,
             **{k: getattr(self, k) for k in ("generator_seed", "shard_size", "maximum_catalog_bytes",
@@ -208,6 +274,8 @@ def load_scenario_recipe(path: Path) -> ScenarioRecipe:
               "mechanic_groups", "stage_profiles", "rarity_weights"}
     if raw.get("generator_version") == _V2:
         fields |= {"prepared_profiles", "tier_weights"}
+        if "real_boss_decks" in raw:
+            fields.add("real_boss_decks")
     if set(raw) != fields or raw["schema"] != "spire-learn-scenario-recipe-v1":
         raise ValueError("recipe has missing, unknown or unsupported schema fields")
     if not isinstance(raw["support_file"], str) or not raw["support_file"]:
@@ -215,8 +283,24 @@ def load_scenario_recipe(path: Path) -> ScenarioRecipe:
     support = load_scenario_support(Path(path).resolve().parent / raw["support_file"])
     if raw["support_sha256"] != support.sha256:
         raise ValueError("recipe support SHA256 mismatch")
-    return ScenarioRecipe(support=support, **{k: v for k, v in raw.items()
-                          if k not in {"schema", "support_file", "support_sha256"}})
+    real = {}
+    if "real_boss_decks" in raw:
+        spec = raw["real_boss_decks"]
+        if not isinstance(spec, dict) or set(spec) != {"path", "sha256", "tiers"}:
+            raise ValueError("recipe real_boss_decks must contain exactly path, sha256 and tiers")
+        if not isinstance(spec["path"], str) or not spec["path"]:
+            raise ValueError("recipe real_boss_decks path must be a path")
+        # Resolved like support_file; the table is a local, regenerable artifact.
+        table_path = Path(path).resolve().parent / spec["path"]
+        if not table_path.is_file():
+            raise ValueError(f"real boss deck table is missing: {table_path}; " + _REGENERATE)
+        data = table_path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != spec["sha256"]:
+            raise ValueError(f"real boss deck table SHA256 mismatch: {table_path}; " + _REGENERATE)
+        real = {"real_boss_decks": {"sha256": spec["sha256"], "tiers": spec["tiers"]},
+                "real_boss_deck_table": read_json(table_path)}
+    return ScenarioRecipe(support=support, **real, **{k: v for k, v in raw.items()
+                          if k not in {"schema", "support_file", "support_sha256", "real_boss_decks"}})
 
 
 @dataclass(frozen=True)
@@ -423,6 +507,16 @@ def _prepared_deck(recipe: ScenarioRecipe, prepared: Mapping[str, object], stage
     return deck
 
 
+def _real_deck(prepared: Mapping[str, object], real: Mapping[str, object], rng: random.Random,
+               targets: Sequence[str], coverage: Mapping[str, object] | None) -> list[dict[str, object]]:
+    """A recorded boss deck, plus lesson targets and the coverage card as the prepared path adds them."""
+    deck = [dict(row) for row in real["deck"]]
+    deck += [{"card": c, "upgrades": int(rng.randrange(100) < prepared["upgrade_percent"])} for c in targets]
+    if coverage is not None and coverage not in deck:
+        deck.append(dict(coverage))
+    return deck
+
+
 def _build_v2(recipe: ScenarioRecipe, split: str, shard_index: int, arm: str, size: int) -> ScenarioShard:
     """Curriculum v2: the encounter is drawn first and sets the stage; boss/elite
     run-like and lesson entries get prepared decks. Copies the v1 loop so that the
@@ -439,6 +533,11 @@ def _build_v2(recipe: ScenarioRecipe, split: str, shard_index: int, arm: str, si
     seen_compositions = set()
     distribution = content_sha256({"recipe": recipe.payload, "split": split, "arm": arm,
                                     "composition_rule": "novel-deck-partition-v1"})
+    real_tiers = recipe.real_boss_decks["tiers"] if recipe.real_boss_decks is not None else ()
+    real_pools: dict[str, list[Mapping[str, object]]] = {}
+    for real_row in (recipe.real_boss_deck_table["decks"] if real_tiers else ()):
+        if real_row["won"]:
+            real_pools.setdefault(real_row["encounter"], []).append(real_row)
     for local in range(size):
         family = "run_like" if local < n_run else "lesson" if local < n_run + n_lesson else "unusual"
         lesson_index = local - n_run
@@ -481,6 +580,10 @@ def _build_v2(recipe: ScenarioRecipe, split: str, shard_index: int, arm: str, si
         prepared = (recipe.prepared_profiles[f"act{act}"][encounter["kind"]]
                     if arm != "fixed" and family in ("run_like", "lesson")
                     and encounter["kind"] in _PREPARED_KINDS else None)
+        # Boss cases in a listed tier draw a won recorded deck instead of a prepared one.
+        real_pool = (real_pools[encounter_id] if prepared is not None
+                     and f"act{encounter['act']}:{encounter['kind']}" in real_tiers else None)
+        real = None
         accepted = None
         deck_rng = _rng(recipe, split, arm, shard_index, f"v2-deck:{local}")
         resource_rng = _rng(recipe, split, arm, shard_index, f"v2-resources:{local}")
@@ -493,7 +596,12 @@ def _build_v2(recipe: ScenarioRecipe, split: str, shard_index: int, arm: str, si
                 elif template == 2:
                     deck += [{"card": "immolate", "upgrades": 1}, {"card": "armaments", "upgrades": 1}]
             else:
-                if prepared is not None:
+                if real_pool is not None:
+                    real = deck_rng.choice(real_pool)
+                    deck = _real_deck(prepared, real, deck_rng, targets,
+                                      {"card": coverage_card, "upgrades": coverage_upgrade}
+                                      if local < 38 else None)
+                elif prepared is not None:
                     deck = _prepared_deck(recipe, prepared, profile, deck_rng, targets,
                                           {"card": coverage_card, "upgrades": coverage_upgrade}
                                           if local < 38 else None)
@@ -537,6 +645,14 @@ def _build_v2(recipe: ScenarioRecipe, split: str, shard_index: int, arm: str, si
             if arm == "fixed":
                 hp, max_hp = (80 if local % 2 == 0 else 64), 80
                 relics, potions = ["burning_blood"], [None, None, None]
+            elif real is not None:
+                max_hp = resource_rng.randint(80, 120)
+                hp = max(1, round(real["hp_fraction"] * max_hp))
+                relics = list(real["relics"])
+                if not {"burning_blood", "black_blood"} & set(relics):
+                    relics.append("burning_blood")
+                potions = [resource_rng.choice(recipe.support.potions) if resource_rng.randrange(3) == 0 else None
+                           for _ in range(3)]
             else:
                 max_hp = resource_rng.randint(80, 120)
                 hp = resource_rng.randint(24, max_hp)
@@ -627,10 +743,19 @@ def _generate_scenario_shard(recipe: ScenarioRecipe, *, split: str, shard_index:
     # capacity, so byte reduction cannot reset the fractional family carry.
     # Generated decks have <=40 rows, <=4 relics and exactly three potion slots.
     longest = lambda values: max(values, key=lambda value: len(canonical_bytes(value)))
+    deck_rows, relic_rows, upgrades = 40, 4, 1
+    if recipe.real_boss_decks is not None:
+        # Recorded decks can be longer and carry more relics and Searing Blow upgrades;
+        # add the largest lesson target set and the coverage card.
+        real = recipe.real_boss_deck_table["decks"]
+        deck_rows = max(deck_rows, max(len(d["deck"]) for d in real)
+                        + max(len(g) for g in recipe.mechanic_groups.values()) + 1)
+        relic_rows = max(relic_rows, max(len(d["relics"]) for d in real) + 1)
+        upgrades = 10
     worst = {"id": "s-" + "0" * 48, "encounter": longest(recipe.support.encounters),
              "hp": 120, "max_hp": 120,
-             "deck": [{"card": longest(recipe.support.cards), "upgrades": 1}] * 40,
-             "relics": [longest(recipe.support.relics)] * 4,
+             "deck": [{"card": longest(recipe.support.cards), "upgrades": upgrades}] * deck_rows,
+             "relics": [longest(recipe.support.relics)] * relic_rows,
              "potions": [longest(recipe.support.potions)] * 3, "relic_counters": {}}
     capacity = max(0, (recipe.maximum_catalog_bytes - len(canonical_bytes({"entries": []})))
                    // (len(canonical_bytes(worst)) + 1))

@@ -116,17 +116,21 @@
       "boss": {
         "core_cards": [
           2,
-          4
+          3
         ],
-        "starter_removals": 3,
-        "upgrade_percent": 40,
+        "starter_removals": 5,
+        "upgrade_percent": 70,
         "rarity_weights": {
           "starter": 0,
-          "common": 5,
-          "uncommon": 4,
-          "rare": 1
+          "common": 3,
+          "uncommon": 5,
+          "rare": 2
         },
-        "hp_floor_percent": 65
+        "hp_floor_percent": 80,
+        "deck_size": [
+          10,
+          12
+        ]
       },
       "elite": {
         "core_cards": [
@@ -183,8 +187,8 @@
     "act3": {
       "boss": {
         "core_cards": [
-          8,
-          12
+          2,
+          4
         ],
         "starter_removals": 9,
         "upgrade_percent": 100,
@@ -196,8 +200,8 @@
         },
         "hp_floor_percent": 90,
         "deck_size": [
-          14,
-          18
+          12,
+          15
         ]
       },
       "elite": {

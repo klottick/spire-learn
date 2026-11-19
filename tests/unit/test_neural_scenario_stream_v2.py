@@ -23,8 +23,8 @@ V1_TRAIN_SHARD_37 = "8df900ac9a7ec8375c39628675ee799d8def93d445f0fe70bdc0cdcdf20
 V1_PANEL_MANIFEST = "435a236e60ac54f0b04f742b6d019023f49670c7730ba47545b73b23d2fb620e"
 
 # Pin of the shipped recipe; each deliberate tuning commit updates these literals.
-V2_RECIPE_SHA256 = "680de4d074d6f466ad180f95d840b2a75eb82b52cd60f9b642552d0864881d68"
-V2_TRAIN_SHARD_0 = "ffc962442f136b0361788457f0ae3996ed3e7d753f81dd77f5609c5c60e8e82b"
+V2_RECIPE_SHA256 = "6a0d017d63fc610b3e19c764137db55fe1a756158213648edf360fdf1a31c260"
+V2_TRAIN_SHARD_0 = "cf63b338fb5953c06903bc3a883e941c1a063b639a20edece5bf265e26b26f60"
 
 _STAGE_FOR_ACT = {1: "early", 2: "middle", 3: "developed", 4: "developed"}
 
@@ -298,7 +298,7 @@ class ScenarioStreamV2Tests(unittest.TestCase):
     def test_unit_tier_weights_keep_v1_kind_mix(self):
         def mix(recipe):
             kinds = Counter(a["encounter_tier"].split(":")[1]
-                            for i in range(8)
+                            for i in range(32)
                             for a in stream.generate_scenario_shard(recipe, split="train",
                                                                     shard_index=i).annotations.values())
             stream._SHARD_CACHE.clear()

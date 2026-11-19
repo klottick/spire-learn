@@ -857,6 +857,179 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertEqual(fakes.segments, [])
 
 
+def _prior_output(directory, *, plan=None, stop_reason="target_reached", missing=()):
+    """A finished prior run: summary.json plus checkpoint directories, made read-only by tests."""
+    prior = Path(directory) / "prior"
+    prior.mkdir()
+    checkpoints = []
+    for label, decisions in (("fresh-initial", 0), ("final", 405504),
+                             ("near-135168", 135168), ("near-270336", 270336)):
+        path = prior / label
+        if label not in missing:
+            path.mkdir()
+        checkpoints.append({"label": label, "path": str(path), "learned_decisions": decisions})
+    plan = json.loads((ROOT / PLAN).read_text()) if plan is None else plan
+    summary = {"schema": "spire-learn-baseline-summary-v1", "plan": plan, "stop_reason": stop_reason,
+               "checkpoints": checkpoints, "segments": 99, "learned_decisions": 405504,
+               "config_sha256": "a" * 64, "device": "cuda:0",
+               "evaluations": {"fresh-initial": {"status": "operational_failure"}},
+               "result": "incomplete"}
+    (prior / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    return prior, summary
+
+
+def _tree(path):
+    return sorted((str(p.relative_to(path)), p.stat().st_mtime_ns) for p in Path(path).rglob("*"))
+
+
+class ReevaluateTests(unittest.TestCase):
+    def _reevaluate(self, fakes, prior, directory, *, plan_path=PLAN):
+        output = Path(directory) / "new"
+        output.mkdir()
+        summary = baseline_entry.run_baseline(ROOT, plan_path, output, dependencies=fakes.deps(),
+                                              clock=_Clock(), reevaluate=prior)
+        return summary, output
+
+    def test_reevaluate_writes_only_to_new_output_and_evaluates_prior_checkpoints(self):
+        fakes = _Fakes(panel_cases=2)
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory)
+            before = _tree(prior)
+            summary, output = self._reevaluate(fakes, prior, directory)
+            self.assertEqual(_tree(prior), before)
+            written = json.loads((output / "summary.json").read_text())
+            self.assertTrue((output / "progress.jsonl").is_file())
+            self.assertTrue((output / "panel").is_dir())
+            events = [json.loads(line)["event"] for line in (output / "progress.jsonl").read_text().splitlines()]
+            self.assertIn("reevaluation_started", events)
+            self.assertTrue(all(Path(path).is_relative_to(output) for path in fakes.evaluated))
+        self.assertEqual(fakes.segments, [])  # nothing trains
+        self.assertFalse(any(entry[0] == "save" for entry in fakes.log))
+        evaluated = [str(entry[1]["checkpoint"]) for entry in fakes.log
+                     if entry[0] == "create_runtime" and entry[1].get("purpose") == "evaluate"]
+        expected = [str(prior / label) for label in ("final", "fresh-initial", "near-135168", "near-270336")
+                    for _ in range(2)]
+        self.assertEqual(evaluated, expected)
+        self.assertEqual(set(summary["evaluations"]), {"final", "fresh-initial", "near-135168", "near-270336"})
+        self.assertEqual(summary["result"], "complete")
+        self.assertEqual(written["result"], "complete")
+
+    def test_reevaluate_copies_the_training_record(self):
+        fakes = _Fakes(panel_cases=1)
+        with tempfile.TemporaryDirectory() as directory:
+            prior, previous = _prior_output(directory, stop_reason="training_wall")
+            previous["fault"] = {"type": "X", "message": "recorded"}
+            (prior / "summary.json").write_text(json.dumps(previous))
+            digest = __import__("hashlib").sha256((prior / "summary.json").read_bytes()).hexdigest()
+            summary, _ = self._reevaluate(fakes, prior, directory)
+        for key in ("stop_reason", "learned_decisions", "segments", "checkpoints", "config_sha256",
+                    "device", "fault"):
+            self.assertEqual(summary[key], previous[key], key)
+        self.assertEqual(summary["reevaluated_from"], str(prior))
+        self.assertEqual(summary["reevaluated_from_summary_sha256"], digest)
+        self.assertEqual(summary["evaluations"]["final"]["status"], "complete")
+        self.assertEqual(summary["result"], "incomplete")  # training_wall never completes, as in a normal run
+
+    def test_reevaluate_rejects_plan_mismatch(self):
+        plan = json.loads((ROOT / PLAN).read_text())
+        changed = {**plan, "target_learned_decisions": plan["target_learned_decisions"] + 1}
+        fakes = _Fakes(panel_cases=1)
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory, plan=changed)
+            output = Path(directory) / "new"
+            output.mkdir()
+            with self.assertRaisesRegex(ValueError, "plan"):
+                baseline_entry.run_baseline(ROOT, PLAN, output, dependencies=fakes.deps(),
+                                            clock=_Clock(), reevaluate=prior)
+            self.assertEqual(list(output.iterdir()), [])
+        self.assertEqual(fakes.evaluated, [])
+
+    def test_reevaluate_rejects_unevaluable_stop_and_output_inside_prior(self):
+        fakes = _Fakes(panel_cases=1)
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory, stop_reason="segment_fault")
+            output = Path(directory) / "new"
+            output.mkdir()
+            with self.assertRaisesRegex(ValueError, "stop"):
+                baseline_entry.run_baseline(ROOT, PLAN, output, dependencies=fakes.deps(),
+                                            clock=_Clock(), reevaluate=prior)
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory)
+            for target in (prior, prior / "nested"):
+                target.mkdir(exist_ok=True)
+                with self.assertRaisesRegex(ValueError, "prior output"):
+                    baseline_entry.run_baseline(ROOT, PLAN, target, dependencies=fakes.deps(),
+                                                clock=_Clock(), reevaluate=prior)
+            self.assertFalse((prior / "progress.jsonl").exists())
+        self.assertEqual(fakes.evaluated, [])
+
+    def test_reevaluate_missing_checkpoint_fails_closed(self):
+        fakes = _Fakes(panel_cases=1)
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory, missing=("near-135168",))
+            output = Path(directory) / "new"
+            output.mkdir()
+            with self.assertRaisesRegex(ValueError, "near-135168"):
+                baseline_entry.run_baseline(ROOT, PLAN, output, dependencies=fakes.deps(),
+                                            clock=_Clock(), reevaluate=prior)
+            self.assertEqual(list(output.iterdir()), [])
+        self.assertEqual(fakes.evaluated, [])
+
+    def test_reevaluate_checkpoint_failing_preflight_fails_closed(self):
+        fakes = _Fakes(panel_cases=1)
+
+        def preflight(checkpoint, identity, *, purpose):
+            if Path(checkpoint).name == "near-270336":
+                raise ValueError("checkpoint identity mismatch")
+
+        fakes.preflight = preflight
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory)
+            summary, output = self._reevaluate(fakes, prior, directory)
+            written = json.loads((output / "summary.json").read_text())
+        self.assertEqual(fakes.evaluated, [])
+        self.assertEqual(summary["evaluations"], {})
+        self.assertEqual(summary["reevaluation_refused"]["type"], "ValueError")
+        self.assertIn("near-270336", summary["reevaluation_refused"]["message"])
+        self.assertEqual(summary["result"], "incomplete")
+        self.assertEqual(written["result"], "incomplete")
+
+    def test_reevaluate_respects_the_total_wall(self):
+        fakes = _Fakes(panel_cases=1)
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory)
+            output = Path(directory) / "new"
+            output.mkdir()
+            summary = baseline_entry.run_baseline(ROOT, PLAN, output, dependencies=fakes.deps(),
+                                                  clock=_Clock(step=20000.0), reevaluate=prior)
+        self.assertEqual(summary["evaluations"]["final"]["status"], "skipped_wall")
+        self.assertEqual(fakes.evaluated, [])
+        self.assertEqual(summary["result"], "incomplete")
+
+    def test_cli_passes_reevaluate_and_validates_before_starting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prior, _ = _prior_output(directory)
+            output = Path(directory) / "new"
+            output.mkdir()
+            env = {"SPIRE_LEARN_RUNNER_OUTPUT": str(output), "SPIRE_LEARN_RUNNER_TIMEOUT_SECONDS": "15600"}
+            result = {"result": "complete", "stop_reason": "target_reached", "learned_decisions": 1,
+                      "segments": 1}
+            with patch.dict(os.environ, env), \
+                 patch.object(baseline_entry, "run_baseline", return_value=result) as run_baseline:
+                status = baseline_entry.main(["--plan", str(PLAN), "--output", str(output),
+                                              "--root", str(ROOT), "--reevaluate", str(prior)])
+            self.assertEqual(status, 0)
+            self.assertEqual(run_baseline.call_args.kwargs["reevaluate"], prior)
+            stderr = io.StringIO()
+            with patch.dict(os.environ, env), redirect_stderr(stderr), \
+                 patch.object(baseline_entry, "run_baseline", return_value=result) as run_baseline:
+                status = baseline_entry.main(["--plan", str(PLAN), "--output", str(output),
+                                              "--root", str(ROOT), "--reevaluate",
+                                              str(Path(directory) / "absent")])
+            self.assertEqual(status, 2)
+            self.assertFalse(run_baseline.called)
+
+
 class TemplatePreparationTests(unittest.TestCase):
     def test_prepare_stream_template_is_optional_and_binds_8726d467(self):
         from spire_learn.neural.config import load_neural_config

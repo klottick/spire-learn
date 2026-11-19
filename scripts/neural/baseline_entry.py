@@ -332,6 +332,7 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
                     if evaluation.get('status') == 'running':
                         evaluation['status'] = 'fault'  # partial rows kept; panel not complete
             summary['additional_panels'] = {}
+            # Extra panels follow all primary labels and share the same total wall budget.
             for index, extra_recipe in enumerate(plan.get('additional_panels', [])):
                 panel_result = {'evaluations': {}}
                 summary['additional_panels'][extra_recipe] = panel_result
@@ -339,7 +340,7 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
                 try:
                     _evaluate(summary, deps, plan, template, root / extra_recipe, panel_output, budget,
                               gate, clock, journal, storage_stop, result_container=panel_result,
-                              labels=('final', 'fresh-initial'))
+                              labels=('final', 'fresh-initial'), panel_id=extra_recipe)
                 except Exception as error:
                     panel_result['fault'] = {'type': type(error).__name__, 'message': str(error)[:2000]}
                     journal.write('additional_panel_fault', recipe=extra_recipe, **panel_result['fault'])
@@ -354,9 +355,10 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
                              and all(evaluated.get(row['label'], {}).get('status') == 'complete'
                                      for row in summary['checkpoints'])
                              and all(
-                                 all(panel['evaluations'].get(label, {}).get('status') == 'complete'
-                                     for label in ('final', 'fresh-initial'))
-                                 for panel in summary.get('additional_panels', {}).values())
+                                 summary.get('additional_panels', {}).get(recipe, {}).get('evaluations', {})
+                                 .get(label, {}).get('status') == 'complete'
+                                 for recipe in plan.get('additional_panels', [])
+                                 for label in ('final', 'fresh-initial'))
                              else 'incomplete')
     except BaseException as interrupt:
         # Process control (interrupt, exit) still publishes what is known, then propagates.
@@ -496,7 +498,8 @@ def _paired(fresh: Mapping[str, str], final: Mapping[str, str], *, total: int) -
 
 
 def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, clock, journal,
-              storage_stop, *, result_container=None, labels=_EVALUATION_ORDER) -> None:
+              storage_stop, *, result_container=None, labels=_EVALUATION_ORDER,
+              panel_id='primary') -> None:
     result_container = summary if result_container is None else result_container
     evaluations = result_container.setdefault('evaluations', {})
     output.mkdir(parents=True, exist_ok=True)
@@ -527,7 +530,10 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, 
                 break
             config = deps['load_config'](row['config'])
             try:
-                gate.wait(config, f'evaluation {label}')
+                stage = f'evaluation {label}'
+                if panel_id != 'primary':
+                    stage += f' panel {panel_id}'
+                gate.wait(config, stage)
             except _Stop as stop:
                 status = stop.reason
                 break
@@ -565,7 +571,8 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, 
             if status == 'complete':
                 status = 'summary_error'
         evaluation['status'] = status
-        journal.write('evaluation_complete', label=label, status=status, cases_evaluated=len(reports))
+        journal.write('evaluation_complete', panel=panel_id, label=label, status=status,
+                      cases_evaluated=len(reports))
         if status != 'complete':
             break
     if 'fresh-initial' in outcomes and 'final' in outcomes:

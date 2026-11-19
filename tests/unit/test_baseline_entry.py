@@ -149,13 +149,14 @@ class _Fakes:
                                metadata={"training_state": {"optimizer_step": 0, "behavior_policy_version": 0}})
 
 
-def _run(fakes, *, clock=None, plan_path=PLAN):
+def _run(fakes, *, clock=None, plan_path=PLAN, dependencies=None):
     with tempfile.TemporaryDirectory() as directory:
         output = Path(directory) / "out"
         output.mkdir()
-        summary = baseline_entry.run_baseline(ROOT, plan_path, output, dependencies=fakes.deps(),
+        summary = baseline_entry.run_baseline(ROOT, plan_path, output,
+                                              dependencies=fakes.deps() if dependencies is None else dependencies,
                                               clock=clock or _Clock())
-        events = [json.loads(line)["event"] for line in (output / "progress.jsonl").read_text().splitlines()]
+        events = [json.loads(line) for line in (output / "progress.jsonl").read_text().splitlines()]
         written = json.loads((output / "summary.json").read_text())
         return summary, events, written
 
@@ -163,10 +164,12 @@ def _run(fakes, *, clock=None, plan_path=PLAN):
 GIB = 2**30
 
 
-def _gpu_run(fakes, free, *, max_wait=14400, clock=None):
+def _gpu_run(fakes, free, *, max_wait=14400, clock=None, additional_panels=None):
     """Run with a CUDA config and a gpu_wait plan; ``free(call)`` scripts free bytes."""
     clock = clock or _Clock()
     plan = json.loads((ROOT / PLAN).read_text())
+    if additional_panels is not None:
+        plan["additional_panels"] = additional_panels
     plan["gpu_wait"] = {"min_free_bytes": 13 * GIB, "poll_seconds": 30, "max_total_seconds": max_wait}
     plan["runner_timeout_seconds"] = plan["wall_seconds"]["total"] + max_wait + 30 + 1200
     load_config = fakes.load_config
@@ -363,7 +366,7 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertEqual(fakes.segments[2]["max_env"], 8192)
         self.assertEqual(fakes.segments[2]["max_updates"], 16)
         self.assertEqual(fakes.segments[-1]["max_env"], 405504)
-        self.assertIn("qualification_passed", events)
+        self.assertIn("qualification_passed", [event["event"] for event in events])
         self.assertEqual(written["stop_reason"], "target_reached")
         templates = {entry[4] for entry in fakes.log if entry[0] == "prepare"}
         self.assertEqual(templates, {"template.toml"})
@@ -407,7 +410,7 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertEqual(summary["stop_reason"], "segment_without_checkpoint")
         self.assertEqual(len(fakes.segments), 4)  # qualification + 3 training attempts; no restart
         self.assertEqual(summary["learned_decisions"], 8192)
-        self.assertIn("segment_without_checkpoint", events)
+        self.assertIn("segment_without_checkpoint", [event["event"] for event in events])
         self.assertEqual([c["label"] for c in summary["checkpoints"]][:2], ["fresh-initial", "final"])
 
     def test_qualification_failure_stops_before_training(self):
@@ -426,7 +429,7 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertEqual(summary["stop_reason"], "fault")
         self.assertEqual(summary["fault"]["type"], "RuntimeError")
         self.assertEqual(len(fakes.segments), 3)
-        self.assertIn("fault", events)
+        self.assertIn("fault", [event["event"] for event in events])
 
     def test_wall_and_storage_caps(self):
         summary, _, _ = _run(_Fakes(), clock=_Clock(step=5000.0))
@@ -463,7 +466,7 @@ class BaselineEntryTests(unittest.TestCase):
         summary, events, written = _run(fakes)
         self.assertEqual(summary["stop_reason"], "target_reached")
         self.assertEqual(written["evaluation_fault"]["type"], "ValueError")
-        self.assertIn("evaluation_fault", events)
+        self.assertIn("evaluation_fault", [event["event"] for event in events])
 
     def test_final_is_evaluated_first_and_paired_with_fresh(self):
         fakes = _Fakes(decisions_per_segment=4096, panel_cases=3)
@@ -476,19 +479,29 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertAlmostEqual(paired["exact_mcnemar_two_sided_p"], 0.5)
 
     def test_additional_panel_is_evaluated_for_final_and_fresh(self):
-        with tempfile.TemporaryDirectory() as directory:
-            plan_path = Path(directory) / "plan.json"
-            plan = json.loads((ROOT / PLAN).read_text())
-            plan["additional_panels"] = ["configs/neural/curriculum-v1/recipe.json"]
-            plan_path.write_text(json.dumps(plan))
-            fakes = _Fakes(decisions_per_segment=405504, panel_cases=2)
-            summary, _, _ = _run(fakes, plan_path=plan_path)
+        recipe = "configs/neural/curriculum-v1/recipe.json"
+        fakes = _Fakes(decisions_per_segment=405504, panel_cases=1)
+        busy_once = {"done": False}
+
+        def free(_call):
+            if len(fakes.evaluated) >= 4 and not busy_once["done"]:
+                busy_once["done"] = True
+                return 1 * GIB
+            return 20 * GIB
+
+        summary, events, _ = _gpu_run(fakes, free, additional_panels=[recipe])
         panel = summary["additional_panels"]["configs/neural/curriculum-v1/recipe.json"]
         self.assertEqual(list(panel["evaluations"]), ["final", "fresh-initial"])
         self.assertTrue(all(row["status"] == "complete" for row in panel["evaluations"].values()))
         self.assertIn("paired_fresh_vs_final", panel)
-        self.assertEqual(panel["paired_fresh_vs_final"]["paired_cases"], 2)
+        self.assertEqual(panel["paired_fresh_vs_final"]["paired_cases"], 1)
         self.assertEqual(summary["result"], "complete")
+        completed = [event for event in events if event["event"] == "evaluation_complete"]
+        self.assertEqual([event["panel"] for event in completed[:4]], ["primary"] * 4)
+        self.assertEqual([event["panel"] for event in completed[4:]], [recipe, recipe])
+        extra_wait = next(event for event in events if event["event"] == "gpu_wait"
+                          and event["stage"].startswith("evaluation final"))
+        self.assertIn(recipe, extra_wait["stage"])
 
     def test_failing_additional_panel_keeps_result_incomplete(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -506,6 +519,46 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertNotIn("fresh-initial", extra["evaluations"])
         self.assertEqual(summary["result"], "incomplete")
         self.assertEqual(written["evaluations"], summary["evaluations"])
+
+    def test_additional_recipe_load_exception_preserves_primary_evaluations(self):
+        missing_recipe = "configs/neural/missing-extra-recipe.json"
+        with tempfile.TemporaryDirectory() as directory:
+            plan_path = Path(directory) / "plan.json"
+            plan = json.loads((ROOT / PLAN).read_text())
+            plan["additional_panels"] = [missing_recipe]
+            plan_path.write_text(json.dumps(plan))
+
+            control, _, _ = _run(_Fakes(decisions_per_segment=405504, panel_cases=1))
+            fakes = _Fakes(decisions_per_segment=405504, panel_cases=1)
+            dependencies = fakes.deps()
+            load_recipe = dependencies["load_recipe"]
+
+            def load_recipe_with_missing_extra(path):
+                if Path(path) == ROOT / missing_recipe:
+                    raise FileNotFoundError(path)
+                return load_recipe(path)
+
+            dependencies["load_recipe"] = load_recipe_with_missing_extra
+            summary, events, _ = _run(fakes, plan_path=plan_path, dependencies=dependencies)
+
+        def stable_evaluations(result):
+            return {
+                label: {
+                    "status": evaluation["status"],
+                    "cases": {case_id: row["outcome"] for case_id, row in evaluation["cases"].items()},
+                    "summary": evaluation["summary"],
+                }
+                for label, evaluation in result["evaluations"].items()
+            }
+
+        self.assertEqual(stable_evaluations(summary), stable_evaluations(control))
+        self.assertTrue(all(row["status"] == "complete" for row in summary["evaluations"].values()))
+        self.assertEqual(summary["additional_panels"][missing_recipe]["fault"]["type"], "FileNotFoundError")
+        self.assertEqual(summary["result"], "incomplete")
+        self.assertIn("additional_panel_fault", [event["event"] for event in events])
+        primary_completions = [event for event in events
+                               if event["event"] == "evaluation_complete" and event.get("panel") == "primary"]
+        self.assertEqual(len(primary_completions), 4)
 
     def test_returned_evaluation_fault_stops_further_evaluation(self):
         fakes = _Fakes(decisions_per_segment=4096)

@@ -203,6 +203,78 @@ class BossWinnabilityTests(unittest.TestCase):
         self.assertEqual(stats["root_unavailable"], 1)
         self.assertEqual(stats["root_unavailable:State:not in combat"], 1)
 
+    def test_gate_report_thresholds(self):
+        def tier(search_wins, heuristic_wins=0, total=10):
+            return {"search": {"victory": search_wins, "death": total - search_wins},
+                    "heuristic": {"victory": heuristic_wins, "death": total - heuristic_wins},
+                    "random": {"death": total}}
+
+        floors = {"act1:boss": 5, "act2:boss": 4, "act3:boss": 3, "act3:elite": 3, "act1:elite": 8}
+
+        def passing():
+            return {name: tier(floor, 8 if name.endswith(":boss") else 10) for name, floor in floors.items()}
+
+        report = bw.gate_report(passing())
+        self.assertEqual(report, {"passed": True, "failures": []})
+        for name, floor in floors.items():
+            low = passing()
+            low[name] = tier(floor - 1, 8)
+            result = bw.gate_report(low)
+            self.assertFalse(result["passed"], name)
+            self.assertEqual(len(result["failures"]), 1, name)
+            self.assertIn(name, result["failures"][0])
+        for name in ("act1:boss", "act2:boss", "act3:boss"):
+            easy = passing()
+            easy[name] = tier(floors[name], 9)
+            result = bw.gate_report(easy)
+            self.assertFalse(result["passed"], name)
+            self.assertIn(name, result["failures"][0])
+        elite = passing()
+        elite["act3:elite"] = tier(3, 10)  # heuristic is unconstrained off the boss tiers
+        self.assertTrue(bw.gate_report(elite)["passed"])
+        missing = passing()
+        del missing["act2:boss"]
+        result = bw.gate_report(missing)
+        self.assertFalse(result["passed"])
+        self.assertIn("act2:boss", result["failures"][0])
+
+    def test_panel_mode_plays_every_panel_case_with_search_only(self):
+        import tempfile
+        cohorts = ("familiar_new_seed", "novel_deck", "reserved_pair", "resource_later_tier")
+        cases, annotations = [], {}
+        for ordinal in range(64):
+            case_id = f"dev-{ordinal}"
+            cases.append({"case_id": case_id, "entry": {"id": case_id, "encounter": "e", "hp": 5, "max_hp": 9,
+                                                        "deck": [], "relics": [], "potions": []}})
+            annotations[case_id] = {"cohort": cohorts[ordinal // 16],
+                                    "encounter_tier": "act1:boss" if ordinal % 2 else "act3:elite"}
+        panel = {"manifest": {"cases": cases}, "annotations": annotations}
+        calls = []
+
+        def fake_play(catalog, case, player, view, **kwargs):
+            calls.append((case["case_id"], player))
+            return {"outcome": "victory" if int(case["case_id"][4:]) % 4 == 0 else "death", "steps": 3}
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(bw, "_build_panel", return_value=panel), \
+             patch.object(bw, "_view_for", return_value=(self.view, DESCRIPTOR)), \
+             patch.object(bw, "play", side_effect=fake_play):
+            output = Path(directory)
+            result = bw.panel_ceiling(output, recipe=Path("recipe.json"), samples=2, playout_steps=3,
+                                      max_steps=9, seed=1)
+            rows = [json.loads(line) for line in (output / "panel.jsonl").read_text().splitlines()]
+            written = json.loads((output / "panel_ceiling.json").read_text())
+        self.assertEqual(len(calls), 64)
+        self.assertEqual({player for _, player in calls}, {"search"})
+        self.assertEqual(len(rows), 64)
+        self.assertEqual(written, result)
+        self.assertEqual((result["cases"], result["search_wins"]), (64, 16))
+        self.assertEqual(result["by_tier"]["act1:boss"], {"death": 32})
+        self.assertEqual(result["by_tier"]["act3:elite"], {"victory": 16, "death": 16})
+        self.assertEqual(result["by_cohort"]["familiar_new_seed"], {"victory": 4, "death": 12})
+        self.assertEqual(rows[0]["cohort"], "familiar_new_seed")
+        self.assertEqual(rows[0]["tier"], "act3:elite")
+
 
 class _NumpyRow(list):
     def __getitem__(self, index):

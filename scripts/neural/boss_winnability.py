@@ -26,6 +26,9 @@ if __package__ in (None, ''):
 _ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = 'spire-learn-boss-winnability-v1'
 PLAYERS = ('random', 'heuristic', 'search')
+# Winnability gate: minimum search wins per tier, and a heuristic win ceiling on boss tiers (out of 10).
+GATE_SEARCH_MIN = {'act1:boss': 5, 'act2:boss': 4, 'act3:boss': 3, 'act3:elite': 3, 'act1:elite': 8}
+GATE_HEURISTIC_MAX = 8
 
 
 # ---------------------------------------------------------------- scenarios
@@ -186,6 +189,27 @@ def play(catalog: dict, case: dict, player: str, view: View, *, seed: int, sampl
         env.close()
 
 
+def _wins(counts: dict) -> int:
+    return int(counts.get('victory', 0))
+
+
+def gate_report(by_tier: dict) -> dict:
+    """Apply the winnability gate to ``run()``'s ``by_tier``: {tier: {player: {outcome: count}}}."""
+    failures = []
+    for tier, minimum in GATE_SEARCH_MIN.items():
+        if tier not in by_tier:
+            failures.append(f'{tier}: missing from results')
+            continue
+        search = _wins(by_tier[tier].get('search', {}))
+        if search < minimum:
+            failures.append(f'{tier}: search wins {search} < {minimum}')
+        if tier.endswith(':boss'):
+            heuristic = _wins(by_tier[tier].get('heuristic', {}))
+            if heuristic > GATE_HEURISTIC_MAX:
+                failures.append(f'{tier}: heuristic wins {heuristic} > {GATE_HEURISTIC_MAX}')
+    return {'passed': not failures, 'failures': failures}
+
+
 def population_stats(recipe_path: Path, *, shards: range) -> dict:
     """Starting HP fraction and deck size by tier over every case in the shards."""
     from statistics import median
@@ -234,18 +258,68 @@ def trace(catalog: dict, case: dict, view: View, descriptor: dict, *, seed: int,
     return rows
 
 
-def run(output: Path, *, recipe: Path, shards: range, tiers: set[str], per_tier: int, samples: int,
-        playout_steps: int, max_steps: int, seed: int, trace_tier: str | None = None) -> dict:
+def _catalog(cases: list[dict]) -> dict:
+    return {'catalog_schema_id': 'spire-gym-standard-combat-catalog-v1', 'profile_id': 'standard-combat-v1',
+            'entries': [standard_entry(case['entry']) for case in cases]}
+
+
+def _view_for(catalog: dict):
+    """The (View, descriptor) for a catalog, from a throwaway environment."""
     from spire_lab.gymnasium import StandardCombatEnv
-    cases = select_scenarios(recipe, shards=shards, tiers=tiers, per_tier=per_tier, seed=seed)
-    catalog = {'catalog_schema_id': 'spire-gym-standard-combat-catalog-v1', 'profile_id': 'standard-combat-v1',
-               'entries': [standard_entry(case['entry']) for case in cases]}
     probe = StandardCombatEnv(catalog)
     try:
         descriptor = probe.observation_spec()
     finally:
         probe.close()
-    view = View(descriptor)
+    return View(descriptor), descriptor
+
+
+def _build_panel(recipe_path: Path) -> dict:
+    from spire_learn.neural.scenario_stream import load_scenario_recipe
+    from spire_learn.neural.scenario_support import json_value
+    from spire_learn.neural.stream_runner import build_development_panel
+    return json_value(build_development_panel(load_scenario_recipe(recipe_path)))
+
+
+def panel_ceiling(output: Path, *, recipe: Path, samples: int, playout_steps: int, max_steps: int,
+                  seed: int) -> dict:
+    """Search-only play of every development-panel case: the panel's winnability ceiling."""
+    panel = _build_panel(recipe)
+    cases = []
+    for case in panel['manifest']['cases']:
+        note = panel['annotations'][case['case_id']]
+        cases.append({'case_id': case['case_id'], 'entry': case['entry'], 'tier': note['encounter_tier'],
+                      'cohort': note['cohort']})
+    catalog = _catalog(cases)
+    view, _ = _view_for(catalog)
+    output.mkdir(parents=True, exist_ok=True)
+    stats: Counter = Counter()
+    by_tier: dict[str, Counter] = defaultdict(Counter)
+    by_cohort: dict[str, Counter] = defaultdict(Counter)
+    (output / 'panel.jsonl').write_text('')
+    for index, case in enumerate(cases):
+        outcome = play(catalog, case, 'search', view, seed=seed + index, samples=samples,
+                       playout_steps=playout_steps, max_steps=max_steps, stats=stats)
+        row = {'case_id': case['case_id'], 'tier': case['tier'], 'cohort': case['cohort'],
+               'encounter': case['entry']['encounter'], 'hp': case['entry']['hp'],
+               'max_hp': case['entry']['max_hp'], 'deck_size': len(case['entry']['deck']), 'search': outcome}
+        by_tier[case['tier']][outcome['outcome']] += 1
+        by_cohort[case['cohort']][outcome['outcome']] += 1
+        with (output / 'panel.jsonl').open('a') as stream:
+            stream.write(json.dumps(row, sort_keys=True) + '\n')
+    result = {'search_wins': sum(counts.get('victory', 0) for counts in by_tier.values()),
+              'cases': len(cases),
+              'by_tier': {key: dict(value) for key, value in sorted(by_tier.items())},
+              'by_cohort': {key: dict(value) for key, value in sorted(by_cohort.items())}}
+    (output / 'panel_ceiling.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+    return result
+
+
+def run(output: Path, *, recipe: Path, shards: range, tiers: set[str], per_tier: int, samples: int,
+        playout_steps: int, max_steps: int, seed: int, trace_tier: str | None = None) -> dict:
+    cases = select_scenarios(recipe, shards=shards, tiers=tiers, per_tier=per_tier, seed=seed)
+    catalog = _catalog(cases)
+    view, descriptor = _view_for(catalog)
     output.mkdir(parents=True, exist_ok=True)
     if trace_tier is not None:
         traced = next(case for case in cases if case['tier'] == trace_tier)
@@ -273,6 +347,7 @@ def run(output: Path, *, recipe: Path, shards: range, tiers: set[str], per_tier:
               'search_stats': dict(stats), 'population': population_stats(recipe, shards=shards),
               'by_tier': {tier: {player: dict(counts) for player, counts in players.items()}
                           for tier, players in sorted(by_tier.items())}}
+    result['gate'] = gate_report(result['by_tier'])
     (output / 'winnability.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
     return result
 
@@ -288,6 +363,8 @@ def main(argv=None) -> int:
     parser.add_argument('--playout-steps', type=int, default=40)
     parser.add_argument('--max-steps', type=int, default=600)
     parser.add_argument('--seed', type=int, default=20261117)
+    parser.add_argument('--panel', action='store_true',
+                        help="play the recipe's 64-case development panel with the search player only")
     parser.add_argument('--trace-tier', help='also write trace.json for the first sampled case of this tier')
     arguments = parser.parse_args(argv)
     if not arguments.output.is_absolute():
@@ -298,10 +375,16 @@ def main(argv=None) -> int:
         print('output must match SPIRE_LEARN_RUNNER_OUTPUT', file=sys.stderr)
         return 2
     recipe = arguments.recipe if arguments.recipe.is_absolute() else _ROOT / arguments.recipe
+    if arguments.panel:
+        result = panel_ceiling(arguments.output, recipe=recipe, samples=arguments.samples,
+                               playout_steps=arguments.playout_steps, max_steps=arguments.max_steps,
+                               seed=arguments.seed)
+        print(json.dumps(result, sort_keys=True))
+        return 0
     result = run(arguments.output, recipe=recipe, shards=range(*arguments.shards), tiers=set(arguments.tiers),
                  per_tier=arguments.per_tier, samples=arguments.samples, playout_steps=arguments.playout_steps,
                  max_steps=arguments.max_steps, seed=arguments.seed, trace_tier=arguments.trace_tier)
-    print(json.dumps({key: result[key] for key in ('cases', 'by_tier', 'search_stats')}, sort_keys=True))
+    print(json.dumps({key: result[key] for key in ('cases', 'by_tier', 'search_stats', 'gate')}, sort_keys=True))
     return 0
 
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import hashlib
 import json
+import os
 from pathlib import Path
 import random
 import tomllib
@@ -18,7 +19,9 @@ from .scenario_stream import (
     ScenarioRecipe, _composition_split, generate_scenario_shard,
     load_scenario_recipe, validate_coverage_cycle,
 )
+from .recipes import generate_shard, is_standard_recipe_file, load_recipe
 from .scenario_support import canonical_bytes, content_sha256, json_value
+from .standard_stream import levels_for_shard
 
 if TYPE_CHECKING:
     from .config import NeuralConfig
@@ -154,6 +157,9 @@ def _preparation(recipe_path: Path, destination: Path, *, arm: str, split: str,
         raise ValueError('preparation supports train/selection; final remains frozen')
     if type(shard_index) is not int or not 0 <= shard_index < 2**24 - 1:
         raise ValueError('shard_index must have a representable successor')
+    if is_standard_recipe_file(recipe_path):
+        return _standard_preparation(recipe_path, destination, arm=arm, split=split,
+                                     shard_index=shard_index, template=template)
     recipe = load_scenario_recipe(recipe_path)
     source_recipe = Path(recipe_path).read_bytes()
     source_support = (Path(recipe_path).resolve().parent /
@@ -218,6 +224,68 @@ def _preparation(recipe_path: Path, destination: Path, *, arm: str, split: str,
                    'manifest_file': f'shard-{s.shard_index}.json'} for s in shards],
         'inventory': inventory, 'loader_roundtrip': False,
         'successor_config_eligible': split == 'train' and shard_index + 1 < 2**24 - 1}
+    return files, result
+
+
+def _standard_preparation(recipe_path: Path, destination: Path, *, arm: str, split: str, shard_index: int,
+                          template: Path | None) -> tuple[dict[str, bytes], dict[str, object]]:
+    """One baalorlord-standard-v1 training segment: its shard, catalog, annotations and config.
+
+    The caller has already checked the destination and shard index. Only training is
+    prepared here: Standard panels come from ``recipes.build_panel``. The prepared recipe
+    names the same run-states table by a path relative to the destination (the table is
+    large and local), so the prepared directory loads on its own and keeps the recipe hash.
+    """
+    if split != 'train':
+        raise ValueError('Standard preparation supports train only; panels come from build_panel')
+    if template is None:
+        raise ValueError('Standard preparation requires an explicit standard-standalone template')
+    recipe = load_recipe(recipe_path)
+    source_recipe = Path(recipe_path).read_bytes()
+    table_path = (Path(recipe_path).resolve().parent / json.loads(source_recipe)['states_table']['path']).resolve()
+    shard = generate_shard(recipe, split=split, shard_index=shard_index, arm=arm)
+    files = {}
+    def put(name, value):
+        files[name] = canonical_bytes(value) + b'\n'
+    recipe_document = dict(json_value(recipe.payload))
+    recipe_document['states_table'] = {'path': os.path.relpath(table_path, destination),
+                                       'sha256': recipe.table_sha256}
+    put('recipe.json', recipe_document)
+    put(f'shard-{shard_index}.json', shard.manifest)
+    put('catalog.json', shard.catalog)
+    put('annotations.json', shard.annotations)
+    document = tomllib.loads(Path(template).read_text())
+    if document.get('mode') != 'standard-standalone':
+        raise ValueError('a Standard recipe needs a standard-standalone template')
+    from .config import require_standard_learner_identity
+    require_standard_learner_identity(document.get('accepted_identities') or [None])
+    document.update(manifest_path=f'shard-{shard_index}.json', output_root='runs',
+                    operation='train', split=split, partition=split)
+    document['scenario_stream'] = {'schema': 'spire-learn-scenario-stream-v1',
+        'recipe_path': 'recipe.json', 'arm': arm, 'shard_index': shard_index,
+        'distribution_sha256': shard.distribution_sha256}
+    files['config.toml'] = _toml(document).encode('utf-8')
+    if tomllib.loads(files['config.toml'].decode()) != document:
+        raise ValueError('config syntax roundtrip failed')
+    if len(files['config.toml']) > 32768:
+        raise ValueError('prepared config exceeds 32 KiB')
+    inventory = {name: {'raw_sha256': hashlib.sha256(data).hexdigest(), 'size_bytes': len(data),
+        'canonical_sha256': content_sha256(document if name == 'config.toml' else json.loads(data))}
+        for name, data in files.items()}
+    levels = [row['level'] for row in json_value(shard.annotations).values()]
+    result = {'schema': 'spire-learn-curriculum-preparation-v1', 'execution_authorized': False,
+        'generator_version': recipe.generator_version, 'arm': arm, 'split': split,
+        'shard_index': shard_index, 'recipe_sha256': recipe.sha256,
+        'states_table_sha256': recipe.table_sha256,
+        'source_recipe_raw_sha256': hashlib.sha256(source_recipe).hexdigest(),
+        'distribution_sha256': shard.distribution_sha256, 'manifest_sha256': shard.manifest_sha256,
+        'config_sha256': content_sha256(document), 'config_path': str(destination / 'config.toml'),
+        'output_root': str(destination / 'runs'),
+        'levels': list(levels_for_shard(recipe, shard_index)),
+        'level_counts': {str(k): levels.count(k) for k in sorted(set(levels))},
+        'cases': len(levels), 'skipped': recipe.shard_size - len(levels),
+        'inventory': inventory, 'loader_roundtrip': False,
+        'successor_config_eligible': shard_index + 1 < 2**24 - 1}
     return files, result
 
 
@@ -449,5 +517,105 @@ def summarize_development_reports(panel: Mapping[str, object], reports: Mapping[
         'claim': 'standalone diagnostics; small strata; historical exposure unknown; no full-Run/transfer claim'}
 
 
+_STANDARD_DIMENSIONS = ('level', 'room', 'act', 'room_kind', 'tag')
+
+
+def summarize_standard_reports(panel: Mapping[str, object], reports: Mapping[str, object]) -> Mapping[str, object]:
+    """Aggregate one standard-standalone report per Standard panel case, with explicit missing data.
+
+    Outcomes are wins, deaths and escapes. An escape (Smoke Bomb) is neither a win nor a
+    loss: ``win_rate`` is wins / (wins + deaths), and escapes are counted separately. A
+    clean fixed-case budget exhaustion (``is_censored_case_report``) is censored, not an
+    operational failure. Strata: fuzz level, act x room kind, act, room kind and tag.
+    """
+    from .runner import NeuralReport
+    manifest = panel['manifest']
+    cases = manifest['cases']
+    if (panel.get('schema') != 'spire-learn-standard-panel-v1'
+            or panel['manifest_sha256'] != content_sha256(json_value(manifest))
+            or set(reports) - {c['case_id'] for c in cases}):
+        raise ValueError('reports must bind cases in the supplied Standard panel')
+    blank = {'scheduled': 0, 'reported': 0, 'started': 0, 'completed': 0, 'wins': 0, 'deaths': 0,
+             'escaped': 0, 'censored': 0, 'operational_failures': 0, 'hp_retention_sum': 0.0,
+             'hp_retention_samples': 0}
+    strata = {name: {} for name in _STANDARD_DIMENSIONS}
+    total = dict(blank)
+    failures, censored_cases = [], []
+    for case in cases:
+        case_id = case['case_id']
+        annotation = panel['annotations'][case_id]
+        report = reports.get(case_id)
+        counts = dict.fromkeys(blank, 0)
+        counts['hp_retention_sum'] = 0.0
+        counts['scheduled'] = 1
+        if report is not None:
+            if not isinstance(report, NeuralReport) or report.summary.get('mode') != 'standard-standalone':
+                raise ValueError('Standard panel inputs must be actual standard-standalone NeuralReports')
+            summary = report.summary
+            counts['reported'] = 1
+            censored = is_censored_case_report(report)
+            failed = not censored and (report.exit_code != 0 or summary.get('status') != 'complete'
+                                       or summary.get('collection', {}).get('uncertain_environment_slots', 0) > 0)
+            rows = summary.get('case_accounting', {}).get('cases')
+            if (rows is not None and (len(rows) != 1 or rows[0]['case_id'] != case_id)
+                    or rows is None and not failed):
+                raise ValueError('each report must account for exactly its supplied case')
+            fight = (summary.get('fights') or {}).get('standalone_fights')
+            if fight is not None:
+                started, completed, wins, deaths = (fight[k] for k in
+                    ('reached_combat_denominator', 'completed', 'victories', 'deaths'))
+                escaped = fight.get('escaped', 0)
+                if (any(type(v) is not int or v < 0 for v in (started, completed, wins, deaths, escaped))
+                        or not wins + deaths + escaped == completed <= started <= 1
+                        or len(fight['fights']) != completed):
+                    raise ValueError('Standard panel fight denominators are inconsistent')
+                counts.update(started=started, completed=completed, wins=wins, deaths=deaths, escaped=escaped)
+                for row in fight['fights']:
+                    value = row.get('hp_retention')
+                    if value is not None:
+                        canonical_bytes(value)
+                        if type(value) not in (int, float):
+                            raise ValueError('resource metric must be numeric')
+                        counts['hp_retention_sum'] += value
+                        counts['hp_retention_samples'] += 1
+            elif not failed:
+                raise ValueError('healthy Standard panel report is missing fight metrics')
+            if censored:
+                counts['censored'] = 1
+                censored_cases.append(case_id)
+            if failed:
+                counts['operational_failures'] = 1
+                failures.append({'case_id': case_id, 'status': summary.get('status'),
+                    'exit_code': report.exit_code, 'run_dir': str(report.run_dir) if report.run_dir else None,
+                    'fault': summary.get('fault', summary.get('fatal_error')),
+                    'reason': summary.get('reason', summary.get('stop_reason'))})
+        keys = {'level': [str(annotation['level'])],
+                'room': [f"{annotation['act']}:{annotation['room_kind']}"],
+                'act': [str(annotation['act'])], 'room_kind': [annotation['room_kind']],
+                'tag': list(annotation['tags'])}
+        for name, value in counts.items():
+            total[name] += value
+        for dimension, groups in strata.items():
+            for key in keys[dimension]:
+                row = groups.setdefault(key, dict(blank))
+                for name, value in counts.items():
+                    row[name] += value
+    for row in [total, *(row for groups in strata.values() for row in groups.values())]:
+        decided = row['wins'] + row['deaths']
+        row['win_rate'] = row['wins'] / decided if decided else None
+        row['censored_fraction'] = row['censored'] / row['started'] if row['started'] else None
+        row['coverage_fraction'] = row['reported'] / row['scheduled']
+        row['mean_hp_retention'] = (row['hp_retention_sum'] / row['hp_retention_samples']
+                                    if row['hp_retention_samples'] else None)
+    return {'schema': 'spire-learn-standard-panel-summary-v1',
+        'panel_manifest_sha256': panel['manifest_sha256'], 'recipe_sha256': panel['recipe_sha256'],
+        'split': panel['split'], 'total': total, 'strata': strata,
+        'status': ('operational_failure' if failures else
+                   'complete' if total['completed'] == len(cases) else 'incomplete'),
+        'failures': failures, 'censored_cases': censored_cases,
+        'scoring': 'win_rate = wins / (wins + deaths); escapes are neither wins nor losses and are counted separately',
+        'claim': 'simulator panel of reconstructed public-run states; no original-game transfer claim'}
+
+
 __all__ = ['prepare_stream', 'build_development_panel', 'pilot_plan', 'is_censored_case_report',
-           'run_stream_segment', 'summarize_development_reports']
+           'run_stream_segment', 'summarize_development_reports', 'summarize_standard_reports']

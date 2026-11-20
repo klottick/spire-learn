@@ -1,8 +1,9 @@
 """Gym 8726d467 fresh-weights baseline: qualification, mixed-stream training, panel evaluation.
 
 Runs inside the runtime container started by ``runtime_container.py``. It composes
-Learn's own building blocks: ``prepare_stream``, ``run_stream_segment``,
-``build_development_panel`` and ``summarize_development_reports``. Faults stop
+Learn's own building blocks: ``prepare_stream``, ``run_stream_segment``, and the
+``recipes`` panel API (``build_panel``/``summarize_panel_reports``: the development panel
+for M10 recipes, the Standard selection panel for baalorlord-standard-v1). Faults stop
 the baseline with a recorded reason; nothing is retried and no completed segment
 is replayed.
 
@@ -37,16 +38,16 @@ _EVALUATION_ORDER = ('final', 'fresh-initial', 'near-135168', 'near-270336')
 def _default_dependencies() -> dict[str, Callable]:
     from spire_learn.neural.checkpoint import load_checkpoint, preflight_checkpoint
     from spire_learn.neural.config import load_neural_config
+    from spire_learn.neural.recipes import build_panel, load_recipe, summarize_panel_reports
     from spire_learn.neural.runner import create_runtime, evaluate_policy
-    from spire_learn.neural.scenario_stream import load_scenario_recipe
-    from spire_learn.neural.stream_runner import (
-        build_development_panel, prepare_stream, run_stream_segment, summarize_development_reports,
-    )
+    from spire_learn.neural.stream_runner import prepare_stream, run_stream_segment
+    # The recipe API dispatches: M10 recipes get the development panel and its summary unchanged;
+    # baalorlord-standard-v1 recipes get the Standard selection panel and its summary.
     return dict(
         prepare_stream=prepare_stream, load_config=load_neural_config, create_runtime=create_runtime,
         run_stream_segment=run_stream_segment, evaluate=evaluate_policy,
-        preflight=preflight_checkpoint, load_recipe=load_scenario_recipe,
-        build_panel=build_development_panel, summarize=summarize_development_reports,
+        preflight=preflight_checkpoint, load_recipe=load_recipe,
+        build_panel=build_panel, summarize=summarize_panel_reports,
         disk_free=lambda path: shutil.disk_usage(path).free, tree_bytes=_tree_bytes,
         gpu_free_bytes=_gpu_free_bytes, release_gpu_cache=_release_gpu_cache, sleep=time.sleep,
         load_checkpoint=load_checkpoint, weights_snapshot=_weights_snapshot, weights_equal=_weights_equal,
@@ -85,11 +86,27 @@ def load_plan(path: Path) -> dict:
     if type(target) is not int or target < 1:
         raise ValueError('baseline plan needs a positive learned-decision target')
     additional_panels = plan.get('additional_panels')
-    if additional_panels is not None and (
-            not isinstance(additional_panels, list)
-            or any(not isinstance(recipe, str) or not recipe.strip() for recipe in additional_panels)
-            or len(set(additional_panels)) != len(additional_panels)):
-        raise ValueError('additional_panels must be a list of unique non-empty recipe paths')
+    if additional_panels is not None:
+        if not isinstance(additional_panels, list):
+            raise ValueError('additional_panels must be a list of unique non-empty recipe paths')
+        recipes = []
+        for item in additional_panels:
+            # A bare path inherits evaluation.case_actions/case_seconds; a table sets its own.
+            if isinstance(item, dict):
+                if (not {'recipe', 'case_actions'} <= set(item)
+                        or set(item) - {'recipe', 'case_actions', 'case_seconds'}
+                        or type(item['case_actions']) is not int or item['case_actions'] < 1
+                        or ('case_seconds' in item and (type(item['case_seconds']) not in (int, float)
+                                                        or not math.isfinite(item['case_seconds'])
+                                                        or item['case_seconds'] <= 0))):
+                    raise ValueError('an additional panel table needs recipe and a positive integer '
+                                     'case_actions, and optionally a positive case_seconds')
+                item = item['recipe']
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError('additional_panels must be a list of unique non-empty recipe paths')
+            recipes.append(item)
+        if len(set(recipes)) != len(recipes):
+            raise ValueError('additional_panels must be a list of unique non-empty recipe paths')
     wait = plan.get('gpu_wait')
     if wait is not None:
         if (not isinstance(wait, dict)
@@ -128,11 +145,24 @@ def _nearest(checkpoints: list[dict], decisions: int) -> dict | None:
                                              row['learned_decisions']), default=None)
 
 
-def _panel_configs(panel: Mapping, template: Path, directory: Path, plan: Mapping) -> list[dict]:
-    """One evaluate config per development case, mirroring the campaign panel package."""
+def _additional_panels(plan: Mapping) -> list[tuple[str, dict]]:
+    """(recipe path, evaluation settings) per additional panel; settings default to the plan's."""
+    panels = []
+    for item in plan.get('additional_panels', []):
+        if isinstance(item, Mapping):
+            evaluation = {**plan['evaluation'], **{k: v for k, v in item.items() if k != 'recipe'}}
+            panels.append((item['recipe'], evaluation))
+        else:
+            panels.append((item, dict(plan['evaluation'])))
+    return panels
+
+
+def _panel_configs(panel: Mapping, template: Path, directory: Path, plan: Mapping,
+                   evaluation: Mapping | None = None) -> list[dict]:
+    """One evaluate config per panel case, mirroring the campaign panel package."""
     import tomllib
     from spire_learn.neural.stream_runner import _toml
-    evaluation = plan['evaluation']
+    evaluation = plan['evaluation'] if evaluation is None else evaluation
     base = tomllib.loads(Path(template).read_text())
     directory.mkdir()
     rows = []
@@ -448,14 +478,14 @@ def _evaluate_all(summary, deps, plan, root, template, recipe_path, output, budg
                 evaluation['status'] = 'fault'  # partial rows kept; panel not complete
     summary['additional_panels'] = {}
     # Extra panels follow all primary labels and share the same total wall budget.
-    for index, extra_recipe in enumerate(plan.get('additional_panels', [])):
+    for index, (extra_recipe, evaluation) in enumerate(_additional_panels(plan)):
         panel_result = {'evaluations': {}}
         summary['additional_panels'][extra_recipe] = panel_result
         panel_output = output / 'additional-panels' / f'panel-{index:02d}'
         try:
             _evaluate(summary, deps, plan, template, root / extra_recipe, panel_output, budget,
                       gate, clock, journal, storage_stop, result_container=panel_result,
-                      labels=('final', 'fresh-initial'), panel_id=extra_recipe)
+                      labels=('final', 'fresh-initial'), panel_id=extra_recipe, evaluation=evaluation)
         except Exception as error:
             panel_result['fault'] = {'type': type(error).__name__, 'message': str(error)[:2000]}
             journal.write('additional_panel_fault', recipe=extra_recipe, **panel_result['fault'])
@@ -473,7 +503,7 @@ def _result(summary, plan) -> str:
             and all(
                 summary.get('additional_panels', {}).get(recipe, {}).get('evaluations', {})
                 .get(label, {}).get('status') == 'complete'
-                for recipe in plan.get('additional_panels', [])
+                for recipe, _ in _additional_panels(plan)
                 for label in ('final', 'fresh-initial'))
             else 'incomplete')
 
@@ -588,13 +618,21 @@ def _case_outcome(report) -> str:
     return 'incomplete'
 
 
-def _paired(fresh: Mapping[str, str], final: Mapping[str, str], *, total: int) -> dict:
-    """Fresh vs final on cases both evaluated healthily; exact two-sided McNemar test."""
+def _paired(fresh: Mapping[str, str], final: Mapping[str, str], *, total: int,
+            standard: bool = False) -> dict:
+    """Fresh vs final on cases both evaluated healthily; exact two-sided McNemar test.
+
+    Standard panels only: a case escaped (Smoke Bomb) under either checkpoint is neither a
+    win nor a loss, so it is excluded from pairing and counted in ``excluded_escaped``. M10
+    panels keep the original dictionary exactly (escape is unreachable in their view).
+    """
     from math import comb
     shared = sorted(set(fresh) & set(final))
-    settled = ('win', 'loss', 'escaped')
+    settled = ('win', 'loss') if standard else ('win', 'loss', 'escaped')
     healthy = [c for c in shared if fresh[c] in settled and final[c] in settled]
-    censored = [c for c in shared if c not in healthy
+    escaped = [c for c in shared if c not in healthy and 'escaped' in (fresh[c], final[c])
+               and {fresh[c], final[c]} <= {'win', 'loss', 'escaped'}] if standard else []
+    censored = [c for c in shared if c not in healthy and c not in escaped
                 and {fresh[c], final[c]} <= {'win', 'loss', 'escaped', 'incomplete'}]
     both = sum(fresh[c] == 'win' and final[c] == 'win' for c in healthy)
     fresh_only = sum(fresh[c] == 'win' and final[c] != 'win' for c in healthy)
@@ -603,23 +641,27 @@ def _paired(fresh: Mapping[str, str], final: Mapping[str, str], *, total: int) -
     discordant = fresh_only + final_only
     tail = sum(comb(discordant, k) for k in range(min(fresh_only, final_only) + 1)) / 2**discordant \
         if discordant else 1.0
-    return {'paired_cases': len(healthy), 'excluded_censored': len(censored),
-            'excluded_failed_invalid_or_missing': total - len(healthy) - len(censored),
-            'both_win': both, 'fresh_only_win': fresh_only, 'final_only_win': final_only,
-            'neither_win': neither, 'fresh_wins': both + fresh_only, 'final_wins': both + final_only,
-            'exact_mcnemar_two_sided_p': min(1.0, 2 * tail) if discordant else 1.0}
+    result = {'paired_cases': len(healthy), 'excluded_censored': len(censored),
+              'excluded_failed_invalid_or_missing': total - len(healthy) - len(censored) - len(escaped),
+              'both_win': both, 'fresh_only_win': fresh_only, 'final_only_win': final_only,
+              'neither_win': neither, 'fresh_wins': both + fresh_only, 'final_wins': both + final_only,
+              'exact_mcnemar_two_sided_p': min(1.0, 2 * tail) if discordant else 1.0}
+    if standard:
+        result['excluded_escaped'] = len(escaped)
+    return result
 
 
 def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, clock, journal,
               storage_stop, *, result_container=None, labels=_EVALUATION_ORDER,
-              panel_id='primary') -> None:
+              panel_id='primary', evaluation=None) -> None:
     result_container = summary if result_container is None else result_container
+    settings = plan['evaluation'] if evaluation is None else evaluation
     evaluations = result_container.setdefault('evaluations', {})
     output.mkdir(parents=True, exist_ok=True)
     panel = deps['build_panel'](deps['load_recipe'](recipe_path))
     with (output / 'development-panel.json').open('x') as stream:
         stream.write(json.dumps(_json(panel), sort_keys=True) + '\n')
-    rows = _panel_configs(panel, template, output / 'panel', plan)
+    rows = _panel_configs(panel, template, output / 'panel', plan, settings)
     labelled = {row['label']: row for row in summary['checkpoints']}
     outcomes: dict[str, dict[str, str]] = {}
     for label in labels:
@@ -654,11 +696,11 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, 
             try:
                 runtime = deps['create_runtime'](config, purpose='evaluate', checkpoint=checkpoint,
                                                  policy_kind='checkpoint',
-                                                 action_selection=plan['evaluation']['action_selection'])
+                                                 action_selection=settings['action_selection'])
                 from spire_learn.neural.runner import RuntimeOperationLimits
                 runtime.operation_limits = RuntimeOperationLimits(
-                    max_environment_actions=plan['evaluation']['case_actions'],
-                    monotonic_deadline=min(budget.total, clock() + plan['evaluation']['case_seconds']))
+                    max_environment_actions=settings['case_actions'],
+                    monotonic_deadline=min(budget.total, clock() + settings['case_seconds']))
                 # evaluate_policy owns and closes the runtime.
                 report = deps['evaluate'](config, runtime=runtime, clock=clock, allow_final=False)
             finally:
@@ -690,7 +732,8 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, 
             break
     if 'fresh-initial' in outcomes and 'final' in outcomes:
         result_container['paired_fresh_vs_final'] = _paired(
-            outcomes['fresh-initial'], outcomes['final'], total=len(rows))
+            outcomes['fresh-initial'], outcomes['final'], total=len(rows),
+            standard=panel.get('schema') == 'spire-learn-standard-panel-v1')
 
 
 class _Stop(Exception):

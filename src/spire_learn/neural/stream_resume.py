@@ -2,6 +2,11 @@
 
 The legacy checkpoint payload validator owns model/Adam/RNG validation. This
 module only admits a concrete catalog transition and bounded sampler projection.
+
+Two recipe families stream: M10 scenario recipes in ``standalone`` mode and
+``baalorlord-standard-v1`` recipes in ``standard-standalone`` mode (``recipes``
+dispatches). A Standard stream identity binds the states-table hash in place of the
+M10 support hash; M10 identities are unchanged.
 """
 from __future__ import annotations
 
@@ -14,8 +19,10 @@ from typing import TYPE_CHECKING
 
 from .cases import _freeze_json
 from .curriculum import CurriculumSampler
-from .scenario_stream import ScenarioRecipe, ScenarioShard, generate_scenario_shard, load_scenario_recipe
+from .recipes import Recipe, generate_shard, load_recipe
+from .scenario_stream import ScenarioShard
 from .scenario_support import content_sha256, json_value
+from .standard_stream import StandardRecipe
 
 if TYPE_CHECKING:
     from .config import NeuralConfig
@@ -96,6 +103,18 @@ def _stable_document(raw: Mapping[str, object]) -> dict[str, object]:
     return value
 
 
+# (mode, operation, split, partition) a scenario stream may run in.
+_STREAM_MODES = (('standalone', 'train', 'train', 'train'),
+                 ('standard-standalone', 'train', 'train', 'train'))
+
+
+def _require_recipe_mode(recipe: Recipe, mode: str) -> None:
+    """M10 recipes stream in ``standalone`` and Standard recipes in ``standard-standalone``."""
+    expected = 'standard-standalone' if isinstance(recipe, StandardRecipe) else 'standalone'
+    if mode != expected:
+        raise ValueError(f'scenario_stream recipe requires {expected} train')
+
+
 def normalize_stream_config(raw: Mapping[str, object], source: Path,
                             manifest_path: Path, manifest_sha256: str) -> Mapping[str, object]:
     """Loader-only normalization; authored table fields remain exact."""
@@ -113,17 +132,20 @@ def normalize_stream_config(raw: Mapping[str, object], source: Path,
             raise ValueError('continuation stream skip authorization is only valid for shard339')
     else:
         authorization = None
-    if (raw['mode'], raw['operation'], raw['split'], raw['partition']) != (
-            'standalone', 'train', 'train', 'train'):
+    if ((raw['mode'], raw['operation'], raw['split'], raw['partition']) not in _STREAM_MODES):
         raise ValueError('scenario_stream requires standalone train')
     if table['shard_index'] == 2**24 - 1:
         raise ValueError('scenario_stream requires a representable successor shard')
     if not isinstance(table['recipe_path'], str) or not table['recipe_path']:
         raise ValueError('scenario_stream.recipe_path must be a path')
     recipe_path = (source.parent / table['recipe_path']).resolve()
-    recipe = load_scenario_recipe(recipe_path)
-    shard = generate_scenario_shard(recipe, split='train', shard_index=table['shard_index'],
-                                    arm=table['arm'])
+    recipe = load_recipe(recipe_path)
+    _require_recipe_mode(recipe, raw['mode'])
+    if isinstance(recipe, StandardRecipe):
+        from .config import require_standard_learner_identity
+        require_standard_learner_identity(raw.get('accepted_identities') or [None])
+    shard = generate_shard(recipe, split='train', shard_index=table['shard_index'],
+                           arm=table['arm'])
     if table['distribution_sha256'] != shard.distribution_sha256:
         raise ValueError('scenario_stream distribution does not match recipe/support/arm')
     if manifest_sha256 != shard.manifest_sha256:
@@ -138,16 +160,17 @@ def normalize_stream_config(raw: Mapping[str, object], source: Path,
         'manifest_raw_sha256': hashlib.sha256(manifest_path.read_bytes()).hexdigest()})
 
 
-def _context(config: NeuralConfig) -> tuple[Mapping[str, object], ScenarioRecipe, ScenarioShard]:
+def _context(config: NeuralConfig) -> tuple[Mapping[str, object], Recipe, ScenarioShard]:
     table = config.scenario_stream
     if table is None:
         raise ValueError('explicit scenario_stream config is required')
     from .config import _stream_runtime_projection
     if content_sha256(_stream_runtime_projection(config)) != content_sha256(table.get('runtime_projection')):
         raise ValueError('scenario_stream runtime projection disagrees with loaded config')
-    recipe = load_scenario_recipe(Path(table['resolved_recipe_path']))
-    shard = generate_scenario_shard(recipe, split='train', shard_index=table['shard_index'],
-                                    arm=table['arm'])
+    recipe = load_recipe(Path(table['resolved_recipe_path']))
+    _require_recipe_mode(recipe, config.mode)
+    shard = generate_shard(recipe, split='train', shard_index=table['shard_index'],
+                           arm=table['arm'])
     raw = table['config_document']
     if (str(config.manifest_path) != table['resolved_manifest_path']
             or str(config.output_root) != table['resolved_output_root']
@@ -166,15 +189,21 @@ def stream_identity(config: NeuralConfig) -> Mapping[str, object]:
 
 
 def _identity(config: NeuralConfig, table: Mapping[str, object],
-              recipe: ScenarioRecipe, shard: ScenarioShard) -> dict[str, object]:
+              recipe: Recipe, shard: ScenarioShard) -> dict[str, object]:
     from .config import _stream_runtime_projection
     # Admission already compared these normalized settings with the loader binding.
     runtime = _stream_runtime_projection(config)
-    if (config.mode, config.operation, config.split, config.partition) != (
-            'standalone', 'train', 'train', 'train'):
+    if (config.mode, config.operation, config.split, config.partition) not in _STREAM_MODES:
         raise ValueError('scenario_stream requires standalone train')
+    _require_recipe_mode(recipe, config.mode)
+    if isinstance(recipe, StandardRecipe):
+        from .config import require_standard_learner_identity
+        require_standard_learner_identity(config.accepted_identities)
+    # M10 binds its support file; Standard binds its run-states table (key order is part of the bytes).
+    source = ({'states_table_sha256': recipe.table_sha256} if isinstance(recipe, StandardRecipe)
+              else {'support_sha256': recipe.support.sha256})
     return {'schema': _SCHEMA, 'distribution_sha256': shard.distribution_sha256,
-            'recipe_sha256': recipe.sha256, 'support_sha256': recipe.support.sha256,
+            'recipe_sha256': recipe.sha256, **source,
             'arm': shard.arm, 'stable_training_sha256': content_sha256({
                 'source': _stable_document(table['config_document']), 'runtime': runtime}),
             'rng_domains': ['policy', 'minibatch', 'curriculum', 'controller']}
@@ -190,7 +219,7 @@ def _binding(config: NeuralConfig, table: Mapping[str, object],
             'manifest_raw_sha256': table['manifest_raw_sha256']}
 
 
-def _sampler_state(recipe: ScenarioRecipe, shard: ScenarioShard, state: object) -> dict[str, object]:
+def _sampler_state(recipe: Recipe, shard: ScenarioShard, state: object) -> dict[str, object]:
     if shard.arm != 'mixed':
         if state != {}:
             raise ValueError('nonmixed streams must not carry adaptive sampler state')
@@ -207,7 +236,7 @@ def stream_checkpoint_state(config: NeuralConfig,
     table, recipe, shard = _context(config)
     next_index = shard.shard_index + 1
     # The final representable shard cannot declare an unrepresentable successor.
-    next_shard = generate_scenario_shard(recipe, split='train', shard_index=next_index, arm=shard.arm)
+    next_shard = generate_shard(recipe, split='train', shard_index=next_index, arm=shard.arm)
     return {'identity': _identity(config, table, recipe, shard),
             'current': _binding(config, table, shard),
             'next': {'shard_index': next_index, 'manifest_sha256': next_shard.manifest_sha256},
@@ -220,7 +249,7 @@ def _validate_binding(binding, recipe, arm, destination_raw) -> int:
             'manifest_sha256', 'manifest_raw_sha256'}:
         raise ValueError('resume scenario_stream binding is malformed')
     index = binding['shard_index']
-    shard = generate_scenario_shard(recipe, split='train', shard_index=index, arm=arm)
+    shard = generate_shard(recipe, split='train', shard_index=index, arm=arm)
     source = binding['config_source']
     if not isinstance(source, str) or len(source.encode('utf-8')) > _MAX_CONFIG_BYTES:
         raise ValueError('resume scenario_stream source must be bounded TOML')
@@ -268,7 +297,7 @@ def validate_stream_resume(metadata: Mapping[str, object],
         and next_state.get('shard_index') == index + 1)
     if index not in {destination.shard_index, destination.shard_index - 1} and not gap_parent:
         raise ValueError('resume scenario_stream permits only same or exactly next shard')
-    successor = generate_scenario_shard(recipe, split='train', shard_index=index + 1, arm=destination.arm)
+    successor = generate_shard(recipe, split='train', shard_index=index + 1, arm=destination.arm)
     if json_value(state['next']) != {'shard_index': index + 1, 'manifest_sha256': successor.manifest_sha256}:
         raise ValueError('resume scenario_stream declared successor is not derived from recipe')
     if (current['config_sha256'] != metadata.get('config_sha256')

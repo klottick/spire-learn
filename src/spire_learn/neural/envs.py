@@ -1738,7 +1738,11 @@ def _validate_factory_inputs(config: NeuralConfig, cases: NeuralCases) -> None:
             or config.environment_revision not in ACCEPTED_RUNTIME_GYM_REVISIONS):
         raise ContractError("NeuralConfig does not pin the accepted Gym revision")
     contract = contract_for_revision(config.environment_revision)
-    if config.common_view_id != COMMON_VIEW_ID or config.common_view_fingerprint != contract.common_fingerprint:
+    # Standard-only configs may omit the common view entirely (both fields None).
+    common_omitted = (config.mode in {"standard-standalone", "standard-run"}
+                      and config.common_view_id is None and config.common_view_fingerprint is None)
+    if not common_omitted and (config.common_view_id != COMMON_VIEW_ID
+                               or config.common_view_fingerprint != contract.common_fingerprint):
         raise ContractError("NeuralConfig does not pin the accepted common combat view")
     if config.mode == "run" and (
         config.profile_id != RUN_PROFILE_ID or config.run_observation_fingerprint != contract.run_fingerprint

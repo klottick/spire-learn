@@ -300,6 +300,10 @@ def _validate_training_state(raw: object, *, has_training_payload: bool) -> dict
     return state
 
 
+def _mode_families(mappings: Mapping[str, object]) -> frozenset[str]:
+    return frozenset("standard" if mode.startswith("standard-") else "m10" for mode in mappings)
+
+
 def validate_checkpoint_metadata(
     metadata: Mapping[str, object], expected: NeuralIdentity, *, purpose: str,
 ) -> dict[str, object]:
@@ -334,6 +338,10 @@ def validate_checkpoint_metadata(
     saved_mappings = saved_identity["accepted_raw_mode_mappings"]
     expected_mappings = expected_payload["accepted_raw_mode_mappings"]
     assert isinstance(saved_mappings, dict) and isinstance(expected_mappings, dict)
+    # M10 (common view) and Standard learners never cross: an identity declaring both
+    # families' modes is its own family, so a subset match cannot carry weights across.
+    if _mode_families(saved_mappings) != _mode_families(expected_mappings):
+        raise CheckpointCompatibilityError("checkpoint crosses M10 and Standard learner identity families")
     for mode, mapping in expected_mappings.items():
         if saved_mappings.get(mode) != mapping:
             raise CheckpointCompatibilityError(

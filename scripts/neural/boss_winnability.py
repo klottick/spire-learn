@@ -265,9 +265,10 @@ def trace(catalog: dict, case: dict, view: View, descriptor: dict, *, seed: int,
     return rows
 
 
-def _catalog(cases: list[dict]) -> dict:
+def _catalog(cases: list[dict], *, native: bool = False) -> dict:
+    """The catalog for ``cases``; ``native`` entries are already Standard entries and pass through unchanged."""
     return {'catalog_schema_id': 'spire-gym-standard-combat-catalog-v1', 'profile_id': 'standard-combat-v1',
-            'entries': [standard_entry(case['entry']) for case in cases]}
+            'entries': [case['entry'] if native else standard_entry(case['entry']) for case in cases]}
 
 
 def _view_for(catalog: dict):
@@ -286,6 +287,50 @@ def _build_panel(recipe_path: Path) -> dict:
     from spire_learn.neural.scenario_support import json_value
     from spire_learn.neural.stream_runner import build_development_panel
     return json_value(build_development_panel(load_scenario_recipe(recipe_path)))
+
+
+def _build_standard_panel(recipe_path: Path, split: str = 'selection') -> dict:
+    from spire_learn.neural.recipes import build_panel, load_recipe
+    return build_panel(load_recipe(recipe_path), split)
+
+
+def standard_panel_winnability(output: Path, *, recipe: Path, samples: int, playout_steps: int, max_steps: int,
+                               seed: int, limit: int | None) -> dict:
+    """Search-only play of a Standard selection panel's entries, passed to Gym as they are.
+
+    ``limit`` plays an evenly strided subset (a pilot). Rows carry run id and floor for local joins only.
+    """
+    from spire_learn.neural.scenario_support import content_sha256
+    panel = _build_standard_panel(recipe)
+    cases = []
+    for case in panel['manifest']['cases']:
+        cases.append({'case_id': case['case_id'], 'entry': case['entry'], 'note': panel['annotations'][case['case_id']]})
+    if limit is not None:
+        cases = cases[::max(1, len(cases) // limit)][:limit]
+    catalog = _catalog(cases, native=True)
+    view, _ = _view_for(catalog)
+    output.mkdir(parents=True, exist_ok=True)
+    stats: Counter = Counter()
+    by_cell: dict[str, Counter] = defaultdict(Counter)
+    path = output / 'standard_panel.jsonl'
+    path.write_text('')
+    for index, case in enumerate(cases):
+        note = case['note']
+        outcome = play(catalog, case, 'search', view, seed=seed + index, samples=samples,
+                       playout_steps=playout_steps, max_steps=max_steps, stats=stats)
+        row = {'case_id': case['case_id'], 'run_id': note['run_id'], 'floor': note['floor'], 'act': note['act'],
+               'room_kind': note['room_kind'], 'level': note['level'], 'search': outcome}
+        by_cell[f"{note['act']}:{note['room_kind']}:{note['level']}"][outcome['outcome']] += 1
+        with path.open('a') as stream:
+            stream.write(json.dumps(row, sort_keys=True) + '\n')
+    result = {'schema': SCHEMA, 'mode': 'standard-panel', 'cases': len(cases), 'samples': samples,
+              'playout_steps': playout_steps, 'max_steps': max_steps, 'seed': seed,
+              'panel_sha256': content_sha256(panel), 'panel_manifest_sha256': panel.get('manifest_sha256'),
+              'search_wins': sum(c.get('victory', 0) for c in by_cell.values()),
+              'search_stats': dict(stats),
+              'by_stratum_level': {key: dict(value) for key, value in sorted(by_cell.items())}}
+    (output / 'standard_panel.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+    return result
 
 
 def panel_ceiling(output: Path, *, recipe: Path, samples: int, playout_steps: int, max_steps: int,
@@ -372,6 +417,9 @@ def main(argv=None) -> int:
     parser.add_argument('--seed', type=int, default=20261117)
     parser.add_argument('--panel', action='store_true',
                         help="play the recipe's 64-case development panel with the search player only")
+    parser.add_argument('--standard-panel', type=Path, metavar='RECIPE',
+                        help="play a Standard recipe's selection panel entries directly with the search player")
+    parser.add_argument('--limit', type=int, help='with --standard-panel: play only this many evenly strided cases')
     parser.add_argument('--trace-tier', help='also write trace.json for the first sampled case of this tier')
     arguments = parser.parse_args(argv)
     if not arguments.output.is_absolute():
@@ -382,6 +430,13 @@ def main(argv=None) -> int:
         print('output must match SPIRE_LEARN_RUNNER_OUTPUT', file=sys.stderr)
         return 2
     recipe = arguments.recipe if arguments.recipe.is_absolute() else _ROOT / arguments.recipe
+    if arguments.standard_panel is not None:
+        standard = arguments.standard_panel if arguments.standard_panel.is_absolute() else _ROOT / arguments.standard_panel
+        result = standard_panel_winnability(arguments.output, recipe=standard, samples=arguments.samples,
+                                            playout_steps=arguments.playout_steps, max_steps=arguments.max_steps,
+                                            seed=arguments.seed, limit=arguments.limit)
+        print(json.dumps(result, sort_keys=True))
+        return 0
     if arguments.panel:
         result = panel_ceiling(arguments.output, recipe=recipe, samples=arguments.samples,
                                playout_steps=arguments.playout_steps, max_steps=arguments.max_steps,

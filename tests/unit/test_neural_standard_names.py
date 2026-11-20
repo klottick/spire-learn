@@ -60,6 +60,19 @@ class StandardNamesTests(unittest.TestCase):
         known = set(document["gym_card_ids"])
         self.assertTrue(set(document["cards"].values()) <= known)
 
+    def test_card_types(self):
+        aliases = load_aliases(ALIASES)
+        self.assertEqual([aliases.card_type(c) for c in ("clothesline", "defend", "inflame", "regret", "nope")],
+                         ["attack", "skill", "power", "curse", None])
+        import tempfile
+        document = json.loads(ALIASES.read_text())
+        del document["gym_card_types"]["bash"]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bad.json"
+            path.write_text(json.dumps(document))
+            with self.assertRaises(ValueError):
+                load_aliases(path)
+
     def test_conflicting_pairs_rejected(self):
         import tempfile
         document = json.loads(ALIASES.read_text())
@@ -80,6 +93,7 @@ class StandardNamesGymTests(unittest.TestCase):
         metadata = gym_card_metadata()
         self.assertEqual(metadata["fingerprint"], document["gym_card_metadata_fingerprint"])
         self.assertEqual(sorted(row["id"] for row in metadata["cards"]), document["gym_card_ids"])
+        self.assertEqual({row["id"]: row["type"] for row in metadata["cards"]}, document["gym_card_types"])
         self.assertEqual(gym_rejections(aliases), [])
 
 

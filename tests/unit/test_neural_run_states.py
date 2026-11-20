@@ -81,7 +81,7 @@ class RunStatesTest(unittest.TestCase):
         # Before any potion was obtained, empty is exact.
         f2 = self.assertState(_state(run, 2))
         self.assertEqual((f2.potions, f2.tags), ([], []))
-        run = copy.deepcopy(run)  # state_at reuses a run object's history
+        run = copy.deepcopy(run)  # a fresh variant; the earlier states stay as they were
         run["potion_use_per_floor"] = []
         self.assertEqual(self.assertState(_state(run, 7)).tags, ["potions_assumed_empty"])
 
@@ -105,7 +105,7 @@ class RunStatesTest(unittest.TestCase):
         self.assertEqual(f10.tags, [])
         self.assertEqual(f10.relics, ["burning_blood", "anchor", "potion_belt"])
         self.assertEqual(self.assertState(_state(run, 7)).relics, ["burning_blood"])
-        run = copy.deepcopy(run)  # state_at reuses a run object's history
+        run = copy.deepcopy(run)  # a fresh variant; the earlier states stay as they were
         run["potions_obtained"].append({"floor": 9, "key": "Fire Potion"})  # a fifth
         self.assertEqual(self.assertState(_state(run, 10)).tags, ["potions_assumed_empty"])
 
@@ -124,7 +124,7 @@ class RunStatesTest(unittest.TestCase):
         run["relics"].append("Bottled Flame")
         run["relics_obtained"].append({"floor": 8, "key": "Bottled Flame"})
         self.assertEqual(_state(run, 9).reason, "bottle_card_missing")
-        run = copy.deepcopy(run)  # state_at reuses a run object's history
+        run = copy.deepcopy(run)  # a fresh variant; the earlier states stay as they were
         run["relic_stats"] = {"Bottled Flame": "Carnage"}  # not in the deck
         self.assertEqual(_state(run, 9).reason, "bottle_card_missing")
         self.assertIsInstance(_state(run, 7), rs.FightState)  # bottle not yet held
@@ -133,7 +133,7 @@ class RunStatesTest(unittest.TestCase):
         run = _base()
         self.assertTrue(self.assertState(_state(run, 10)).burning)
         self.assertFalse(self.assertState(_state(run, 4)).burning)  # another elite
-        run = copy.deepcopy(run)  # state_at reuses a run object's history
+        run = copy.deepcopy(run)  # a fresh variant; the earlier states stay as they were
         run["green_key_taken_log"] = None
         self.assertFalse(self.assertState(_state(run, 10)).burning)
 
@@ -609,9 +609,126 @@ class DropReasonsTest(unittest.TestCase):
 
     def test_shared_history_gives_the_same_states(self):
         run = _base()
-        history = rs.run_history(run)
+        history = rs.run_history(run, NAMES)
         for fight in rs.fight_floors(run):
             self.assertEqual(rs.state_at(run, fight, NAMES, history), rs.state_at(run, fight, NAMES))
+
+
+class TypedUpgradesAndCountersTest(unittest.TestCase):
+    """Round-2 regressions: effect card types, Egg tenure, Hungry Face evidence, outcomes, Mirror copies."""
+
+    def state(self, run, floor):
+        state = _state(run, floor)
+        self.assertIsInstance(state, rs.FightState, state)
+        return state
+
+    def drop(self, run, floor):
+        state = _state(run, floor)
+        self.assertIsInstance(state, rs.Drop, state)
+        return state.reason
+
+    @staticmethod
+    def _upgrade(run, card, times=1):
+        for _ in range(times):
+            run["master_deck"][run["master_deck"].index(card)] = card + "+1"
+
+    def test_whetstone_without_stats_upgrades_only_attacks(self):
+        run = _base()
+        _add_relic(run, "Whetstone", 8)
+        for card in ("Anger", "Pommel Strike"):
+            self._upgrade(run, card)
+        self.assertTrue({("anger", 1), ("pommel_strike", 1)} <= set(_cards(self.state(run, 9))))
+        self.assertIn(("anger", 0), _cards(self.state(run, 7)))
+        run = _base()
+        _add_relic(run, "Whetstone", 8)
+        self._upgrade(run, "Defend_R", 2)  # Whetstone cannot upgrade Skills
+        self.assertEqual(self.drop(run, 9), "deck_unrecoverable")
+
+    def test_whetstone_stats_listing_a_skill_drops(self):
+        run = _base()
+        _add_relic(run, "Whetstone", 8)
+        run["relic_stats"] = {"Whetstone": ["Anger", "Defend_R"]}
+        self._upgrade(run, "Anger")
+        self._upgrade(run, "Defend_R")
+        self.assertEqual(self.drop(run, 9), "deck_unrecoverable")
+
+    def test_war_paint_with_and_without_stats(self):
+        for stats in ({"War Paint": ["Defend_R", "Defend_R"]}, {}):
+            run = _base()
+            _add_relic(run, "War Paint", 8)
+            run["relic_stats"] = stats
+            self._upgrade(run, "Defend_R", 2)
+            self.assertEqual(_cards(self.state(run, 7)).count(("defend", 1)), 1, stats)
+            self.assertEqual(_cards(self.state(run, 9)).count(("defend", 1)), 3, stats)
+        run = _base()
+        _add_relic(run, "War Paint", 8)
+        for card in ("Anger", "Pommel Strike"):  # War Paint cannot upgrade Attacks
+            self._upgrade(run, card)
+        self.assertEqual(self.drop(run, 9), "deck_unrecoverable")
+
+    def test_egg_type_and_tenure(self):
+        run = _base()
+        _add_relic(run, "Toxic Egg 2", 2)  # Skills only: cannot explain an upgraded Attack
+        self._upgrade(run, "Clothesline")
+        self.assertEqual(self.drop(run, 10), "deck_unrecoverable")
+        run = _base()
+        _add_relic(run, "Molten Egg 2", 2)
+        run["relics"].remove("Molten Egg 2")
+        run["event_choices"].append({"floor": 6, "event_name": "N'loth", "player_choice": "Traded",
+                                     "relics_lost": ["Molten Egg 2"]})
+        self._upgrade(run, "Clothesline")  # picked on floor 9, after the Egg was lost
+        self.assertEqual(self.drop(run, 10), "deck_unrecoverable")
+        run = _base()
+        _add_relic(run, "Molten Egg 2", 2)
+        self._upgrade(run, "Clothesline")
+        self.assertIn(("clothesline", 1), _cards(self.state(run, 10)))
+
+    def test_hungry_face_needs_chest_opening_evidence(self):
+        run = _base()
+        _add_relic(run, "NlothsMask", 7)
+        self.assertEqual(self.state(run, 7).relic_counters, {})
+        self.assertEqual(self.state(run, 9).relic_counters, {"nloths_hungry_face": 1})  # Anchor from the chest
+        skipped = _base()
+        _add_relic(skipped, "NlothsMask", 7)
+        skipped["relics"].remove("Anchor")
+        skipped["relics_obtained"] = [r for r in skipped["relics_obtained"] if r["key"] != "Anchor"]
+        self.assertEqual(self.drop(skipped, 9), "relic_counter_unrecorded")  # opened or skipped: unknown
+
+    def test_pandoras_box_ambiguous_with_unlogged_neow(self):
+        run = _base()
+        del run["neow_bonus_log"]
+        run["neow_bonus"] = "REMOVE_CARD"  # one more basic gone, Neow's or Pandora's
+        _add_relic(run, "Pandora's Box", 8)
+        basics = [c for c in run["master_deck"] if c.startswith(("Strike_R", "Defend_R"))]
+        run["relic_stats"] = {"Pandora's Box": ["Cleave"] * (len(basics) - 1)}
+        run["master_deck"] = [c for c in run["master_deck"] if c not in basics] + ["Cleave"] * (len(basics) - 1)
+        self.assertEqual(self.drop(run, 4), "untracked_deck_relic")
+        f9 = _cards(self.state(run, 9))
+        self.assertEqual((f9.count(("cleave", 0)), f9.count(("strike", 0)), f9.count(("defend", 0))), (7, 0, 0))
+
+    def test_unlogged_neow_alone_is_exact(self):
+        run = _base()
+        del run["neow_bonus_log"]
+        run["neow_bonus"] = "REMOVE_TWO"
+        run["master_deck"].remove("Strike_R")
+        run["master_deck"].remove("Defend_R")
+        f2 = _cards(self.state(run, 2))
+        self.assertEqual((f2.count(("strike", 0)), f2.count(("defend", 0))), (4, 3))
+
+    def test_killer_must_name_the_last_fight(self):
+        run = _base()
+        run["killed_by"] = "blue slaver"  # same name after normalization
+        self.assertFalse(self.state(run, 12).won)
+        run = _base()
+        run["killed_by"] = "Red Slaver"  # someone else: how the last fight ended is unknown
+        self.assertEqual([f.won for f in rs.fight_floors(run)], [True] * 6 + [None])
+        self.assertEqual(self.drop(run, 12), "outcome_unrecorded")
+
+    def test_mirror_copy_must_match_the_original_upgrades(self):
+        run = _base()
+        _add_relic(run, "DollysMirror", 8)
+        run["master_deck"].append("Pommel Strike+1")  # the original was not upgraded when copied
+        self.assertEqual(self.drop(run, 9), "deck_unrecoverable")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
 """Run-file names to Spire Gym Standard ids.
 
-The alias table (``configs/neural/standard/name-aliases.json``) holds only name
-pairs: run-file name to Gym id. Card names that equal a Gym id after
+The alias table (``configs/neural/standard/name-aliases.json``) holds name
+pairs (run-file name to Gym id) plus the Gym's card ids and card types, copied
+from the Gym card metadata named by ``gym_card_metadata_fingerprint``. Card names that equal a Gym id after
 normalization need no entry; the table lists the ones that differ. Relic and
 potion pairs are explicit per character. The module never imports the Gym at
 import time; ``gym_card_metadata`` and ``gym_rejections`` import it on call.
@@ -43,6 +44,7 @@ class NameAliases:
 
     sha256: str
     card_ids: frozenset[str]
+    card_types: Mapping[str, str]  # Gym card id -> attack/skill/power/status/curse (Gym card metadata)
     relics_by_character: Mapping[str, Mapping[str, str]]
     potions_by_character: Mapping[str, Mapping[str, str]]
     _cards: Mapping[str, str]
@@ -53,6 +55,9 @@ class NameAliases:
         name, upgrades = split_card(run_name)
         card = self._cards.get(normalize(name))
         return None if card is None else (card, upgrades)
+
+    def card_type(self, card_id: str) -> str | None:
+        return self.card_types.get(card_id)
 
     def relic(self, run_name: str) -> str | None:
         return self._relics.get(normalize(run_name))
@@ -85,11 +90,14 @@ def load_aliases(path: Path) -> NameAliases:
         if target not in card_ids:
             raise ValueError(f"alias target {target!r} is not a Gym card id")
         cards[normalize(name)] = target
+    card_types = dict(document["gym_card_types"])
+    if set(card_types) != card_ids:
+        raise ValueError("gym_card_types must cover exactly the Gym card ids")
     for kind in ("relics", "potions"):
         if set(document[kind]) - set(CHARACTERS):
             raise ValueError(f"unknown character in {kind}")
     return NameAliases(
-        sha256=hashlib.sha256(raw).hexdigest(), card_ids=card_ids,
+        sha256=hashlib.sha256(raw).hexdigest(), card_ids=card_ids, card_types=card_types,
         relics_by_character=document["relics"], potions_by_character=document["potions"],
         _cards=cards, _relics=_flatten(document["relics"], "relic"),
         _potions=_flatten(document["potions"], "potion"))

@@ -33,7 +33,7 @@ without a consistent Neow log, or a second fight on one floor),
 ``relics_unrecoverable`` (a relic with no record of where it came from),
 ``relic_counter_unrecorded`` (Lizard Tail used, floor not recorded), ``gold_unrecorded``
 (Maw Bank's floor-entry gold not pinned) and ``outcome_unrecorded`` (the last
-fight of an abandoned run).
+fight of a lost run whose killer is not that fight's enemies, or of an abandoned run).
 Tags: ``potions_assumed_empty`` and ``misc_defaulted`` (ruling A).
 
 Relic counters: see ``_relic_counters``. relic_stats holds lifetime usage
@@ -42,7 +42,7 @@ Maw Bank's (gold given) and Cursed Key's (curses given) entries say anything
 about a relic's state, and they are used.
 
 ``state_at(run, fight, names)`` rebuilds the run's whole history on every call;
-pass ``history=run_history(run)`` to share it across one run's fights.
+pass ``history=run_history(run, names)`` to share it across one run's fights.
 """
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Iterable
 
-from spire_learn.neural.standard_names import NameAliases, split_card
+from spire_learn.neural.standard_names import NameAliases, normalize, split_card
 
 CHARACTERS = {'IRONCLAD': 'ironclad', 'THE_SILENT': 'silent', 'DEFECT': 'defect', 'WATCHER': 'watcher'}
 STARTER_DECKS = {
@@ -74,7 +74,9 @@ CURSES = frozenset({'AscendersBane', 'Clumsy', 'CurseOfTheBell', 'Decay', 'Doubt
 NEOWS_LAMENT = 'NeowsBlessing'
 POTION_BELT = 'Potion Belt'
 CURSED_KEY = 'Cursed Key'
-EGGS = ('Frozen Egg 2', 'Molten Egg 2', 'Toxic Egg 2')
+# Relics that upgrade cards of one type: eggs as cards are obtained, the others two at random when obtained.
+EGGS = {'Frozen Egg 2': 'power', 'Molten Egg 2': 'attack', 'Toxic Egg 2': 'skill'}
+TYPED_UPGRADES = {'Whetstone': 'attack', 'War Paint': 'skill'}
 # Event-row fields that change the deck, relics, HP, gold or potions. An event
 # fight whose event records any of them is dropped: the row does not say whether
 # the change came before the fight (Dead Adventurer can find a relic or gold on a
@@ -241,7 +243,7 @@ class FightFloor:
     enemies: str
     room_kind: str
     act: int
-    won: bool | None  # None: the run was abandoned and this was its last fight
+    won: bool | None  # None: the run ended on this fight's floor without naming it as the killer
     order: int = 0
 
 
@@ -291,10 +293,11 @@ def fight_floors(run: dict) -> list[FightFloor]:
         act = 1 + sum(1 for s in path[:floor - 1] if s is None)
         won: bool | None = True
         if unfinished and index == len(rows) - 1 and floor == reached:
-            if run.get('killed_by') is None:
-                won = None  # abandoned: the log does not say how this fight ended
-            elif run.get('killed_by') == enemies:
+            killed_by = run.get('killed_by')
+            if isinstance(killed_by, str) and normalize(killed_by) == normalize(enemies):
                 won = False
+            else:
+                won = None  # abandoned, or killed by something else: the log does not say how it ended
         fights.append(FightFloor(floor, enemies, ROOM_KINDS[symbol], act, won, seen[floor]))
         seen[floor] += 1
     return fights
@@ -384,8 +387,8 @@ def _relics_before(run: dict, floor: int, sources: dict[str, int]) -> list[str]:
 # does not (what Astrolabe, Pandora's Box, Empty Cage, Tiny House, Dolly's Mirror,
 # Cursed Key chests, Writhing Mass and Vampires did, and Neow in older runs).
 # Undoing the whole recorded history must reach the starter deck. Whatever is
-# left over is what the unrecorded effects did; an item only one effect could
-# have caused is put back at that effect's floor, so states either side of it
+# left over is what the unrecorded effects did; an item only one effect floor could
+# have caused is put back on that floor, so states either side of it
 # are exact. Items several effects on different floors could have caused make
 # states between the earliest and latest candidate floor unrecoverable, and
 # items no effect explains make the whole run unrecoverable.
@@ -456,7 +459,7 @@ def _replay(master: list[str], changes: list[Change]) -> tuple[list[str], list[i
                 exact = same[:1]
             if exact or same:
                 i = (exact or [min(same, key=lambda i: split_card(deck[i][0])[1])])[0]
-                if kind == 'remove' and not exact and split_card(deck[i][0])[1] > upgrades:
+                if not exact and split_card(deck[i][0])[1] > upgrades:
                     # Obtained as ``card`` but held with more upgrades, none recorded.
                     upgraded.append((index, deck[i][0]))
                 del deck[i]
@@ -505,12 +508,15 @@ class _Effect:
     remove_strikes: bool = False
     upgrade_any: int = 0
     upgrade_named: Counter = field(default_factory=Counter)
+    upgrade_type: str | None = None  # upgrade_any only for cards of this Gym type
     exact: bool = False
 
-    def take(self, item: tuple[str, str], dry: bool = False) -> int | None:
-        """Use up room for ``item``; return how specific the match was (0 most), or None."""
-        kind, card = item
+    def take(self, item: tuple[str, str, str | None], dry: bool = False) -> int | None:
+        """Use up room for ``item`` (kind, card, Gym card type); return how specific the match was (0 most), or None."""
+        kind, card, card_type = item
         base = split_card(card)[0]
+        if kind == 'upgrade' and self.upgrade_type is not None and card_type != self.upgrade_type:
+            return None
         slots = {'add': (('add_named', base, 0), ('add_curse', None, 1) if base in CURSES else None,
                          ('add_any', None, 2)),
                  'remove': (('remove_strikes', None, 1) if _is_basic(card, 'Strike') else None,
@@ -565,6 +571,15 @@ _NEOW_DECK = {  # bonus -> (remove_any, add_any, upgrade_any)
 }
 
 
+def _opened_chest_evidence(run: dict) -> set[int]:
+    """Floors where a relic was obtained or the Sapphire Key taken (a chest there was opened)."""
+    obtained = {_floor(row) for row in run.get('relics_obtained') or []}
+    blue = run.get('blue_key_relic_skipped_log')
+    if isinstance(blue, dict) and 'floor' in blue:
+        obtained.add(as_int(blue['floor']))
+    return obtained
+
+
 def _cursed_key_chests(run: dict, sources: dict[str, int]) -> list[int]:
     """Non-boss chests opened while Cursed Key was held: each gives a curse.
 
@@ -579,10 +594,8 @@ def _cursed_key_chests(run: dict, sources: dict[str, int]) -> list[int]:
     key = sources.get(CURSED_KEY)
     if key is None:
         return []
-    obtained = {_floor(row) for row in run.get('relics_obtained') or []}
+    obtained = _opened_chest_evidence(run)
     blue = run.get('blue_key_relic_skipped_log')
-    if isinstance(blue, dict) and 'floor' in blue:
-        obtained.add(as_int(blue['floor']))
     end = _loss_floor(run, CURSED_KEY)
     chests = [i + 1 for i, symbol in enumerate(run['path_per_floor']) if symbol == 'T' and key < i + 1 < end]
     opened = [at for at in chests if at in obtained]
@@ -633,8 +646,8 @@ def _effects(run: dict, sources: dict[str, int], changes: list[Change], negated_
             effects.append(_Effect(relic, at, upgrade_any=1, exact=True))
         elif relic == 'DollysMirror':
             effects.append(_Effect(relic, at, add_any=1, exact=True))
-        elif relic in ('Whetstone', 'War Paint') and listed is None:
-            effects.append(_Effect(relic, at, upgrade_any=2, exact=True))
+        elif relic in TYPED_UPGRADES and listed is None:
+            effects.append(_Effect(relic, at, upgrade_any=2, upgrade_type=TYPED_UPGRADES[relic], exact=True))
     # Every chest opened with Cursed Key adds a curse unless Omamori negated it.
     effects += [_Effect(CURSED_KEY, at, add_curse=1, exact=True)
                 for at in _cursed_key_chests(run, sources) if at not in negated_chests]
@@ -765,9 +778,9 @@ def _deck_after(master: list[str], changes: list[Change], floor: int) -> list[st
 def _check_effect(master: list[str], changes: list[Change], effect: _Effect, card: str) -> str | None:
     """A complete-effect check of an inferred change; the reason it fails, or None."""
     if effect.name == 'DollysMirror':
-        copies = Counter(_deck_after(master, changes, effect.floor))
-        if not any(n >= 2 and split_card(c)[0] == split_card(card)[0] for c, n in copies.items()):
-            return f'DollysMirror copy {card} has no original'
+        # The copy is ``card`` as it was when copied; the original must match it exactly.
+        if _deck_after(master, changes, effect.floor).count(card) < 2:
+            return f'DollysMirror copy {card} has no identical original'
     elif effect.name == 'Vampires':
         if any(_is_basic(c, 'Strike') for c in _deck_after(master, changes, effect.floor)):
             return 'Vampires left a Strike'
@@ -777,35 +790,47 @@ def _check_effect(master: list[str], changes: list[Change], effect: _Effect, car
     return None
 
 
-def _deck_history(run: dict, sources: dict[str, int]) -> _DeckHistory:
+def _deck_history(run: dict, sources: dict[str, int], names: NameAliases) -> _DeckHistory:
     accounts = _omamori(run, sources, _recorded_changes(run, sources))
     if isinstance(accounts, str):
         return _DeckHistory([], (accounts,), ())
-    histories = [_account_history(run, sources, account) for account in accounts]
+    histories = [_account_history(run, sources, account, names) for account in accounts]
     valid = [h for h in histories if not h.unexplained]
     if len({(tuple(h.changes), h.windows, h.omamori_negations) for h in valid}) > 1:
         return _DeckHistory([], ('Omamori: several accounts of its negations fit the run',), ())
     return (valid or histories)[0]
 
 
-def _account_history(run: dict, sources: dict[str, int], account: _Negations) -> _DeckHistory:
+def _card_type(names: NameAliases, card: str) -> str | None:
+    mapped = names.card(card)
+    return None if mapped is None else names.card_type(mapped[0])
+
+
+def _account_history(run: dict, sources: dict[str, int], account: _Negations, names: NameAliases) -> _DeckHistory:
     master = [str(c) for c in run['master_deck']]
     changes, negations = account.changes, account.floors
+    for relic, kind in TYPED_UPGRADES.items():
+        listed = _relic_stat_list(run, relic)
+        if relic in sources and listed is not None and (
+                len(listed) > 2 or any(_card_type(names, card) != kind for card in listed)):
+            return _DeckHistory(changes, (f'{relic} upgraded {listed}: not two {kind}s',), ())
     deck, missed, fixes, _up = _replay(master, changes)
     changes = _apply_fixes(changes, fixes)
     deck, missed, _fixes, upgraded = _replay(master, changes)
     items = _residual(run, deck, missed, changes, upgraded)
     effects = _effects(run, sources, changes, account.chests, account.implants)
     for index, name in upgraded:
-        # Frozen, Molten and Toxic Egg upgrade cards of their type as they are obtained.
+        # Frozen, Molten and Toxic Egg upgrade cards of their type obtained while held.
         at = changes[index][0]
         base, upgrades = split_card(name)
-        if upgrades == split_card(changes[index][3])[1] + 1 and any(sources.get(egg, _LAST_FLOOR) < at for egg in EGGS):
-            effects.append(_Effect('Egg', at, upgrade_named=Counter({base: 1})))
+        held = [egg for egg, kind in EGGS.items() if sources.get(egg, _LAST_FLOOR) < at < _loss_floor(run, egg)
+                and kind == _card_type(names, name)]
+        if upgrades == split_card(changes[index][3])[1] + 1 and held:
+            effects.append(_Effect(held[0], at, upgrade_named=Counter({base: 1})))
     inferred, windows, unexplained, chosen_effects = [], [], [], []
     # Most constrained first: items that can only come from later effects.
     for kind, card, earliest, latest in sorted(items, key=lambda item: (-item[2], item[3], item[0], item[1])):
-        item = (kind, card)
+        item = (kind, card, _card_type(names, card))
         candidates = [(e.take(item, dry=True), e.floor, i) for i, e in enumerate(effects)
                       if earliest <= e.floor <= latest and e.take(item, dry=True) is not None]
         if kind == 'add' and candidates:
@@ -824,7 +849,10 @@ def _account_history(run: dict, sources: dict[str, int], account: _Negations) ->
         if first != last:
             windows.append((first, last, tuple(sorted({effects[i].name for _r, _f, i in candidates}))))
         undo = {'add': 'remove', 'remove': 'restore', 'upgrade': 'downgrade'}[kind]
-        inferred.append((first, _INFERRED, undo, card))
+        # Any candidate floor gives the same deck outside (first, last], which drops; the
+        # change goes on the chosen effect's floor, which the final replay and the
+        # complete-effect checks then validate.
+        inferred.append((effects[chosen].floor, _INFERRED, undo, card))
         chosen_effects.append((effects[chosen], len(inferred) - 1))
     for e in effects:
         if e.exact and e.spare():
@@ -1013,7 +1041,8 @@ def _relic_counters(run: dict, floor: int, held: list[str], sources: dict[str, i
 
     Set: Neow's Lament (combats left), Omamori (charges left), Girya (lifts from
     campfire_choices), Ancient Tea Set (1 when armed by a rest site since the
-    last fight), N'loth's Hungry Face (1 once a non-boss chest was opened) and
+    last fight), N'loth's Hungry Face (1 once a non-boss chest was opened; a chest
+    visit with no relic or Sapphire Key taken drops the state) and
     Maw Bank (1 once spent). Lizard Tail is left unset (unused) only when
     relic_stats shows it never fired, or before its first possible use; otherwise
     the state drops, as its use floor is not recorded. Not recorded anywhere in a run file, so left to the
@@ -1048,7 +1077,13 @@ def _relic_counters(run: dict, floor: int, held: list[str], sources: dict[str, i
             if any(s == 'R' and since < i + 1 < floor for i, s in enumerate(run['path_per_floor'])):
                 put(relic, 1)
         elif relic == 'NlothsMask':
-            if any(s == 'T' and start < i + 1 < floor for i, s in enumerate(run['path_per_floor'])):
+            # Spent by the first non-boss chest opened after it; that chest is empty, so
+            # only a relic or Sapphire Key taken at a chest before ``floor`` proves it.
+            chests = [i + 1 for i, s in enumerate(run['path_per_floor'])
+                      if s == 'T' and start < i + 1 < min(floor, _loss_floor(run, relic))]
+            if chests:
+                if not any(at in _opened_chest_evidence(run) for at in chests):
+                    return Drop('relic_counter_unrecorded', "N'loth's Hungry Face: chest opening not recorded")
                 put(relic, 1)
     return counters
 
@@ -1062,22 +1097,22 @@ class RunHistory:
     deck: _DeckHistory | None
 
 
-def run_history(run: dict) -> RunHistory:
+def run_history(run: dict, names: NameAliases) -> RunHistory:
     sources, unknown = _relic_floors(run)
-    return RunHistory(sources, unknown, None if unknown else _deck_history(run, sources))
+    return RunHistory(sources, unknown, None if unknown else _deck_history(run, sources, names))
 
 
 def state_at(run: dict, fight: FightFloor, names: NameAliases,
              history: RunHistory | None = None) -> FightState | Drop:
     """The state entering ``fight``, or why it cannot be rebuilt exactly.
 
-    ``history`` is ``run_history(run)``; pass it to rebuild many fights of one run
+    ``history`` is ``run_history(run, names)``; pass it to rebuild many fights of one run
     without recomputing it. It must come from this same, unmodified run.
     """
     at = fight.floor
     character = _character(run)
     if fight.won is None:
-        return Drop('outcome_unrecorded', f'run abandoned during or after the floor {at} fight')
+        return Drop('outcome_unrecorded', f'run ended on floor {at} without naming this fight as the killer')
     if fight.order:
         # HP is recorded at floor ends, not between two fights on one floor (Colosseum).
         return Drop('hp_unrecorded', f'floor {at} fight {fight.order}')
@@ -1088,7 +1123,7 @@ def state_at(run: dict, fight: FightFloor, names: NameAliases,
         event = _event_fight_reordered(run, at)
         if event is not None:
             return Drop('event_fight_reordered', event)
-    history = history if history is not None else run_history(run)
+    history = history if history is not None else run_history(run, names)
     sources = history.sources
     if history.unknown_relics:
         return Drop('relics_unrecoverable', ', '.join(history.unknown_relics))

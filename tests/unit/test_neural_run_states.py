@@ -30,6 +30,11 @@ def _state(run, floor):
     return rs.state_at(run, fight, NAMES)
 
 
+def _add_relic(run, name, floor):
+    run["relics"].append(name)
+    run["relics_obtained"].append({"floor": floor, "key": name})
+
+
 def _cards(state):
     return sorted((row["card"], row["upgrades"]) for row in state.deck)
 
@@ -157,9 +162,9 @@ class RunStatesTest(unittest.TestCase):
     def test_unmapped_card_drops_with_name(self):
         run = _base()
         run["card_choices"][4]["picked"] = "Mystery Card"
-        run["master_deck"][run["master_deck"].index("Clothesline")] = "Mystery Card+1"
+        run["master_deck"][run["master_deck"].index("Clothesline")] = "Mystery Card"
         state = _state(run, 10)
-        self.assertEqual((state.reason, state.detail), ("unmapped_card:Mystery Card", "Mystery Card+1"))
+        self.assertEqual((state.reason, state.detail), ("unmapped_card:Mystery Card", "Mystery Card"))
         self.assertIsInstance(_state(run, 9), rs.FightState)  # picked on floor 9: not held yet
 
     def test_master_deck_mismatch_drops_deck_unrecoverable(self):
@@ -190,11 +195,16 @@ class RunStatesTest(unittest.TestCase):
         run = _base()
         run["relics"].append("Empty Cage")
         run["relics_obtained"].append({"floor": 8, "key": "Empty Cage"})
+        run["master_deck"].remove("Anger")  # picked on floor 1: only the Cage can have taken it
+        run["master_deck"].remove("Strike_R")
         run["master_deck"].remove("Strike_R")
         del run["neow_bonus_log"]
-        run["neow_bonus"] = "REMOVE_CARD"  # unlogged Neow could have removed that Strike too
+        run["neow_bonus"] = "REMOVE_CARD"  # unlogged Neow removed one of the Strikes, the Cage the other
         self.assertEqual(_state(run, 4).reason, "untracked_deck_relic")
-        self.assertEqual(_cards(self.assertState(_state(run, 9))).count(("strike", 0)), 3)
+        self.assertEqual(_cards(self.assertState(_state(run, 9))).count(("strike", 0)), 2)
+        run = copy.deepcopy(run)
+        run["master_deck"].append("Strike_R")  # one removal short: an exact effect is incomplete
+        self.assertEqual(_state(run, 9).reason, "deck_unrecoverable")
 
     def test_relics_follow_acquisition_floor_and_starter_upgrade(self):
         run = _base()
@@ -240,11 +250,14 @@ class RunStatesTest(unittest.TestCase):
         run = _base()
         run["path_per_floor"][8] = "?"
         run["event_choices"].append({"floor": 9, "event_name": "Dead Adventurer", "player_choice": "Searched",
-                                     "relics_obtained": [], "gold_gain": 30, "damage_taken": 0})
-        self.assertEqual(self.assertState(_state(run, 9)).room_kind, "event")  # rewards are post-fight
-        run = copy.deepcopy(run)  # state_at reuses a run object's history
-        run["event_choices"][-1]["max_hp_loss"] = 5
-        self.assertEqual(_state(run, 9).reason, "event_fight_reordered")
+                                     "relics_obtained": [], "gold_gain": 0, "damage_taken": 0})
+        self.assertEqual(self.assertState(_state(run, 9)).room_kind, "event")
+        for key, value in (("max_hp_loss", 5), ("gold_gain", 30), ("relics_obtained", ["Vajra"])):
+            changed = copy.deepcopy(run)
+            changed["event_choices"][-1][key] = value  # a search reward may have come before the fight
+            if key == "relics_obtained":
+                changed["relics"].append("Vajra")
+            self.assertEqual(_state(changed, 9).reason, "event_fight_reordered", key)
 
     def test_imports_without_gym(self):
         code = "import sys, spire_learn.neural.run_states; assert not any(m.startswith('spire_lab') for m in sys.modules)"
@@ -261,6 +274,344 @@ class RunStatesTest(unittest.TestCase):
             sha = rbd.write_document(document, Path(tmp, "table.json"))
         self.assertEqual(sha, REAL_TABLE_SHA)
         self.assertEqual(hashlib.sha256(REAL_TABLE.read_bytes()).hexdigest(), REAL_TABLE_SHA)
+
+
+class UnrecordedEffectsTest(unittest.TestCase):
+    """Each unrecorded effect is put back from the run's history, or drops what it cannot pin."""
+
+    def state(self, run, floor):
+        state = _state(run, floor)
+        self.assertIsInstance(state, rs.FightState, state)
+        return state
+
+    def drop(self, run, floor):
+        state = _state(run, floor)
+        self.assertIsInstance(state, rs.Drop, state)
+        return state.reason
+
+    def test_astrolabe(self):
+        run = _base()
+        _add_relic(run, "Astrolabe", 8)
+        run["relic_stats"] = {"Astrolabe": ["Carnage", "Uppercut", "Rage"]}
+        for card in ("Defend_R", "Defend_R", "Bash+1"):
+            run["master_deck"].remove(card)
+        run["master_deck"] += ["Carnage+1", "Uppercut+1", "Rage+1"]
+        self.assertIn(("bash", 1), _cards(self.state(run, 7)))  # smithed on 5, then transformed
+        self.assertNotIn(("carnage", 1), _cards(self.state(run, 7)))
+        f9 = _cards(self.state(run, 9))
+        self.assertTrue({("carnage", 1), ("uppercut", 1), ("rage", 1)} <= set(f9))
+        self.assertNotIn(("bash", 1), f9)
+        run = copy.deepcopy(run)
+        run["master_deck"].append("Defend_R")  # only two cards transformed: incomplete effect
+        self.assertEqual(self.drop(run, 9), "deck_unrecoverable")
+
+    def test_pandoras_box(self):
+        run = _base()
+        _add_relic(run, "Pandora's Box", 8)
+        basics = [c for c in run["master_deck"] if c.startswith(("Strike_R", "Defend_R"))]
+        run["relic_stats"] = {"Pandora's Box": ["Cleave"] * len(basics)}
+        run["master_deck"] = [c for c in run["master_deck"] if c not in basics] + ["Cleave"] * len(basics)
+        self.assertEqual(_cards(self.state(run, 7)).count(("strike", 0)), 4)
+        f9 = _cards(self.state(run, 9))
+        self.assertEqual((f9.count(("cleave", 0)), f9.count(("strike", 0))), (8, 0))
+        run = copy.deepcopy(run)
+        run["master_deck"].append("Strike_R")  # a Strike left after Pandora's Box
+        run["relic_stats"]["Pandora's Box"].append("Cleave")
+        run["master_deck"].append("Cleave")
+        self.assertEqual(self.drop(run, 9), "deck_unrecoverable")
+
+    def test_tiny_house_and_whetstone(self):
+        run = _base()
+        _add_relic(run, "Tiny House", 8)
+        run["master_deck"][run["master_deck"].index("Anger")] = "Anger+1"
+        self.assertIn(("anger", 0), _cards(self.state(run, 7)))
+        self.assertIn(("anger", 1), _cards(self.state(run, 9)))
+        run = _base()
+        _add_relic(run, "Whetstone", 8)
+        run["relic_stats"] = {"Whetstone": ["Anger", "Pommel Strike"]}
+        for card in ("Anger", "Pommel Strike"):
+            run["master_deck"][run["master_deck"].index(card)] = card + "+1"
+        self.assertTrue({("anger", 0), ("pommel_strike", 0)} <= set(_cards(self.state(run, 7))))
+        self.assertTrue({("anger", 1), ("pommel_strike", 1)} <= set(_cards(self.state(run, 9))))
+
+    def test_dollys_mirror_needs_an_original(self):
+        run = _base()
+        _add_relic(run, "DollysMirror", 8)
+        run["master_deck"].append("Pommel Strike")
+        self.assertEqual(_cards(self.state(run, 7)).count(("pommel_strike", 0)), 1)
+        self.assertEqual(_cards(self.state(run, 9)).count(("pommel_strike", 0)), 2)
+        run = _base()
+        _add_relic(run, "DollysMirror", 8)
+        run["master_deck"].append("Carnage")  # nothing to copy: Carnage was never in the deck
+        self.assertEqual(self.drop(run, 9), "deck_unrecoverable")
+        self.assertEqual(self.drop(run, 4), "deck_unrecoverable")
+
+    def test_cursed_key_chests(self):
+        run = _base()
+        _add_relic(run, "Cursed Key", 2)
+        run["relic_stats"] = {"Cursed Key": 1}
+        run["master_deck"].append("Shame")  # from the floor-8 chest
+        self.assertNotIn(("shame", 0), _cards(self.state(run, 7)))
+        self.assertIn(("shame", 0), _cards(self.state(run, 9)))
+        two_chests = copy.deepcopy(run)
+        two_chests["path_per_floor"][10] = "T"  # chests on 8 and 11, a curse from each
+        two_chests["relics"].append("Vajra")
+        two_chests["relics_obtained"].append({"floor": 11, "key": "Vajra"})
+        two_chests["relic_stats"]["Cursed Key"] = 2
+        two_chests["master_deck"].append("Regret")
+        self.assertEqual(self.drop(two_chests, 9), "untracked_deck_relic")  # which chest gave which
+        self.assertFalse({("shame", 0), ("regret", 0)} & set(_cards(self.state(two_chests, 7))))
+        self.assertTrue({("shame", 0), ("regret", 0)} <= set(_cards(self.state(two_chests, 12))))
+        miscount = copy.deepcopy(run)
+        miscount["relic_stats"]["Cursed Key"] = 2  # two curses from one chest
+        self.assertEqual(self.drop(miscount, 9), "deck_unrecoverable")
+        negated = copy.deepcopy(run)
+        _add_relic(negated, "Omamori", 7)
+        negated["master_deck"].remove("Shame")  # the chest's curse was negated
+        negated["relic_stats"]["Omamori"] = 1  # Cursed Key's count includes the negated curse
+        self.assertEqual(self.state(negated, 9).relic_counters, {"omamori": 1})
+        self.assertNotIn(("shame", 0), _cards(self.state(negated, 9)))
+
+    def test_cursed_key_unopened_chest_gives_no_curse(self):
+        run = _base()
+        _add_relic(run, "Cursed Key", 2)
+        run["relics"].remove("Anchor")
+        run["relics_obtained"] = [r for r in run["relics_obtained"] if r["key"] != "Anchor"]
+        run["relic_stats"] = {"Cursed Key": 0}
+        self.assertIsInstance(_state(run, 9), rs.FightState)
+
+    def test_egg_upgrades_obtained_cards(self):
+        run = _base()
+        _add_relic(run, "Molten Egg 2", 2)
+        run["master_deck"][run["master_deck"].index("Clothesline")] = "Clothesline+1"  # picked on 9
+        self.assertIn(("clothesline", 1), _cards(self.state(run, 10)))
+        run = _base()
+        run["master_deck"][run["master_deck"].index("Clothesline")] = "Clothesline+1"  # no egg: unexplained
+        self.assertEqual(self.drop(run, 10), "deck_unrecoverable")
+
+    def test_upgrade_with_no_trace_drops_states_after_it(self):
+        run = _base()
+        _add_relic(run, "Tiny House", 8)  # its upgrade left no trace in the final deck
+        self.assertIsInstance(_state(run, 7), rs.FightState)
+        self.assertEqual(self.drop(run, 9), "untracked_deck_relic")
+
+    def test_writhing_mass_parasite(self):
+        run = _base()
+        run["damage_taken"][4]["enemies"] = "Writhing Mass"  # floor 9
+        run["master_deck"].append("Parasite")
+        self.assertNotIn(("parasite", 0), _cards(self.state(run, 9)))
+        self.assertIn(("parasite", 0), _cards(self.state(run, 10)))
+        run["damage_taken"][5]["enemies"] = "Writhing Mass"  # floor 10 too: one Parasite, two fights
+        run = copy.deepcopy(run)
+        self.assertEqual(self.drop(run, 10), "deck_unrecoverable")
+        self.assertIn(("parasite", 0), _cards(self.state(run, 12)))
+
+    def test_vampires(self):
+        run = _base()
+        run["event_choices"][0] = {"floor": 3, "event_name": "Vampires", "player_choice": "Became a vampire",
+                                   "cards_obtained": ["Bite"] * 5, "max_hp_loss": 0, "gold_gain": 0}
+        run["items_purged"] = ["Defend_R"]
+        run["master_deck"] = [c for c in run["master_deck"] if not c.startswith("Strike_R")]
+        run["master_deck"][run["master_deck"].index("Defend_R+1")] = "Defend_R"
+        run["master_deck"].remove("Defend_R")
+        run["master_deck"] += ["Bite"] * 5
+        self.assertEqual(_cards(self.state(run, 2)).count(("strike", 0)), 5)
+        f4 = _cards(self.state(run, 4))
+        self.assertEqual((f4.count(("strike", 0)), f4.count(("bite", 0))), (0, 5))
+        run = copy.deepcopy(run)
+        run["master_deck"].append("Strike_R")  # a Strike after Vampires
+        self.assertEqual(self.drop(run, 4), "deck_unrecoverable")
+
+    def test_lesson_learned(self):
+        run = _base()
+        run["card_choices"][2]["picked"] = "LessonLearned"  # floor 4, replacing Shrug It Off
+        run["campfire_choices"][1]["data"] = "LessonLearned"
+        run["master_deck"][run["master_deck"].index("Shrug It Off+1")] = "LessonLearned+1"
+        logged = copy.deepcopy(run)
+        run["master_deck"][run["master_deck"].index("Anger")] = "Anger+1"  # an unlogged upgrade
+        self.assertIn(("anger", 0), _cards(self.state(run, 7)))
+        self.assertEqual(self.drop(run, 9), "deck_unrecoverable")  # upgraded on floor 7, 9 or 10
+        logged["master_deck"][logged["master_deck"].index("Anger")] = "Anger+1"
+        logged["lesson_learned_per_floor"] = [[]] * 9 + [["Anger"]] + [[]] * 2  # floor 10
+        self.assertIn(("anger", 0), _cards(self.state(logged, 10)))
+        self.assertIn(("anger", 1), _cards(self.state(logged, 12)))
+
+    def test_calling_bell_and_necronomicon_curses(self):
+        for relic, curse in (("Calling Bell", "curse_of_the_bell"), ("Necronomicon", "necronomicurse")):
+            run = _base()
+            _add_relic(run, relic, 8)
+            run["master_deck"].append({"curse_of_the_bell": "CurseOfTheBell"}.get(curse, "Necronomicurse"))
+            self.assertNotIn((curse, 0), _cards(self.state(run, 7)))
+            self.assertIn((curse, 0), _cards(self.state(run, 9)))
+
+    def test_omamori_negates_only_curses_after_it(self):
+        run = _base()
+        _add_relic(run, "Omamori", 2)
+        run["event_choices"][0]["cards_obtained"] = ["Regret"]  # floor 3, negated: not in the deck
+        run["relic_stats"] = {"Omamori": 1}
+        self.assertNotIn(("regret", 0), _cards(self.state(run, 4)))
+        self.assertEqual(self.state(run, 4).relic_counters, {"omamori": 1})
+        self.assertEqual(self.state(run, 2).relic_counters, {})  # obtained on floor 2
+        self.assertEqual(self.state(run, 7).relic_counters, {"omamori": 1})
+        late = _base()
+        _add_relic(late, "Omamori", 8)  # too late to have negated the floor-3 Regret
+        late["event_choices"][0]["cards_obtained"] = ["Regret"]
+        self.assertEqual(self.drop(late, 4), "deck_unrecoverable")
+        wrong = copy.deepcopy(run)
+        wrong["relic_stats"] = {"Omamori": 0}
+        self.assertEqual(self.drop(wrong, 4), "deck_unrecoverable")
+
+    def test_omamori_and_writhing_mass_resolved_by_its_count(self):
+        run = _base()
+        _add_relic(run, "Omamori", 2)
+        run["damage_taken"][4]["enemies"] = "Writhing Mass"  # floor 9
+        run["relic_stats"] = {"Omamori": 1}  # one negation: the Parasite (no recorded curse gain)
+        self.assertEqual(self.state(run, 10).relic_counters, {"omamori": 1})
+        self.assertNotIn(("parasite", 0), _cards(self.state(run, 10)))
+        unknown = copy.deepcopy(run)
+        unknown["relic_stats"] = {}
+        self.assertEqual(self.drop(unknown, 10), "deck_unrecoverable")
+        both = copy.deepcopy(run)  # a Regret on floor 10 too: one negation fits either gain
+        both["event_choices"].append({"floor": 11, "event_name": "Addict", "player_choice": "Stole",
+                                      "cards_obtained": ["Regret"]})
+        both["path_per_floor"][10] = "?"
+        both["campfire_choices"].pop()
+        both["master_deck"][both["master_deck"].index("Shrug It Off+1")] = "Shrug It Off"
+        both["relic_stats"] = {"Omamori": 2}  # both negated: the fight did add a Parasite
+        f12 = self.state(both, 12)
+        self.assertEqual((f12.relic_counters, ("regret", 0) in _cards(f12)), ({"omamori": 0}, False))
+        both = copy.deepcopy(both)
+        both["relic_stats"] = {"Omamori": 1}  # one negation: the Regret, so the fight added no Parasite
+        self.assertEqual(self.state(both, 12).relic_counters, {"omamori": 1})
+
+    def test_event_copy_named_without_upgrades(self):
+        run = _base()
+        run["event_choices"].append({"floor": 11, "event_name": "Duplicator", "player_choice": "Copied",
+                                     "cards_obtained": ["Shrug It Off"]})
+        run["path_per_floor"][10] = "?"
+        run["campfire_choices"] = run["campfire_choices"][:1] + [{"floor": 8, "key": "SMITH", "data": "Shrug It Off"}]
+        run["path_per_floor"][7] = "R"
+        run["relics"].remove("Anchor")
+        run["relics_obtained"] = []
+        run["master_deck"].append("Shrug It Off+1")  # the copy of the smithed card
+        self.assertEqual(_cards(self.state(run, 12)).count(("shrug_it_off", 1)), 2)
+        self.assertEqual(_cards(self.state(run, 9)).count(("shrug_it_off", 1)), 1)
+
+    def test_removed_card_named_without_upgrades(self):
+        run = _base()
+        run["campfire_choices"] = [{"floor": 5, "key": "SMITH", "data": "Strike_R"},
+                                   {"floor": 11, "key": "PURGE", "data": "Strike_R"}]
+        run["master_deck"][run["master_deck"].index("Bash+1")] = "Bash"
+        run["master_deck"][run["master_deck"].index("Shrug It Off+1")] = "Shrug It Off"
+        run["master_deck"].remove("Strike_R")  # the purged Strike was the smithed one
+        self.assertIn(("strike", 1), _cards(self.state(run, 7)))
+        self.assertNotIn(("strike", 1), _cards(self.state(run, 4)))
+        self.assertNotIn(("strike", 1), _cards(self.state(run, 12)))
+
+    def test_event_card_choice_counted_once(self):
+        run = _base()
+        run["event_choices"][0] = {"floor": 3, "event_name": "The Library", "player_choice": "Read",
+                                   "cards_obtained": ["Carnage"]}
+        run["card_choices"].append({"floor": 3, "picked": "Carnage", "not_picked": ["Rage"]})
+        run["master_deck"][run["master_deck"].index("Defend_R+1")] = "Defend_R"
+        run["master_deck"].append("Carnage")
+        self.assertIn(("carnage", 0), _cards(self.state(run, 4)))
+
+
+class CountersGoldPotionsTest(unittest.TestCase):
+    def state(self, run, floor):
+        state = _state(run, floor)
+        self.assertIsInstance(state, rs.FightState, state)
+        return state
+
+    def test_lizard_tail_use_floor_unrecorded_drops(self):
+        run = _base()
+        _add_relic(run, "Lizard Tail", 2)
+        run["relic_stats"] = {"Lizard Tail": 0}  # never fired
+        self.assertEqual(self.state(run, 9).relic_counters, {})
+        used = copy.deepcopy(run)
+        used["relic_stats"] = {"Lizard Tail": 37}  # restored 37 HP on some fight: which one is not recorded
+        self.assertEqual(self.state(used, 4).relic_counters, {})  # its first possible fight
+        self.assertEqual(_state(used, 7).reason, "relic_counter_unrecorded")
+        missing = copy.deepcopy(run)
+        missing["relic_stats"] = {}
+        self.assertEqual(_state(missing, 4).reason, "relic_counter_unrecorded")
+
+    def test_maw_bank_entry_gold(self):
+        run = _base()
+        _add_relic(run, "MawBank", 2)
+        run["relic_stats"] = {"MawBank": 48}  # floors 3-6; spent at the floor-6 shop
+        self.assertEqual(self.state(run, 2).gold, 214)  # obtained on floor 2: not yet
+        f4 = self.state(run, 4)
+        self.assertEqual((f4.gold, f4.relic_counters), (230 + 12, {}))
+        f7 = self.state(run, 7)
+        self.assertEqual((f7.gold, f7.relic_counters), (100, {"maw_bank": 1}))
+        run = copy.deepcopy(run)
+        run["relic_stats"] = {"MawBank": 36}
+        self.assertEqual(_state(run, 4).reason, "gold_unrecorded")
+
+    def test_girya_and_tea_set(self):
+        run = _base()
+        _add_relic(run, "Girya", 2)
+        _add_relic(run, "Ancient Tea Set", 2)
+        run["campfire_choices"][1] = {"floor": 11, "key": "LIFT"}
+        run["master_deck"][run["master_deck"].index("Shrug It Off+1")] = "Shrug It Off"
+        self.assertEqual(self.state(run, 7).relic_counters, {"girya": 0, "ancient_tea_set": 1})  # rest on 5
+        self.assertEqual(self.state(run, 9).relic_counters, {"girya": 0})
+        self.assertEqual(self.state(run, 12).relic_counters, {"girya": 1, "ancient_tea_set": 1})
+
+    def test_reward_potion_used_on_fight_floor_is_ambiguous(self):
+        run = _base()
+        run["potions_obtained"][0]["floor"] = 4  # the Block Potion used on floor 4 is its reward
+        state = self.state(run, 4)
+        self.assertEqual((state.potions, state.tags), ([], ["potions_assumed_empty"]))
+
+    def test_entry_inventory_over_capacity_is_ambiguous(self):
+        run = _base()
+        run["potions_obtained"] = [{"floor": 0, "key": k} for k in ("Block Potion", "Fire Potion", "Weak Potion")]
+        run["potion_use_per_floor"] = [["Weak Potion"]] + [[]] * 11
+        run["items_purchased"] = ["Pommel Strike"]
+        run["item_purchase_floors"] = [6]
+        state = self.state(run, 1)
+        self.assertEqual((state.potions, state.tags), ([], ["potions_assumed_empty"]))
+
+
+class DropReasonsTest(unittest.TestCase):
+    def test_unmapped_relic_and_potion(self):
+        run = _base()
+        _add_relic(run, "Mystery Relic", 8)
+        self.assertEqual(_state(run, 9).reason, "unmapped_relic:Mystery Relic")
+        run = _base()
+        run["potions_obtained"][0]["key"] = "Mystery Potion"
+        run["potion_use_per_floor"][3] = ["Mystery Potion"]
+        self.assertEqual(_state(run, 4).reason, "unmapped_potion:Mystery Potion")
+
+    def test_relic_with_no_source(self):
+        run = _base()
+        run["relics"].append("Vajra")
+        self.assertEqual(_state(run, 4).reason, "relics_unrecoverable")
+
+    def test_second_fight_on_a_floor(self):
+        run = _base()
+        run["path_per_floor"][8] = "?"
+        run["damage_taken"].insert(5, {"floor": 9, "enemies": "Colosseum Nobs", "damage": 3})
+        fights = [f for f in rs.fight_floors(run) if f.floor == 9]
+        self.assertEqual([f.order for f in fights], [0, 1])
+        self.assertIsInstance(rs.state_at(run, fights[0], NAMES), rs.FightState)
+        self.assertEqual(rs.state_at(run, fights[1], NAMES).reason, "hp_unrecorded")
+
+    def test_abandoned_run_last_fight_outcome_unrecorded(self):
+        run = _base()
+        run["killed_by"] = None
+        self.assertEqual([f.won for f in rs.fight_floors(run)], [True] * 6 + [None])
+        self.assertEqual(_state(run, 12).reason, "outcome_unrecorded")
+        self.assertIsInstance(_state(run, 10), rs.FightState)
+
+    def test_shared_history_gives_the_same_states(self):
+        run = _base()
+        history = rs.run_history(run)
+        for fight in rs.fight_floors(run):
+            self.assertEqual(rs.state_at(run, fight, NAMES, history), rs.state_at(run, fight, NAMES))
 
 
 if __name__ == "__main__":

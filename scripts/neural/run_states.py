@@ -2,6 +2,7 @@
 """Extract Gym-validated Standard combat entries from public Slay the Spire run files.
 
     run_states.py extract --raw DIR [DIR...] --aliases PATH --output FILE --report FILE
+    run_states.py stats --table FILE --output FILE
 
 Each fight of each run is rebuilt with ``spire_learn.neural.run_states``, mapped to a
 Gym Standard encounter row, converted to a ``standard-combat-v1`` catalog entry and
@@ -17,6 +18,7 @@ import argparse
 from collections import Counter, defaultdict
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -42,6 +44,8 @@ ASCENSION = 20
 BURNING_KINDS = ('strength', 'max_hp', 'metallicize', 'regeneration')  # the Gym's order
 DROP_LIMIT = 0.10
 DEFAULT_ENCOUNTER_MAP = Path(__file__).resolve().parents[2] / 'configs/neural/standard/encounter-map.json'
+DEFAULT_ALIASES = Path(__file__).resolve().parents[2] / 'configs/neural/standard/name-aliases.json'
+STATS_SCHEMA = 'spire-learn-run-states-stats-v1'
 
 Validate = Callable[[dict], None]
 
@@ -263,6 +267,100 @@ def write_bytes(path: Path, data: bytes) -> None:
     os.replace(temporary, path)
 
 
+# ---------------------------------------------------------------- aggregate statistics
+
+def _quantile(values: Sequence[int], probability: float) -> float:
+    """Type-7 (linear interpolation) quantile, matching common statistical software."""
+    ordered = sorted(values)
+    if not ordered:
+        raise ValueError('cannot take a quantile of no values')
+    position = (len(ordered) - 1) * probability
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+
+def _share(count: int, denominator: int) -> float:
+    return round(count / denominator, 6)
+
+
+def _top_shares(counts: Counter, denominator: int, key: str) -> list[dict]:
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:15]
+    return [{key: item, 'share': _share(count, denominator)} for item, count in ranked]
+
+
+def aggregate_stats(table: dict, card_types: dict[str, str], *, aliases_sha256: str | None = None) -> dict:
+    """Aggregate kept states by character, act and room kind.
+
+    Type mix and upgrade fraction are pooled over card copies. Card and relic shares
+    count whether each item appears at least once in a state's deck/relic set. HP is
+    averaged as a per-state ``hp / max_hp`` ratio.
+    """
+    if table.get('schema') != SCHEMA:
+        raise ValueError(f'expected {SCHEMA}, got {table.get("schema")!r}')
+    groups: dict[tuple[str, int, str], dict] = {}
+    for state in table['states']:
+        group_key = (state['character'], int(state['act']), state['room_kind'])
+        group = groups.setdefault(group_key, {
+            'states': 0, 'deck_sizes': [], 'card_count': 0, 'upgraded_count': 0,
+            'card_types': Counter(), 'card_decks': Counter(), 'relic_decks': Counter(),
+            'potions': 0, 'hp_fractions': [], 'wins': 0, 'potions_assumed_empty': 0,
+        })
+        group['states'] += 1
+        deck = state['deck']
+        group['deck_sizes'].append(len(deck))
+        deck_cards: set[str] = set()
+        for row in deck:
+            card = row['card']
+            kind = card_types.get(card)
+            if kind is None:
+                raise ValueError(f'card {card!r} has no type in gym_card_types')
+            group['card_count'] += 1
+            group['upgraded_count'] += int(row['upgrades'] > 0)
+            group['card_types'][kind] += 1
+            deck_cards.add(card)
+        group['card_decks'].update(deck_cards)
+        group['relic_decks'].update(set(state['relics']))
+        group['potions'] += len(state['potions'])
+        if state['max_hp'] <= 0:
+            raise ValueError(f'invalid max_hp {state["max_hp"]!r}')
+        group['hp_fractions'].append(state['hp'] / state['max_hp'])
+        group['wins'] += int(bool(state['won']))
+        group['potions_assumed_empty'] += int('potions_assumed_empty' in state['tags'])
+
+    strata = []
+    for (character, act, room_kind), group in sorted(groups.items()):
+        count = group['states']
+        card_count = group['card_count']
+        type_mix = {kind: _share(amount, card_count)
+                    for kind, amount in sorted(group['card_types'].items())}
+        sizes = group['deck_sizes']
+        strata.append({
+            'character': character,
+            'act': act,
+            'room_kind': room_kind,
+            'states': count,
+            'deck_size': {
+                'median': round(_quantile(sizes, 0.5), 6),
+                'iqr': round(_quantile(sizes, 0.75) - _quantile(sizes, 0.25), 6),
+            },
+            'upgrade_fraction': _share(group['upgraded_count'], card_count),
+            'card_type_mix': type_mix,
+            'top_cards': _top_shares(group['card_decks'], count, 'card'),
+            'top_relics': _top_shares(group['relic_decks'], count, 'relic'),
+            'mean_potions': round(group['potions'] / count, 6),
+            'hp_fraction': round(sum(group['hp_fractions']) / count, 6),
+            'win_rate': _share(group['wins'], count),
+            'potions_assumed_empty_share': _share(group['potions_assumed_empty'], count),
+        })
+    result = {'schema': STATS_SCHEMA, 'table_schema': SCHEMA, 'states': len(table['states']), 'strata': strata}
+    if aliases_sha256 is not None:
+        result['aliases_sha256'] = aliases_sha256
+    if 'gym_revision' in table:
+        result['gym_revision'] = table['gym_revision']
+    return result
+
+
 def bind_gym() -> tuple[Validate, list[dict]]:
     """The Gym's catalog validator and encounter listing (needs the pinned runtime)."""
     from spire_lab import _native
@@ -294,7 +392,21 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_argument('--encounter-map', type=Path, default=DEFAULT_ENCOUNTER_MAP)
     sub.add_argument('--output', type=Path, required=True)
     sub.add_argument('--report', type=Path, required=True)
+    stats = commands.add_parser('stats', help='aggregate the reconstructed table into per-stratum statistics')
+    stats.add_argument('--table', type=Path, required=True)
+    stats.add_argument('--output', type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.command == 'stats':
+        raw = args.table.read_bytes()
+        table = json.loads(raw)
+        names = load_aliases(DEFAULT_ALIASES)
+        result = aggregate_stats(table, dict(names.card_types), aliases_sha256=names.sha256)
+        result['table_sha256'] = hashlib.sha256(raw).hexdigest()
+        write_bytes(args.output, json.dumps(result, indent=1, sort_keys=True).encode() + b'\n')
+        print(json.dumps({'states': result['states'], 'strata': len(result['strata']),
+                          'table_sha256': result['table_sha256']}))
+        return 0
+
     names = load_aliases(args.aliases)
     encounter_map = json.loads(args.encounter_map.read_text())['encounters']
     validate, encounters = bind_gym()

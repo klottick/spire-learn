@@ -882,6 +882,17 @@ def _account_history(run: dict, sources: dict[str, int], account: _Negations, na
         problem = _check_effect(master, changes, effect, changes[base + index][3])
         if problem:
             return _DeckHistory(changes, (problem,), ())
+    for relic, kind in TYPED_UPGRADES.items():
+        listed = _relic_stat_list(run, relic)
+        if relic in sources and listed is not None:
+            # It upgrades two random upgradable cards of its type (fewer if there are
+            # fewer). A shorter list than the deck allowed means an upgrade is unrecorded.
+            at = sources[relic]
+            before = _replay(master, [c for c in changes if c[:2] >= (at, _INFERRED - 1)])[0]
+            eligible = sum(1 for card in before if _card_type(names, card) == kind
+                           and (split_card(card)[1] == 0 or split_card(card)[0] == 'Searing Blow'))
+            if len(listed) < min(2, eligible):
+                windows.append((at, _LAST_FLOOR, (relic,)))
     return _DeckHistory(changes, (), tuple(windows), tuple(negations))
 
 

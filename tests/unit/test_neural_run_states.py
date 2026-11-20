@@ -731,5 +731,40 @@ class TypedUpgradesAndCountersTest(unittest.TestCase):
         self.assertEqual(self.drop(run, 9), "deck_unrecoverable")
 
 
+class TypedUpgradeListLengthTest(unittest.TestCase):
+    """A relic_stats list shorter than the deck allowed leaves an upgrade unrecorded."""
+
+    def _run(self, relic, listed, upgraded=()):
+        run = _base()
+        _add_relic(run, relic, 8)
+        run["relic_stats"] = {relic: listed}
+        for card in upgraded:
+            run["master_deck"][run["master_deck"].index(card)] = card + "+1"
+        return run
+
+    def test_short_lists_drop_states_after_the_relic(self):
+        for run in (self._run("Whetstone", []), self._run("Whetstone", ["Anger"], ["Anger"]),
+                    self._run("War Paint", [])):
+            self.assertIsInstance(_state(run, 7), rs.FightState)
+            self.assertEqual(_state(run, 9).reason, "untracked_deck_relic")
+        # One listed, a second Defend upgraded with no record: the run's history is unexplained.
+        run = self._run("War Paint", ["Defend_R"], ["Defend_R", "Defend_R"])
+        self.assertEqual(_state(run, 9).reason, "deck_unrecoverable")
+
+    def test_one_entry_when_only_one_card_was_eligible(self):
+        run = self._run("Whetstone", ["Anger"], ["Anger"])
+        # Only Anger can be upgraded on floor 8: Pommel Strike was bought upgraded, Bash smithed.
+        run["master_deck"][run["master_deck"].index("Pommel Strike")] = "Pommel Strike+1"
+        run["items_purchased"][0] = "Pommel Strike+1"
+        run["master_deck"] = [c for c in run["master_deck"] if not c.startswith("Strike_R")]
+        run["master_deck"] += ["Defend_R"] * 4
+        run["neow_bonus_log"]["cardsTransformed"] = ["Strike_R"] * 5
+        run["neow_bonus_log"]["cardsObtained"] = ["Defend_R"] * 5
+        run["items_purged"] = ["Defend_R"]
+        state = _state(run, 9)
+        self.assertIsInstance(state, rs.FightState, state)
+        self.assertIn(("anger", 1), _cards(state))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,317 @@
+[
+{
+"act": 1,
+"id": "cultist",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "jaw_worm",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "two_louse",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "small_slimes",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "large_slime",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "lots_of_slimes",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "slime_boss",
+"kind": "Boss"
+},
+{
+"act": 2,
+"id": "three_cultists",
+"kind": "Monster"
+},
+{
+"act": 3,
+"id": "jaw_worm_horde",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "gremlin_nob",
+"kind": "Elite"
+},
+{
+"act": 1,
+"id": "lagavulin",
+"kind": "Elite"
+},
+{
+"act": 1,
+"id": "three_sentries",
+"kind": "Elite"
+},
+{
+"act": 1,
+"id": "three_louse",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "guardian",
+"kind": "Boss"
+},
+{
+"act": 1,
+"id": "hexaghost",
+"kind": "Boss"
+},
+{
+"act": 2,
+"id": "spheric_guardian",
+"kind": "Monster"
+},
+{
+"act": 2,
+"id": "three_byrds",
+"kind": "Monster"
+},
+{
+"act": 2,
+"id": "chosen_and_byrds",
+"kind": "Monster"
+},
+{
+"act": 2,
+"id": "snecko",
+"kind": "Monster"
+},
+{
+"act": 2,
+"id": "centurion_and_healer",
+"kind": "Monster"
+},
+{
+"act": 2,
+"id": "gremlin_leader",
+"kind": "Elite"
+},
+{
+"act": 2,
+"id": "slavers",
+"kind": "Elite"
+},
+{
+"act": 2,
+"id": "book_of_stabbing",
+"kind": "Elite"
+},
+{
+"act": 2,
+"id": "champ",
+"kind": "Boss"
+},
+{
+"act": 2,
+"id": "collector",
+"kind": "Boss"
+},
+{
+"act": 2,
+"id": "bronze_automaton",
+"kind": "Boss"
+},
+{
+"act": 3,
+"id": "orb_walker",
+"kind": "Monster"
+},
+{
+"act": 3,
+"id": "three_shapes",
+"kind": "Monster"
+},
+{
+"act": 3,
+"id": "four_shapes",
+"kind": "Monster"
+},
+{
+"act": 3,
+"id": "sphere_and_two_shapes",
+"kind": "Monster"
+},
+{
+"act": 3,
+"id": "three_darklings",
+"kind": "Monster"
+},
+{
+"act": 3,
+"id": "spire_growth",
+"kind": "Monster"
+},
+{
+"act": 3,
+"id": "transient",
+"kind": "Monster"
+},
+{
+"act": 3,
+"id": "maw",
+"kind": "Monster"
+},
+{
+"act": 3,
+"id": "writhing_mass",
+"kind": "Monster"
+},
+{
+"act": 3,
+"id": "giant_head",
+"kind": "Elite"
+},
+{
+"act": 3,
+"id": "nemesis",
+"kind": "Elite"
+},
+{
+"act": 3,
+"id": "reptomancer",
+"kind": "Elite"
+},
+{
+"act": 3,
+"id": "awakened_one",
+"kind": "Boss"
+},
+{
+"act": 3,
+"id": "time_eater",
+"kind": "Boss"
+},
+{
+"act": 3,
+"id": "donu_and_deca",
+"kind": "Boss"
+},
+{
+"act": 4,
+"id": "shield_and_spear",
+"kind": "Elite"
+},
+{
+"act": 4,
+"id": "corrupt_heart",
+"kind": "Boss"
+},
+{
+"act": 1,
+"id": "blue_slaver",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "two_fungi_beasts",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "red_slaver",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "looter",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "gremlin_gang",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "exordium_thugs",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "exordium_wildlife",
+"kind": "Monster"
+},
+{
+"act": 2,
+"id": "chosen",
+"kind": "Monster"
+},
+{
+"act": 2,
+"id": "shelled_parasite",
+"kind": "Monster"
+},
+{
+"act": 2,
+"id": "two_thieves",
+"kind": "Monster"
+},
+{
+"act": 2,
+"id": "sentry_and_sphere",
+"kind": "Monster"
+},
+{
+"act": 2,
+"id": "snake_plant",
+"kind": "Monster"
+},
+{
+"act": 2,
+"id": "cultist_and_chosen",
+"kind": "Monster"
+},
+{
+"act": 2,
+"id": "shelled_parasite_and_fungi",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "three_fungi_beasts",
+"kind": "Monster"
+},
+{
+"act": 1,
+"id": "lagavulin_event",
+"kind": "Elite"
+},
+{
+"act": 2,
+"id": "colosseum_slavers",
+"kind": "Monster"
+},
+{
+"act": 2,
+"id": "colosseum_nobs",
+"kind": "Elite"
+},
+{
+"act": 2,
+"id": "masked_bandits",
+"kind": "Monster"
+},
+{
+"act": 3,
+"id": "two_orb_walkers",
+"kind": "Monster"
+}
+]

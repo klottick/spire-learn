@@ -58,11 +58,12 @@ class ExtractTest(unittest.TestCase):
         kept = len(document["states"])
         self.assertEqual(ironclad["kept"], kept)
         self.assertEqual(ironclad["states"], ironclad["kept"] + ironclad["dropped"] + ironclad["scope_excluded"])
-        self.assertEqual(ironclad["drop_rate"], 0.0 if not ironclad["dropped"] else ironclad["dropped"] / ironclad["states"])
-        self.assertEqual(ironclad["drop_rule"], "pass")
+        self.assertEqual((ironclad["states"], kept, ironclad["dropped"]), (7, 7, 0))
+        self.assertEqual((ironclad["drop_denominator"], ironclad["drop_rate"], ironclad["drop_rule"]), (7, 0.0, "pass"))
         reject_floor_7 = lambda catalog: _reject(catalog, lambda e: e["id"].endswith("-7"))
         document, report = _build(runs, reject_floor_7)
         ironclad = report["characters"]["ironclad"]
+        self.assertEqual((ironclad["dropped"], ironclad["drop_denominator"], ironclad["drop_rate"]), (1, 7, round(1 / 7, 6)))
         self.assertEqual(ironclad["drop_rule"], "fail")
         self.assertEqual([r for r in ironclad["drop_reasons"] if r.startswith("gym_rejected")],
                          ["gym_rejected:boom"])
@@ -148,12 +149,28 @@ class ExtractTest(unittest.TestCase):
         self.assertEqual(report["characters"]["ironclad"]["drop_reasons"], {"gym_rejected:boom": 2})
         self.assertEqual(report["gym_rejections"], {"gym_rejected:boom": 2})
 
-    def test_unexpected_validator_error_propagates_only_as_rejection(self):
+    def test_unexpected_validator_error_propagates_unretried(self):
+        calls = []
+
         def validate(catalog):
-            raise RuntimeError("fault")
-        document, report = _build(_runs(), validate)
-        self.assertEqual(document["states"], [])
-        self.assertEqual(report["characters"]["ironclad"]["drop_rule"], "fail")
+            calls.append(len(catalog["entries"]))
+            raise RuntimeError("native fault")
+
+        with self.assertRaises(RuntimeError):
+            _build(_runs(), validate)
+        self.assertEqual(len(calls), 1)  # no bisection, no retry
+
+    def test_event_fight_cannot_map_to_a_boss_row(self):
+        run = _base()
+        run["path_per_floor"][2] = "?"
+        run["damage_taken"].append({"floor": 3, "enemies": "Cultist", "damage": 0, "turns": 3})
+        run["damage_taken"].sort(key=lambda row: row["floor"])
+        boss = dict(MAP, Cultist="slime_boss")
+        _, report = _build([run], encounter_map=boss)
+        reasons = report["characters"]["ironclad"]["drop_reasons"]
+        self.assertEqual(reasons.get("encounter_mismatch:Cultist"), 2)  # floor 2 (monster) and floor 3 (event)
+        _, report = _build([run])  # a monster row for the same event fight is not a mismatch
+        self.assertNotIn("encounter_mismatch:Cultist", report["characters"]["ironclad"]["drop_reasons"])
 
 
 class CollectRunsTest(unittest.TestCase):
@@ -175,7 +192,7 @@ class CollectRunsTest(unittest.TestCase):
 def _reject(catalog, predicate):
     for entry in catalog["entries"]:
         if predicate(entry):
-            raise ValueError("boom")
+            raise ex.CatalogRejected("boom")
 
 
 if __name__ == "__main__":

@@ -46,6 +46,14 @@ DEFAULT_ENCOUNTER_MAP = Path(__file__).resolve().parents[2] / 'configs/neural/st
 Validate = Callable[[dict], None]
 
 
+class CatalogRejected(Exception):
+    """The Gym refused a catalog as invalid input; the only error ``validate_entries`` bisects on.
+
+    ``bind_gym`` translates the Gym's ``RunInputError`` into this. Any other error (a native
+    fault, MemoryError, a validator bug) is a fault, not a rejection, and propagates.
+    """
+
+
 # ---------------------------------------------------------------- input
 
 def collect_runs(dirs: Iterable[Path]) -> list[dict]:
@@ -105,7 +113,8 @@ def validate_entries(entries: list[dict], validate: Validate) -> tuple[list[dict
     """Split entries into (accepted, [(rejected, reason)]), validating catalogs of at most 256.
 
     A rejected catalog is bisected until each bad entry stands alone; the reason is the
-    Gym's error for that entry. An entry accepted in a catalog is never revalidated.
+    Gym's error for that entry. An entry accepted in a catalog is never revalidated. Only
+    ``CatalogRejected`` is bisected; any other exception propagates at once, unretried.
     """
     accepted: list[dict] = []
     rejected: list[tuple[dict, str]] = []
@@ -113,7 +122,7 @@ def validate_entries(entries: list[dict], validate: Validate) -> tuple[list[dict
     def check(chunk: list[dict]) -> None:
         try:
             validate({'catalog_schema_id': CATALOG_SCHEMA, 'profile_id': PROFILE, 'entries': chunk})
-        except Exception as error:  # noqa: BLE001 - the Gym's rejection is the drop reason
+        except CatalogRejected as error:
             if len(chunk) == 1:
                 rejected.append((chunk[0], f'gym_rejected:{str(error)[:200]}'))
                 return
@@ -138,8 +147,8 @@ def _encounter_for(fight, encounter_map: dict, rows: dict) -> str | Drop:
             return Drop(f'scope_excluded:{fight.enemies}', 'event fight with no Gym encounter row')
         return Drop(f'unmapped_encounter:{fight.enemies}', 'no Gym encounter row for this name')
     row = rows[target]
-    # An event fight may use a monster or elite row; every other fight must match act and kind.
-    kind_ok = fight.room_kind == 'event' or row['kind'].lower() == fight.room_kind
+    # An event fight may use a monster or elite row, never a boss row; every other fight must match act and kind.
+    kind_ok = row['kind'] in ('Monster', 'Elite') if fight.room_kind == 'event' else row['kind'].lower() == fight.room_kind
     if row['act'] != fight.act or not kind_ok:
         return Drop(f'encounter_mismatch:{fight.enemies}',
                     f'{target} is act {row["act"]} {row["kind"]}, fight is act {fight.act} {fight.room_kind}')
@@ -256,6 +265,7 @@ def write_bytes(path: Path, data: bytes) -> None:
 
 def bind_gym() -> tuple[Validate, list[dict]]:
     """The Gym's catalog validator and encounter listing (needs the pinned runtime)."""
+    from spire_lab import _native
     from spire_lab.gymnasium import StandardCombatEnv
     probe = {'id': 'probe', 'character': 'ironclad', 'ascension': ASCENSION, 'encounter': 'cultist', 'hp': 70,
              'max_hp': 80, 'gold': 0, 'deck': [{'card': 'strike', 'upgrades': 0, 'misc': 0}],
@@ -267,7 +277,10 @@ def bind_gym() -> tuple[Validate, list[dict]]:
         env.close()
 
     def validate(catalog: dict) -> None:
-        StandardCombatEnv(catalog).close()
+        try:
+            StandardCombatEnv(catalog).close()
+        except _native.RunInputError as error:  # invalid catalog input: the one recognized rejection
+            raise CatalogRejected(str(error)) from error
 
     return validate, encounters
 

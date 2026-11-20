@@ -31,7 +31,11 @@ if __package__ in (None, ''):
     _repo = Path(__file__).resolve().parents[2]
     sys.path[:0] = [str(_repo / 'src'), str(_repo)]
 
-from spire_learn.neural.standard_names import normalize  # noqa: E402,F401
+from spire_learn.neural.run_states import (  # noqa: E402,F401
+    CARD_EVENT_KEYS, UNTRACKED_DECK_BOSS_RELICS, UNTRACKED_DECK_RELICS, _deck_changing_relic, _floor,
+    _later_card_changes, _untracked_deck_relic, as_int, deck_at, relics_at,
+)
+from spire_learn.neural.standard_names import normalize, split_card  # noqa: E402,F401
 from spire_learn.neural.scenario_support import (  # noqa: E402
     ScenarioSupport, canonical_bytes, load_scenario_support,
 )
@@ -54,21 +58,7 @@ RELIC_ALIASES = {'Paper Frog': 'paper_phrog', 'Champion Belt': 'champions_belt',
                  'Mark of the Bloom': 'mark_of_bloom'}
 # Neow's Lament only lasts three combats, so it is spent long before any boss floor.
 SPENT_RELICS = {'NeowsBlessing', "Neow's Lament"}
-# Relics that add, copy, remove, transform or upgrade deck cards when obtained, with
-# no record of the change in the run file. A deck rebuilt before such a relic was
-# obtained cannot be recovered, so it is dropped. Boss relics (counted apart):
-UNTRACKED_DECK_BOSS_RELICS = {'Astrolabe', "Pandora's Box", 'Empty Cage', 'Calling Bell', 'Tiny House'}
-# Shop, chest/combat and event relics. Not listed, because their deck changes are
-# recorded or happen only in combat: Orrery (its picks are card_choices), the eggs
-# (they only upgrade later cards, whose picks are undone anyway) and Nilry's Codex.
-UNTRACKED_DECK_RELICS = {'DollysMirror', 'Whetstone', 'War Paint', 'Necronomicon'}
-CARD_EVENT_KEYS = ('cards_obtained', 'cards_removed', 'cards_transformed', 'cards_upgraded')
-
-
-def split_card(name: str) -> tuple[str, int]:
-    """'Searing Blow+3' -> ('Searing Blow', 3)."""
-    match = re.fullmatch(r'(.*?)(?:\+(\d+))?', name)
-    return match.group(1), int(match.group(2) or 0)
+# The deck rebuild helpers and untracked-relic sets live in spire_learn.neural.run_states.
 
 
 def name_maps(support: ScenarioSupport) -> tuple[dict[str, str], dict[str, str]]:
@@ -78,134 +68,6 @@ def name_maps(support: ScenarioSupport) -> tuple[dict[str, str], dict[str, str]]
     relics = {normalize(r): r for r in support.relics if r != 'neows_lament'}
     relics.update({normalize(k): v for k, v in RELIC_ALIASES.items()})
     return cards, relics
-
-
-# ---------------------------------------------------------------- rebuild
-
-def as_int(value: object) -> int:
-    """An integer field; some run files store every number as an integral float."""
-    if type(value) is float and value.is_integer():
-        return int(value)
-    if type(value) is not int:
-        raise ValueError(f'expected an integer, got {value!r}')
-    return value
-
-
-def _floor(row: dict) -> int:
-    return as_int(row['floor'])
-
-
-def _remove(deck: list[str], name: str) -> bool:
-    """Remove the exact card, else a copy of the same base card with the fewest upgrades."""
-    if name in deck:
-        deck.remove(name)
-        return True
-    base = split_card(name)[0]
-    same = [i for i, c in enumerate(deck) if split_card(c)[0] == base]
-    if not same:
-        return False
-    del deck[min(same, key=lambda i: split_card(deck[i])[1])]
-    return True
-
-
-def _downgrade(deck: list[str], name: str) -> bool:
-    """Undo one upgrade on the most-upgraded copy of a card."""
-    base = split_card(name)[0]
-    same = [i for i, c in enumerate(deck) if split_card(c)[0] == base and split_card(c)[1] > 0]
-    if not same:
-        return False
-    index = max(same, key=lambda i: split_card(deck[i])[1])
-    upgrades = split_card(deck[index])[1] - 1
-    deck[index] = base + (f'+{upgrades}' if upgrades else '')
-    return True
-
-
-def _later_card_changes(run: dict, floor: int) -> list[tuple[int, int, str, str]]:
-    """Deck changes on ``floor`` or later as (floor, order, kind, card) tuples."""
-    changes = []
-    for row in run.get('card_choices') or []:
-        if _floor(row) >= floor and row['picked'] not in ('SKIP', 'Singing Bowl'):
-            changes.append((_floor(row), 0, 'remove', row['picked']))
-    for row in run.get('event_choices') or []:
-        if _floor(row) >= floor:
-            for card in row.get('cards_obtained') or []:
-                changes.append((_floor(row), 1, 'remove', card))
-            for card in (row.get('cards_removed') or []) + (row.get('cards_transformed') or []):
-                changes.append((_floor(row), 1, 'restore', card))
-            for card in row.get('cards_upgraded') or []:
-                changes.append((_floor(row), 1, 'downgrade', card))
-    purchases = run.get('items_purchased') or []
-    purchase_floors = run.get('item_purchase_floors') or []
-    for item, at in zip(purchases, map(as_int, purchase_floors), strict=True):
-        if at >= floor:
-            # Relics and potions are bought too; they are simply absent from the deck.
-            changes.append((at, 2, 'remove_if_present', item))
-    purges = run.get('items_purged') or []
-    purge_floors = run.get('items_purged_floors') or []
-    for item, at in zip(purges, map(as_int, purge_floors), strict=True):
-        if at >= floor:
-            changes.append((at, 3, 'restore', item))
-    for row in run.get('campfire_choices') or []:
-        if _floor(row) >= floor and row.get('data'):
-            if row.get('key') == 'SMITH':
-                changes.append((_floor(row), 4, 'downgrade', row['data']))
-            elif row.get('key') == 'PURGE':
-                changes.append((_floor(row), 4, 'restore', row['data']))
-    return changes
-
-
-def deck_at(run: dict, floor: int) -> tuple[list[str], int]:
-    """The deck as it stood on entering ``floor``, and how many undo steps found no card.
-
-    Undoes, newest first: card picks and purchases, shop and campfire purges,
-    SMITH upgrades and event card changes on that floor or later.
-    """
-    deck = [str(c) for c in run['master_deck']]
-    misses = 0
-    for _at, _order, kind, card in sorted(_later_card_changes(run, floor), reverse=True):
-        if not isinstance(card, str):
-            raise ValueError('card names must be strings')
-        if kind == 'restore':
-            deck.append(card)
-        elif kind == 'remove':
-            misses += not _remove(deck, card)
-        elif kind == 'remove_if_present':
-            _remove(deck, card)
-        else:
-            misses += not _downgrade(deck, card)
-    return deck, misses
-
-
-def _later_relics(run: dict, floor: int) -> set[str]:
-    later = {r['key'] for r in run.get('relics_obtained') or [] if _floor(r) >= floor}
-    for row in run.get('event_choices') or []:
-        if _floor(row) >= floor:
-            later.update(row.get('relics_obtained') or [])
-    for item, at in zip(run.get('items_purchased') or [], map(as_int, run.get('item_purchase_floors') or []),
-                        strict=True):
-        if at >= floor:
-            later.add(item)
-    # Boss relic i is chosen after the act i+1 boss, on floor 17, 34, 51.
-    for index, row in enumerate(run.get('boss_relics') or []):
-        if 17 * (index + 1) >= floor and row.get('picked'):
-            later.add(row['picked'])
-    return later
-
-
-def relics_at(run: dict, floor: int) -> list[str]:
-    """Relic names held on entering ``floor``."""
-    later = _later_relics(run, floor)
-    return [r for r in run['relics'] if r not in later]
-
-
-def _untracked_deck_relic(run: dict, floor: int) -> bool:
-    return any(17 * (index + 1) >= floor and row.get('picked') in UNTRACKED_DECK_BOSS_RELICS
-               for index, row in enumerate(run.get('boss_relics') or []))
-
-
-def _deck_changing_relic(run: dict, floor: int) -> bool:
-    """A non-boss relic with unrecorded deck changes, obtained on ``floor`` or later."""
-    return bool(_later_relics(run, floor) & UNTRACKED_DECK_RELICS)
 
 
 # ---------------------------------------------------------------- extract

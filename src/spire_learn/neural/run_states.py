@@ -943,19 +943,24 @@ def _upgrade_ambiguity(master: list[str], changes: list[Change], logged: list[Ch
     # Cards with an upgrade, or obtained upgraded (a later plain removal may hide that).
     upgraded_bases = {split_card(card)[0] for _at, _o, kind, card in changes
                       if kind == 'downgrade' or (kind in ('remove', 'remove_if_present') and split_card(card)[1])}
+    # The decks state_at emits (the same replay as _deck_before).
+    decks = {floor: _replay(master, [c for c in changes if c[0] >= floor], names)[0]
+             for floor in fights} if upgraded_bases else {}
     for base in sorted(upgraded_bases):
         mapped = names.card(base)
         limit = names.max_upgrades(mapped[0]) if mapped else None
         events = sorted((i for i, c in enumerate(changes) if split_card(c[3])[0] == base), key=lambda i: changes[i],
                         reverse=True)
         copies = [name for name in master if split_card(name)[0] == base]
-        floors = _base_ambiguity(copies, events, changes, logged, limit, fights)
+        replayed = [tuple(sorted(split_card(c)[1] for c in decks[floor] if split_card(c)[0] == base))
+                    for floor in fights]
+        floors = _base_ambiguity(copies, events, changes, logged, limit, fights, replayed)
         ambiguous |= floors
     return frozenset(ambiguous)
 
 
 def _base_ambiguity(final_copies: list[str], events: list[int], changes: list[Change], logged: list[Change],
-                    limit: int | None, fights: list[int]) -> set[int]:
+                    limit: int | None, fights: list[int], replayed: list[tuple[int, ...]] | None = None) -> set[int]:
     """Floors where the feasible histories of one card's copies disagree (see _upgrade_ambiguity).
 
     Undoing newest first, a copy is (level now in the undo, removal floor, upgrade
@@ -966,7 +971,9 @@ def _base_ambiguity(final_copies: list[str], events: list[int], changes: list[Ch
     copy alive then with a level to lose; an acquisition takes a copy at the
     logged level (any level for an event's plainly named card); the deck before every recorded change has no upgraded copy.
     The search fails closed: no feasible history, or more than _SEARCH_LIMIT
-    nodes, makes every fight floor ambiguous.
+    nodes, makes every fight floor ambiguous. ``replayed`` is the card's level
+    multiset the replay emits on each fight floor; a floor where it is not the
+    single certified outcome is ambiguous too, so an emitted deck always equals it.
     """
     upgrades = sum(1 for i in events if changes[i][2] == 'downgrade')
     acquired = max((split_card(logged[i][3])[1] for i in events if changes[i][2] in ('remove', 'remove_if_present')),
@@ -1032,9 +1039,8 @@ def _base_ambiguity(final_copies: list[str], events: list[int], changes: list[Ch
         return set(fights)
     if not outcomes:
         return set(fights)  # the search cannot confirm the replay's history: nothing is certified
-    if len(outcomes) == 1:
-        return set()
-    return {floor for k, floor in enumerate(fights) if len({o[k] for o in outcomes}) > 1}
+    return {floor for k, floor in enumerate(fights) if len({o[k] for o in outcomes}) > 1 or (
+        replayed is not None and next(iter(outcomes))[k] != replayed[k])}
 
 
 def _deck_before(run: dict, floor: int, history: _DeckHistory,

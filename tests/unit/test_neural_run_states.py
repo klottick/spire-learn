@@ -578,6 +578,25 @@ class UnrecordedEffectsTest(unittest.TestCase):
         run["items_purged_floors"].append(6)
         self.assertEqual(self.drop(run, 7), "deck_unrecoverable")
 
+    def test_emitted_deck_equals_the_unique_history(self):
+        # Searing Blow on floor 1, Searing Blow+1 on floor 2, a plainly logged purge on 11,
+        # one plain Searing Blow left: the purged copy must have been the +1 one, so floors
+        # 4-9 hold [0, 1]. The replay alone restores the purge at +0.
+        run = _base()
+        run["card_choices"][0]["picked"] = "Searing Blow"
+        run["card_choices"][1]["picked"] = "Searing Blow+1"
+        run["master_deck"].remove("Anger")
+        run["master_deck"].append("Searing Blow")
+        run["master_deck"][run["master_deck"].index("Shrug It Off+1")] = "Shrug It Off"
+        run["campfire_choices"][1] = {"floor": 11, "key": "PURGE", "data": "Searing Blow"}
+        for floor in (4, 7, 9):
+            state = _state(run, floor)
+            if isinstance(state, rs.FightState):
+                self.assertEqual(sorted(u for c, u in _cards(state) if c == "searing_blow"), [0, 1], floor)
+            else:
+                self.assertEqual(state.reason, "deck_unrecoverable", floor)
+        self.assertEqual(sorted(u for c, u in _cards(self.state(run, 12)) if c == "searing_blow"), [0])
+
     def test_no_feasible_upgrade_history_fails_closed(self):
         # The greedy replay settles this log, but no assignment of copies fits it: Strike_R+1
         # obtained on floor 1 (no egg), so the search finds nothing and nothing is certified.

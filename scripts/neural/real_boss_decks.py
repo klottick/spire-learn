@@ -31,6 +31,7 @@ if __package__ in (None, ''):
     _repo = Path(__file__).resolve().parents[2]
     sys.path[:0] = [str(_repo / 'src'), str(_repo)]
 
+from spire_learn.neural.standard_names import normalize  # noqa: E402,F401
 from spire_learn.neural.scenario_support import (  # noqa: E402
     ScenarioSupport, canonical_bytes, load_scenario_support,
 )
@@ -62,10 +63,6 @@ UNTRACKED_DECK_BOSS_RELICS = {'Astrolabe', "Pandora's Box", 'Empty Cage', 'Calli
 # (they only upgrade later cards, whose picks are undone anyway) and Nilry's Codex.
 UNTRACKED_DECK_RELICS = {'DollysMirror', 'Whetstone', 'War Paint', 'Necronomicon'}
 CARD_EVENT_KEYS = ('cards_obtained', 'cards_removed', 'cards_transformed', 'cards_upgraded')
-
-
-def normalize(name: str) -> str:
-    return re.sub(r'[^a-z0-9]', '', name.lower())
 
 
 def split_card(name: str) -> tuple[str, int]:

@@ -152,6 +152,40 @@ class ProfileEntryTests(unittest.TestCase):
                    for old, new in zip(base_lines, template.splitlines()[1:]) if old != new]
         self.assertEqual(changed, ["gym_revision", "standalone", "run"])
 
+    def test_standard_profile_plans_use_the_standard_identity_and_the_gpu_wait_gate(self):
+        from scripts.neural.baseline_entry import load_plan
+        baseline = load_plan(ROOT / "configs/neural/baseline-gym-1.1.1-cv2/plan.json")
+        for rows in (16, 64):
+            plan = load_plan(ROOT / f"configs/neural/profile-standard-1.1.1/plan-{rows}.json")
+            self.assertEqual(plan["gpu_wait"], baseline["gpu_wait"])
+            self.assertEqual(plan["gym_revision"], "e3c13836bd1458be8a87b93160f5c350f78fcd80")
+            self.assertEqual(plan["recipe"], "configs/neural/baalorlord-standard-v1/recipe.json")
+            template = (ROOT / plan["template"]).read_text()
+            self.assertIn(f"rows = {rows}\n", template)
+            self.assertIn('mode = "standard-standalone"', template)
+            self.assertIn('device = "cuda:0"', template)
+            self.assertIn("spire-learn-combat-ff-standard-v1", template)
+
+    def test_gpu_wait_polls_until_free_and_is_off_without_a_plan_entry_or_cuda(self):
+        plan = {"gpu_wait": {"min_free_bytes": 10, "poll_seconds": 5, "max_total_seconds": 100}}
+        cuda, cpu = SimpleNamespace(device="cuda:0"), SimpleNamespace(device="cpu")
+        free, sleeps = iter([1, 2, 10]), []
+        deps = {"gpu_free_bytes": lambda: next(free), "sleep": sleeps.append}
+        profile = {}
+        profile_entry._gpu_wait(plan, cuda, deps, _Clock(), profile, "segment-0")
+        self.assertEqual(sleeps, [5, 5])
+        self.assertEqual(profile["gpu_waits"]["events"][0]["stage"], "segment-0")
+        self.assertGreater(profile["gpu_waits"]["total_waited_seconds"], 0)
+        untouched = {}
+        profile_entry._gpu_wait({}, cuda, {}, _Clock(), untouched, "s")
+        profile_entry._gpu_wait(plan, cpu, {}, _Clock(), untouched, "s")
+        self.assertEqual(untouched, {})
+        with self.assertRaisesRegex(RuntimeError, "gpu_wait_exhausted"):
+            profile_entry._gpu_wait({"gpu_wait": {"min_free_bytes": 10, "poll_seconds": 1,
+                                                  "max_total_seconds": 3}}, cuda,
+                                    {"gpu_free_bytes": lambda: 0, "sleep": lambda s: None},
+                                    _Clock(), {}, "s")
+
     def setUp(self):
         from spire_learn.neural import features, model
         self.stub = stub = lambda frames, *args, **kwargs: "batch"

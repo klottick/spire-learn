@@ -39,6 +39,38 @@ def _default_dependencies() -> dict[str, Callable]:
                 create_runtime=create_runtime, train=train, run_stream_segment=run_stream_segment)
 
 
+def _gpu_wait(plan: Mapping, config, deps: Mapping, clock: Callable[[], float], profile: dict,
+              stage: str) -> None:
+    """Yield the shared GPU: wait, rather than fault, until ``min_free_bytes`` is free.
+
+    Active only with a ``gpu_wait`` plan entry on a CUDA device; waited time is excluded from
+    segment timings because the wait happens before the segment clock starts. Exceeding
+    ``max_total_seconds`` raises, so a permanently busy GPU is an error, not a slow run.
+    """
+    settings = plan.get('gpu_wait')
+    if settings is None or not str(getattr(config, 'device', '')).startswith('cuda'):
+        return
+    from scripts.neural import baseline_entry
+    free_bytes = deps.get('gpu_free_bytes', baseline_entry._gpu_free_bytes)
+    sleep = deps.get('sleep', time.sleep)
+    waits = profile.setdefault('gpu_waits', {'total_waited_seconds': 0.0, 'events': []})
+    started = None
+    while True:
+        free = free_bytes()
+        if free >= settings['min_free_bytes']:
+            break
+        if started is None:
+            started = clock()
+        if waits['total_waited_seconds'] + (clock() - started) >= settings['max_total_seconds']:
+            waits['total_waited_seconds'] += clock() - started
+            raise RuntimeError('gpu_wait_exhausted')
+        sleep(settings['poll_seconds'])
+    if started is not None:
+        waited = clock() - started
+        waits['total_waited_seconds'] = round(waits['total_waited_seconds'] + waited, 3)
+        waits['events'].append({'stage': stage, 'waited_seconds': round(waited, 3), 'free_bytes': free})
+
+
 def _patch(stack: ExitStack, obj: object, name: str, replacement: Callable) -> Callable:
     own = name in vars(obj)
     original = getattr(obj, name)
@@ -145,6 +177,7 @@ def run_profile(root: Path, plan_path: Path, output: Path, *, checkpoint: Path |
             config = deps['load_config'](destination / 'config.toml')
             if config.environment_revision != plan['gym_revision']:
                 raise ValueError('template revision differs from plan')
+            _gpu_wait(plan, config, deps, clock, profile, f'segment-{index}')
             row: dict = {'segment': index, 'shard_index': shard_index, 'synchronized': sync}
             profile['segments'].append(row)
 

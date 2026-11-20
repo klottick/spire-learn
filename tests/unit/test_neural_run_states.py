@@ -501,12 +501,54 @@ class UnrecordedEffectsTest(unittest.TestCase):
         run = _base()
         run["campfire_choices"] = [{"floor": 5, "key": "SMITH", "data": "Strike_R"},
                                    {"floor": 11, "key": "PURGE", "data": "Strike_R"}]
+        run["items_purged"] = ["Defend_R"]  # so only the floor-11 PURGE can have taken the smithed Strike
         run["master_deck"][run["master_deck"].index("Bash+1")] = "Bash"
         run["master_deck"][run["master_deck"].index("Shrug It Off+1")] = "Shrug It Off"
-        run["master_deck"].remove("Strike_R")  # the purged Strike was the smithed one
+        run["master_deck"].remove("Defend_R")
         self.assertIn(("strike", 1), _cards(self.state(run, 7)))
         self.assertNotIn(("strike", 1), _cards(self.state(run, 4)))
         self.assertNotIn(("strike", 1), _cards(self.state(run, 12)))
+
+    def test_which_removed_copy_was_upgraded_is_ambiguous(self):
+        run = _base()
+        run["campfire_choices"] = [{"floor": 5, "key": "SMITH", "data": "Strike_R"},
+                                   {"floor": 11, "key": "PURGE", "data": "Strike_R"}]
+        run["master_deck"][run["master_deck"].index("Bash+1")] = "Bash"
+        run["master_deck"][run["master_deck"].index("Shrug It Off+1")] = "Shrug It Off"
+        run["master_deck"].remove("Strike_R")  # purged on 6 and 11, both logged as plain Strikes
+        # The smithed Strike left on floor 6 or on floor 11: states between them are unknown.
+        self.assertEqual(self.drop(run, 7), "deck_unrecoverable")
+        self.assertEqual(_cards(self.state(run, 4)).count(("strike", 0)), 5)
+        f12 = _cards(self.state(run, 12))
+        self.assertEqual((f12.count(("strike", 0)), f12.count(("strike", 1))), (3, 0))
+
+    def test_upgraded_removal_is_not_upgraded_again(self):
+        # Task 3 found Strike+2: a purge logged as "Strike_R+1" was fixed up one more level
+        # for a second Shining Light upgrade that belonged to a plainly-logged removal.
+        run = _base()
+        run["event_choices"][0] = {"floor": 3, "event_name": "Shining Light", "player_choice": "Entered Light",
+                                   "cards_upgraded": ["Strike_R", "Strike_R"]}
+        run["master_deck"][run["master_deck"].index("Defend_R+1")] = "Defend_R"
+        run["items_purged"] = ["Strike_R"]  # floor 6: logged plainly, yet one of the upgraded two
+        run["campfire_choices"][1] = {"floor": 11, "key": "PURGE", "data": "Strike_R+1"}
+        run["master_deck"][run["master_deck"].index("Shrug It Off+1")] = "Shrug It Off"
+        run["master_deck"].remove("Strike_R")
+        f4 = _cards(self.state(run, 4))
+        self.assertEqual((f4.count(("strike", 0)), f4.count(("strike", 1))), (3, 2))
+        f7 = _cards(self.state(run, 7))
+        self.assertEqual((f7.count(("strike", 0)), f7.count(("strike", 1))), (3, 1))
+        self.assertEqual(_cards(self.state(run, 12)).count(("strike", 0)), 3)
+        self.assertFalse(any(u > 1 for c, u in f4))
+
+    def test_upgrades_above_the_gym_limit_drop(self):
+        run = _base()  # a consistent log can still claim an impossible card: Strike smithed twice
+        run["campfire_choices"] = [{"floor": 5, "key": "SMITH", "data": "Strike_R"},
+                                   {"floor": 11, "key": "SMITH", "data": "Strike_R"}]
+        run["master_deck"][run["master_deck"].index("Bash+1")] = "Bash"
+        run["master_deck"][run["master_deck"].index("Shrug It Off+1")] = "Shrug It Off"
+        run["master_deck"][run["master_deck"].index("Strike_R")] = "Strike_R+2"
+        self.assertEqual(self.drop(run, 12), "upgrades_exceed_max")
+        self.assertIn(("strike", 1), _cards(self.state(run, 7)))
 
     def test_event_card_choice_counted_once(self):
         run = _base()

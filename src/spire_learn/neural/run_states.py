@@ -31,6 +31,7 @@ the starter deck, or an unrecorded non-relic change may fall after F),
 ``bottle_card_missing``, ``event_fight_reordered``, ``hp_unrecorded`` (floor 1
 without a consistent Neow log, or a second fight on one floor),
 ``relics_unrecoverable`` (a relic with no record of where it came from),
+``upgrades_exceed_max`` (a card above the Gym's upgrade limit; a backstop),
 ``relic_counter_unrecorded`` (Lizard Tail used, floor not recorded), ``gold_unrecorded``
 (Maw Bank's floor-entry gold not pinned) and ``outcome_unrecorded`` (the last
 fight of a lost run whose killer is not that fight's enemies, or of an abandoned run).
@@ -428,7 +429,8 @@ def _recorded_changes(run: dict, sources: dict[str, int]) -> list[Change]:
     return changes
 
 
-def _replay(master: list[str], changes: list[Change]) -> tuple[list[str], list[int], Counter, list[tuple[int, str]]]:
+def _replay(master: list[str], changes: list[Change], names: NameAliases | None = None,
+            spans: list[tuple[int, int]] | None = None) -> tuple[list[str], list[int], Counter, list[tuple[int, str]]]:
     """Undo ``changes`` on ``master``, newest first.
 
     Returns the deck; the indices of changes that found no card; for each
@@ -436,9 +438,23 @@ def _replay(master: list[str], changes: list[Change]) -> tuple[list[str], list[i
     card without its upgrades, which shows as an older SMITH finding no upgraded
     copy); and (index, held name) for each obtained card held with more upgrades
     than it was obtained with and no recorded upgrade.
+
+    A missing upgrade is put on a restored copy only if the copy's restored level
+    plus it stays within the card's upgrade limit (``names``): a copy logged as
+    "Strike_R+1" cannot also take an upgrade logged on a plain "Strike_R". When copies restored on different floors could take it, the
+    floors between them are appended to ``spans`` (which copy held it there is
+    unknown).
     """
     deck = [[name, None] for name in master]
     missed, fixes, upgraded = [], Counter(), []
+
+    def room(origin: int, card: str) -> bool:
+        restored = split_card(changes[origin][3])[1] + fixes[origin]
+        limit = None
+        if names is not None:
+            mapped = names.card(card)
+            limit = names.max_upgrades(mapped[0]) if mapped else None
+        return limit is None or restored + 1 <= limit
     for index in sorted(range(len(changes)), key=lambda i: changes[i], reverse=True):
         _at, _order, kind, card = changes[index]
         if not isinstance(card, str):
@@ -472,9 +488,12 @@ def _replay(master: list[str], changes: list[Change]) -> tuple[list[str], list[i
             level = split_card(deck[i][0])[1] - 1
             deck[i][0] = base + (f'+{level}' if level else '')
             continue
-        restored = [i for i, (name, origin) in enumerate(deck) if origin is not None and name == base]
+        restored = [origin for name, origin in deck if origin is not None and name == base and room(origin, name)]
         if restored:
-            fixes[deck[restored[0]][1]] += 1
+            floors = sorted({changes[origin][0] for origin in restored})
+            if len(floors) > 1 and spans is not None:
+                spans.append((floors[0], floors[-1]))
+            fixes[max(restored, key=lambda origin: changes[origin][:2])] += 1
         else:
             missed.append(index)
     return [name for name, _o in deck], missed, fixes, upgraded
@@ -770,22 +789,23 @@ def _residual(run: dict, deck: list[str], missed: list[int], changes: list[Chang
     return items + removed
 
 
-def _deck_after(master: list[str], changes: list[Change], floor: int) -> list[str]:
+def _deck_after(master: list[str], changes: list[Change], floor: int, names: NameAliases) -> list[str]:
     """The deck at the end of ``floor``."""
-    return _replay(master, [c for c in changes if c[0] > floor])[0]
+    return _replay(master, [c for c in changes if c[0] > floor], names)[0]
 
 
-def _check_effect(master: list[str], changes: list[Change], effect: _Effect, card: str) -> str | None:
+def _check_effect(master: list[str], changes: list[Change], effect: _Effect, card: str,
+                  names: NameAliases) -> str | None:
     """A complete-effect check of an inferred change; the reason it fails, or None."""
     if effect.name == 'DollysMirror':
         # The copy is ``card`` as it was when copied; the original must match it exactly.
-        if _deck_after(master, changes, effect.floor).count(card) < 2:
+        if _deck_after(master, changes, effect.floor, names).count(card) < 2:
             return f'DollysMirror copy {card} has no identical original'
     elif effect.name == 'Vampires':
-        if any(_is_basic(c, 'Strike') for c in _deck_after(master, changes, effect.floor)):
+        if any(_is_basic(c, 'Strike') for c in _deck_after(master, changes, effect.floor, names)):
             return 'Vampires left a Strike'
     elif effect.name == "Pandora's Box":
-        if any(_is_basic(c, 'Strike', 'Defend') for c in _deck_after(master, changes, effect.floor)):
+        if any(_is_basic(c, 'Strike', 'Defend') for c in _deck_after(master, changes, effect.floor, names)):
             return "Pandora's Box left a Strike or Defend"
     return None
 
@@ -814,9 +834,10 @@ def _account_history(run: dict, sources: dict[str, int], account: _Negations, na
         if relic in sources and listed is not None and (
                 len(listed) > 2 or any(_card_type(names, card) != kind for card in listed)):
             return _DeckHistory(changes, (f'{relic} upgraded {listed}: not two {kind}s',), ())
-    deck, missed, fixes, _up = _replay(master, changes)
+    spans: list[tuple[int, int]] = []
+    deck, missed, fixes, _up = _replay(master, changes, names, spans)
     changes = _apply_fixes(changes, fixes)
-    deck, missed, _fixes, upgraded = _replay(master, changes)
+    deck, missed, _fixes, upgraded = _replay(master, changes, names)
     items = _residual(run, deck, missed, changes, upgraded)
     effects = _effects(run, sources, changes, account.chests, account.implants)
     for index, name in upgraded:
@@ -836,7 +857,7 @@ def _account_history(run: dict, sources: dict[str, int], account: _Negations, na
         if kind == 'add' and candidates:
             # The card must have been in the deck for every recorded change to it
             # (a later purge or SMITH): keep only floors whose undo finds no new gap.
-            fits = {f: len(_replay(master, changes + [(f, _INFERRED, 'remove', card)])[1]) <= len(missed)
+            fits = {f: len(_replay(master, changes + [(f, _INFERRED, 'remove', card)], names)[1]) <= len(missed)
                     for f in {f for _r, f, _i in candidates}}
             candidates = [c for c in candidates if fits[c[1]]]
         if not candidates:
@@ -872,14 +893,14 @@ def _account_history(run: dict, sources: dict[str, int], account: _Negations, na
         return _DeckHistory(changes, tuple(unexplained), ())
     base = len(changes)
     changes = changes + inferred
-    deck, missed, fixes, _up = _replay(master, changes)
+    deck, missed, fixes, _up = _replay(master, changes, names, spans)
     changes = _apply_fixes(changes, fixes)
-    deck, missed, _fixes, upgraded = _replay(master, changes)
+    deck, missed, _fixes, upgraded = _replay(master, changes, names)
     left = _residual(run, deck, missed, changes, upgraded)
     if left:
         return _DeckHistory(changes, tuple(f'{k}:{c}' for k, c, _a, _b in left), ())
     for effect, index in chosen_effects:
-        problem = _check_effect(master, changes, effect, changes[base + index][3])
+        problem = _check_effect(master, changes, effect, changes[base + index][3], names)
         if problem:
             return _DeckHistory(changes, (problem,), ())
     for relic, kind in TYPED_UPGRADES.items():
@@ -888,18 +909,22 @@ def _account_history(run: dict, sources: dict[str, int], account: _Negations, na
             # It upgrades two random upgradable cards of its type (fewer if there are
             # fewer). A shorter list than the deck allowed means an upgrade is unrecorded.
             at = sources[relic]
-            before = _replay(master, [c for c in changes if c[:2] >= (at, _INFERRED - 1)])[0]
+            before = _replay(master, [c for c in changes if c[:2] >= (at, _INFERRED - 1)], names)[0]
             eligible = sum(1 for card in before if _card_type(names, card) == kind
                            and (split_card(card)[1] == 0 or split_card(card)[0] == 'Searing Blow'))
             if len(listed) < min(2, eligible):
                 windows.append((at, _LAST_FLOOR, (relic,)))
+    # Which of several removed copies held an upgrade logged on a plain name is unknown
+    # between their removal floors.
+    windows += [(first, last, ('upgraded copy',)) for first, last in spans]
     return _DeckHistory(changes, (), tuple(windows), tuple(negations))
 
 
-def _deck_before(run: dict, floor: int, history: _DeckHistory) -> tuple[list[str], list[Change]]:
+def _deck_before(run: dict, floor: int, history: _DeckHistory,
+                 names: NameAliases) -> tuple[list[str], list[Change]]:
     """Deck names entering ``floor`` and the undo steps that found no card."""
     changes = [c for c in history.changes if c[0] >= floor]
-    deck, missed, fixes, upgraded = _replay([str(c) for c in run['master_deck']], changes)
+    deck, missed, fixes, upgraded = _replay([str(c) for c in run['master_deck']], changes, names)
     return deck, [changes[i] for i in missed] + [changes[i] for i in fixes] + [changes[i] for i, _n in upgraded]
 
 
@@ -1146,7 +1171,7 @@ def state_at(run: dict, fight: FightFloor, names: NameAliases,
             reason = 'untracked_deck_relic' if _RELIC_EFFECTS & set(effects) else 'deck_unrecoverable'
             until = 'the end' if through == _LAST_FLOOR else through
             return Drop(reason, f'{" or ".join(effects)} changed the deck unrecorded on floors {after + 1}-{until}')
-    deck_names, missed = _deck_before(run, at, deck_history)
+    deck_names, missed = _deck_before(run, at, deck_history, names)
     if missed:
         return Drop('deck_unrecoverable', f'no card to undo {missed[0][2]} {missed[0][3]} (floor {missed[0][0]})')
     deck, tags = [], []
@@ -1155,6 +1180,10 @@ def state_at(run: dict, fight: FightFloor, names: NameAliases,
         if mapped is None:
             return Drop(f'unmapped_card:{split_card(name)[0]}', name)
         card, upgrades = mapped
+        limit = names.max_upgrades(card)
+        if limit is not None and upgrades > limit:
+            # A backstop: the history should never produce this.
+            return Drop('upgrades_exceed_max', f'{name}: the Gym allows {limit}')
         deck.append({'card': card, 'upgrades': upgrades, 'misc': MISC_DEFAULTS.get(card, 0)})
         if card in MISC_DEFAULTS and 'misc_defaulted' not in tags:
             tags.append('misc_defaulted')

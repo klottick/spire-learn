@@ -64,6 +64,7 @@ class StandardNamesTests(unittest.TestCase):
         aliases = load_aliases(ALIASES)
         self.assertEqual([aliases.card_type(c) for c in ("clothesline", "defend", "inflame", "regret", "nope")],
                          ["attack", "skill", "power", "curse", None])
+        self.assertEqual([aliases.max_upgrades(c) for c in ("strike", "searing_blow")], [1, None])
         import tempfile
         document = json.loads(ALIASES.read_text())
         del document["gym_card_types"]["bash"]
@@ -94,6 +95,7 @@ class StandardNamesGymTests(unittest.TestCase):
         self.assertEqual(metadata["fingerprint"], document["gym_card_metadata_fingerprint"])
         self.assertEqual(sorted(row["id"] for row in metadata["cards"]), document["gym_card_ids"])
         self.assertEqual({row["id"]: row["type"] for row in metadata["cards"]}, document["gym_card_types"])
+        self.assertEqual({row["id"]: row["max_upgrades"] for row in metadata["cards"]}, document["gym_card_max_upgrades"])
         self.assertEqual(gym_rejections(aliases), [])
 
 

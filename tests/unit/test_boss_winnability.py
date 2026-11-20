@@ -297,6 +297,37 @@ class BossWinnabilityTests(unittest.TestCase):
         self.assertEqual(rows[0]["cohort"], "familiar_new_seed")
         self.assertEqual(rows[0]["tier"], "act3:elite")
 
+    def test_standard_panel_cases_passed_through_unchanged(self):
+        import tempfile
+        entry = {"id": "p-1", "character": "ironclad", "ascension": 20, "encounter": "cultist", "hp": 7,
+                 "max_hp": 9, "gold": 111, "deck": [{"card": "strike", "upgrades": 0, "misc": 0}],
+                 "relics": ["burning_blood"], "relic_counters": {}, "potions": [None, None]}
+        cases = [{"case_id": f"p-{n}", "entry": dict(entry, id=f"p-{n}")} for n in range(1, 5)]
+        annotations = {f"p-{n}": {"run_id": "r", "floor": n, "act": 1 + n % 2, "room_kind": "monster",
+                                  "level": 0, "fuzz": {}, "tags": []} for n in range(1, 5)}
+        panel = {"manifest": {"cases": cases}, "annotations": annotations}
+        seen = {}
+
+        def fake_play(catalog, case, player, view, **kwargs):
+            seen[case["case_id"]] = catalog["entries"][[e["id"] for e in catalog["entries"]].index(case["case_id"])]
+            return {"outcome": "victory" if case["case_id"] == "p-1" else "death", "steps": 3}
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(bw, "_build_standard_panel", return_value=panel), \
+             patch.object(bw, "_view_for", return_value=(self.view, DESCRIPTOR)), \
+             patch.object(bw, "play", side_effect=fake_play):
+            output = Path(directory)
+            result = bw.standard_panel_winnability(output, recipe=Path("recipe.json"), samples=2,
+                                                   playout_steps=3, max_steps=9, seed=1, limit=None)
+            rows = [json.loads(line) for line in (output / "standard_panel.jsonl").read_text().splitlines()]
+        for case in cases:
+            self.assertEqual(seen[case["case_id"]], case["entry"])  # ascension 20, gold, None potions intact
+        self.assertEqual((result["cases"], result["search_wins"]), (4, 1))
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(rows[0]["act"], 2)
+        self.assertEqual(result["by_stratum_level"]["2:monster:0"], {"victory": 1, "death": 1})
+
+
 
 class _NumpyRow(list):
     def __getitem__(self, index):

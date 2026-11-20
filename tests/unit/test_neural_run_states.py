@@ -561,6 +561,32 @@ class UnrecordedEffectsTest(unittest.TestCase):
         self.assertEqual(searing(2), [0])  # one copy so far: settled
         self.assertEqual(searing(12), [1])
 
+    def test_upgraded_acquisition_removed_under_a_plain_name(self):
+        # Searing Blow on 1 and 2, Searing Blow+1 on 4; plain purges on 6 and 11; SMITH on 8;
+        # one Searing Blow+1 left. Entering floor 7 the pair is [0, 0] or [0, 1].
+        run = _base()
+        for row, pick in zip(run["card_choices"], ["Searing Blow", "Searing Blow", "Searing Blow+1"]):
+            row["picked"] = pick
+        run["master_deck"].remove("Anger")
+        run["master_deck"].remove("Shrug It Off+1")
+        run["master_deck"].append("Searing Blow+1")
+        run["master_deck"][run["master_deck"].index("Bash+1")] = "Bash"
+        run["campfire_choices"] = [{"floor": 8, "key": "SMITH", "data": "Searing Blow"},
+                                   {"floor": 11, "key": "PURGE", "data": "Searing Blow"}]
+        run["path_per_floor"][7] = "R"
+        run["items_purged"].append("Searing Blow")
+        run["items_purged_floors"].append(6)
+        self.assertEqual(self.drop(run, 7), "deck_unrecoverable")
+
+    def test_no_feasible_upgrade_history_fails_closed(self):
+        # The greedy replay settles this log, but no assignment of copies fits it: Strike_R+1
+        # obtained on floor 1 (no egg), so the search finds nothing and nothing is certified.
+        changes = [(1, 0, "remove", "Strike_R+1")]
+        floors = rs._base_ambiguity(["Strike_R+1"], [0], changes, changes, 1, [4, 7])
+        self.assertEqual(floors, set())  # obtained upgraded and kept: one history
+        floors = rs._base_ambiguity(["Strike_R"], [0], changes, changes, 1, [4, 7])
+        self.assertEqual(floors, {4, 7})  # held below the level it was obtained at: none fits
+
     def test_upgrades_above_the_gym_limit_drop(self):
         run = _base()  # a consistent log can still claim an impossible card: Strike smithed twice
         run["campfire_choices"] = [{"floor": 5, "key": "SMITH", "data": "Strike_R"},

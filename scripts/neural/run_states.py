@@ -29,23 +29,24 @@ if __package__ in (None, ''):
     sys.path[:0] = [str(_repo / 'src'), str(_repo)]
 
 from spire_learn.neural.run_states import (  # noqa: E402
-    Drop, FightState, as_int, fight_floors, run_history, state_at, CHARACTERS, POTION_BELT,
+    Drop, FightState, as_int, fight_floors, run_history, state_at, CHARACTERS,
 )
 from spire_learn.neural.scenario_support import canonical_bytes  # noqa: E402
 from spire_learn.neural.standard_catalog import (  # noqa: E402
-    CATALOG_SCHEMA, MAX_CATALOG, PROFILE, CatalogRejected, Validate, bind_gym, potion_slots, validate_entries,
+    ASCENSION, CatalogRejected, Validate, bind_gym, potion_slots, validate_entries,
 )
 from spire_learn.neural.standard_names import NameAliases, load_aliases  # noqa: E402
 
 SCHEMA = 'spire-learn-run-states-v1'
 REPORT_SCHEMA = 'spire-learn-run-states-report-v1'
 GYM_REVISION = 'e3c13836bd1458be8a87b93160f5c350f78fcd80'
-ASCENSION = 20
 BURNING_KINDS = ('strength', 'max_hp', 'metallicize', 'regeneration')  # the Gym's order
 DROP_LIMIT = 0.10
 DEFAULT_ENCOUNTER_MAP = Path(__file__).resolve().parents[2] / 'configs/neural/standard/encounter-map.json'
 DEFAULT_ALIASES = Path(__file__).resolve().parents[2] / 'configs/neural/standard/name-aliases.json'
 STATS_SCHEMA = 'spire-learn-run-states-stats-v1'
+__all__ = ['CatalogRejected', 'aggregate_stats', 'build', 'burning_kind', 'collect_runs', 'main',
+           'to_standard_entry', 'validate_entries']  # CatalogRejected/validate_entries re-exported from standard_catalog
 
 # ---------------------------------------------------------------- input
 

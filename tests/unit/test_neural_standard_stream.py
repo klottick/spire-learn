@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -201,8 +202,11 @@ class FuzzTest(_Fixture):
                 self.assertEqual((cards, relics), (level, level))
                 self.assertEqual((record.cards_replaced, record.relics_replaced), (level, level))
                 self.assertEqual(len(set(entry["relics"])), len(entry["relics"]))
-                for key in ("encounter", "hp", "max_hp", "gold", "potions", "character", "ascension", "id"):
+                for key in ("encounter", "hp", "max_hp", "gold", "character", "ascension", "id"):
                     self.assertEqual(entry[key], base[key])
+                held = [p for p in entry["potions"] if p is not None]
+                self.assertEqual(held, [p for p in base["potions"] if p is not None])
+                self.assertEqual(len(entry["potions"]), 4 if "potion_belt" in entry["relics"] else 2)
 
     def test_fuzz_keeps_starter_relic(self):
         for starter in ("burning_blood", "black_blood"):
@@ -224,9 +228,10 @@ class FuzzTest(_Fixture):
     def test_fuzz_pool_excludes_bottles(self):
         pools = self.recipe.pools
         for relic in ("bottled_flame", "bottled_lightning", "bottled_tornado", "burning_blood", "black_blood",
-                      "potion_belt", "neows_lament"):
+                      "neows_lament"):
             self.assertNotIn(relic, pools.relics)
         self.assertIn("vajra", pools.relics)
+        self.assertIn("potion_belt", pools.relics)  # an ordinary non-starter relic (fix round 1 ruling)
         self.assertIn("regret", pools.cards)  # curses seen in his decks are in the card pool
         self.assertEqual(list(pools.cards), sorted(pools.cards))
 
@@ -272,14 +277,40 @@ class FuzzTest(_Fixture):
         self.assertNotIn("omamori", entry["relics"])
         self.assertEqual(entry["relic_counters"], {})
 
-    def test_potion_belt_is_never_replaced(self):
+    def test_potion_belt_is_replaceable_with_at_most_two_potions(self):
+        state = _state("1", 3, 1, "monster", "cultist", self.BIG, ["burning_blood", "potion_belt", "vajra"],
+                       potions=("fire_potion", "block_potion"))
+        for seed in range(20):
+            entry, record = self.fuzz(state, 4, seed)
+            self.assertEqual(record.relics_replaced, 2)  # the full non-starter cap
+            self.assertNotIn("potion_belt", entry["relics"])
+            self.assertEqual(entry["potions"], ["fire_potion", "block_potion"])  # 2 slots, potions kept
+
+    def test_potion_belt_stays_when_more_than_two_potions_are_held(self):
         state = _state("1", 3, 1, "monster", "cultist", self.BIG, ["burning_blood", "potion_belt", "vajra"],
                        potions=("fire_potion", "block_potion", "swift_potion"))
         for seed in range(20):
             entry, record = self.fuzz(state, 4, seed)
             self.assertIn("potion_belt", entry["relics"])
-            self.assertEqual(record.relics_replaced, 1)
+            self.assertEqual(record.relics_replaced, 1)  # the cap shrinks by the ineligible belt
             self.assertEqual(entry["potions"], state["entry"]["potions"])
+
+    def test_drawn_potion_belt_adds_empty_slots(self):
+        state = _state("1", 3, 1, "monster", "cultist", self.BIG, ["burning_blood", "vajra"], potions=("fire_potion",))
+        pools = dataclasses.replace(self.recipe.pools, relics=("potion_belt",))
+        entry, record = ss.fuzz(state, 1, pools, random.Random(0))
+        self.assertEqual(record.relics_replaced, 1)
+        self.assertEqual(entry["relics"], ["burning_blood", "potion_belt"])
+        self.assertEqual(entry["potions"], ["fire_potion", None, None, None])
+
+    def test_bottle_the_pool_cannot_replace_keeps_its_card(self):
+        deck = [_row("bash")]
+        state = _state("1", 3, 1, "monster", "cultist", deck, ["burning_blood", "bottled_flame"],
+                       bottled={"bottled_flame": _row("bash")})
+        pools = dataclasses.replace(self.recipe.pools, relics=("bottled_flame",))  # nothing unheld to draw
+        entry, record = ss.fuzz(state, 1, pools, random.Random(0))
+        self.assertEqual((record.cards_replaced, record.relics_replaced), (0, 0))
+        self.assertEqual(entry, json_value(state["entry"]))
 
     def test_replacements_keep_upgrades_within_new_card_limit(self):
         state = _state("1", 3, 1, "monster", "cultist", [_row("searing_blow", 3)] * 6, ["burning_blood"])
@@ -333,6 +364,27 @@ class ShardTest(_Fixture):
         other = ss.generate_standard_shard(self.load(generator_seed=1), split="train", shard_index=6,
                                            validate=NO_FUZZ)
         self.assertNotEqual(first.manifest_sha256, other.manifest_sha256)
+
+    def test_generation_ignores_table_row_order(self):
+        shuffled = list(self.recipe.states)
+        random.Random(3).shuffle(shuffled)
+        recipes = [self.recipe, dataclasses.replace(self.recipe, states=tuple(reversed(self.recipe.states))),
+                   dataclasses.replace(self.recipe, states=tuple(shuffled))]
+        outputs = []
+        for recipe in recipes:
+            self.assertEqual(recipe.sha256, self.recipe.sha256)
+            ss.clear_shard_cache()
+            shard = ss.generate_standard_shard(recipe, split="train", shard_index=6, validate=NO_FUZZ)
+            panel = ss.build_standard_panel(recipe, "selection", validate=NO_FUZZ)
+            outputs.append((canonical_bytes(shard.manifest), canonical_bytes(shard.annotations),
+                            content_sha256(panel)))
+        self.assertEqual(outputs[0], outputs[1])
+        self.assertEqual(outputs[0], outputs[2])
+
+    def test_duplicate_base_state_is_rejected(self):
+        state = self.recipe.states[0]
+        with self.assertRaisesRegex(ValueError, "duplicate base state"):
+            dataclasses.replace(self.recipe, states=self.recipe.states + (dict(state),))
 
     def test_excluded_strata_never_sampled(self):
         recipe = self.load(excluded_strata=["1:boss", "1:event"])
@@ -419,6 +471,16 @@ class PanelTest(_Fixture):
                             for a in annotations.values()))
         self.assertGreater(sum(panel["skipped"].values()), 0)
 
+    def test_panel_honours_excluded_strata(self):
+        recipe = self.load(excluded_strata=["1:monster", "3:boss"])
+        panel = json_value(ss.build_standard_panel(recipe, "selection", validate=NO_FUZZ))
+        rows = list(panel["annotations"].values())
+        self.assertEqual(len(rows), 256)
+        self.assertFalse({(r["act"], r["room_kind"]) for r in rows} & {(1, "monster"), (3, "boss")})
+        self.assertNotIn("1:monster", panel["available"])
+        for level in ("0", "1", "2", "4"):
+            self.assertEqual(sum(panel["strata"][level].values()), 64)
+
     def test_panel_deterministic_hash(self):
         first = ss.build_standard_panel(self.recipe, "selection", validate=NO_FUZZ)
         second = ss.build_standard_panel(self.load(), "selection", validate=NO_FUZZ)
@@ -430,7 +492,7 @@ class PanelTest(_Fixture):
             ss.build_standard_panel(self.recipe, "train", validate=NO_FUZZ)
 
 
-PINNED_SELECTION_PANEL = "a4c29e26cd9b87d1dd23c73a13fe7aa465151b3bf3c069573212fc6ad5ad7052"
+PINNED_SELECTION_PANEL = "23efdf4e1874dcd9320d11e77feac65e3cb676d6823604fc2aa7d567ee20d909"
 
 
 if __name__ == "__main__":

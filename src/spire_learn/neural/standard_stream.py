@@ -12,15 +12,24 @@ panel byte for byte. The Gym validator is injected: fuzzed entries need it, and 
 rejected draw is redrawn up to ``redraw_bound`` times and then skipped. Importing this
 module never imports the Gym.
 
-Relic-specific rules (fuzzing): the starter relic (Burning Blood or Black Blood) and
-Potion Belt are never replaced, and neither they, the bottles nor Neow's Lament (which
-the Gym accepts only with an explicit counter) are drawn as replacements, so the potion
-slot count never changes. Replacing a bottle leaves its card
-unbottled; replacing the bottled card replaces its bottle too (that bottle counts as one
-of the *k* relics). A bottle's card is the first deck row equal to its bottled card.
+Relic-specific rules (fuzzing): the starter relic (Burning Blood or Black Blood) is never
+replaced, and neither the starters, the bottles nor Neow's Lament (which the Gym accepts
+only with an explicit counter) are drawn as replacements. Potion Belt is an ordinary
+relic (controller ruling, fix round 1) except that a state holding more than 2 potions
+cannot lose it, since potions stay unchanged; when the belt comes or goes, the held
+potions keep their order and the empty slots are re-padded to the new slot count.
+Replacing a bottle leaves its card unbottled; replacing the bottled card replaces its bottle too (that bottle counts as one
+of the *k* relics; if the relic pool cannot supply that bottle's replacement, the card
+replacement is undone and the actual counts record it). A bottle's card is the first deck row equal to its bottled card.
 Removed relics lose their counters; replacement relics take the Gym's default counters.
 A replacement card keeps the replaced card's upgrades up to its own limit and takes the
 Ruling A ``misc`` default (Genetic Algorithm 1, Ritual Dagger 15, otherwise 0).
+
+Base-state order: the recipe sorts its states by ``(run_id, floor)`` (unique, else the
+load fails), so shards and panels do not depend on the table's row order. Generation
+identity still uses the raw table sha256 that authenticates the file: a re-serialized
+table must be re-pinned and then draws new seeds. A semantic digest was not added because
+the extractor writes the table canonically and sorted, so the raw hash is already stable.
 """
 from __future__ import annotations
 
@@ -37,7 +46,7 @@ import threading
 from .cases import _freeze_json, _parse_case, environment_seed_for
 from .scenario_stream import ScenarioShard
 from .scenario_support import content_sha256, json_value, read_json
-from .standard_catalog import Validate, validate_entries
+from .standard_catalog import Validate, potion_slots, validate_entries
 from .standard_names import NameAliases, load_aliases
 
 GENERATOR = "baalorlord-standard-v1"
@@ -50,7 +59,7 @@ SPLIT_FRACTIONS = (0.8, 0.1, 0.1)
 KINDS = ("monster", "elite", "boss", "event")
 STARTER_RELICS = {"ironclad": ("burning_blood", "black_blood")}
 BOTTLES = ("bottled_flame", "bottled_lightning", "bottled_tornado")
-NEVER_REPLACED = ("potion_belt",)  # replacing it would change the potion slot count
+POTION_BELT = "potion_belt"
 NO_DEFAULT_COUNTER = ("neows_lament",)  # the Gym requires an explicit counter, so it cannot be a replacement
 MISC_DEFAULTS = {"genetic_algorithm": 1, "ritual_dagger": 15}  # Ruling A
 PANEL_LEVELS = (0, 1, 2, 4)
@@ -77,6 +86,10 @@ def run_split(run_id: str) -> str:
     digest = hashlib.sha256(f"baalorlord-standard-split-v1:{run_id}".encode()).digest()
     bucket = int.from_bytes(digest[:8], "big") % 10
     return "train" if bucket < 8 else "selection" if bucket == 8 else "final"
+
+
+def _base_key(state: Mapping[str, object]) -> tuple[str, int]:
+    return state["run_id"], state["floor"]
 
 
 def stratum(state: Mapping[str, object]) -> str:
@@ -106,7 +119,7 @@ class FuzzPools:
     cards: tuple[str, ...]
     relics: tuple[str, ...]
     max_upgrades: Mapping[str, int | None]
-    protected: tuple[str, ...]  # relics never replaced: the starters and Potion Belt
+    protected: tuple[str, ...]  # relics never replaced: the starters
 
 
 @dataclass(frozen=True)
@@ -160,9 +173,16 @@ class StandardRecipe:
         object.__setattr__(self, "excluded_strata", tuple(sorted(excluded, key=_stratum_order)))
         if not re.fullmatch(r"[0-9a-f]{64}", self.table_sha256):
             raise ValueError("table_sha256 must be 64 lowercase hex digits")
+        # Canonical base order: generation must not depend on the table's row order.
+        states = tuple(sorted(self.states, key=_base_key))
+        keys = [_base_key(s) for s in states]
+        duplicate = next((a for a, b in zip(keys, keys[1:]) if a == b), None)
+        if duplicate is not None:
+            raise ValueError(f"duplicate base state (run_id, floor) {duplicate}")
+        object.__setattr__(self, "states", states)
         by_split: dict[str, list] = {split: [] for split in SPLITS}
         train_all = []
-        for state in self.states:
+        for state in states:
             entry = state["entry"]
             if (state["character"] != self.character or entry["character"] != self.character
                     or entry["ascension"] != self.ascension or not _STRATUM.fullmatch(stratum(state))):
@@ -215,7 +235,7 @@ def _pools(train_states: Sequence[Mapping[str, object]], aliases: NameAliases, c
     unknown = [c for c in cards if c not in aliases.card_ids]
     if unknown:
         raise ValueError(f"cards without Gym metadata in the states table: {unknown[:5]}")
-    protected = STARTER_RELICS[character] + NEVER_REPLACED
+    protected = STARTER_RELICS[character]
     relics = sorted({r for s in train_states for r in s["entry"]["relics"]}
                     - set(BOTTLES) - set(protected) - set(NO_DEFAULT_COUNTER))
     return FuzzPools(tuple(cards), tuple(relics), _freeze_json({c: aliases.max_upgrades(c) for c in cards}),
@@ -279,6 +299,8 @@ def fuzz(state: Mapping[str, object], level: int, pools: FuzzPools, rng: random.
     if level == 0:
         return entry, FuzzRecord(0, 0)
     deck, relics = entry["deck"], entry["relics"]
+    original = [dict(row) for row in deck]
+    potions = [p for p in entry["potions"] if p is not None]
     counters = entry.get("relic_counters", {})
     bottled = entry.get("bottled_cards", {})
     bottle_rows: dict[str, int] = {}
@@ -300,12 +322,17 @@ def fuzz(state: Mapping[str, object], level: int, pools: FuzzPools, rng: random.
                    "misc": MISC_DEFAULTS.get(card, 0)}
         replaced_rows.append(i)
     forced = [b for b in sorted(bottle_rows) if bottle_rows[b] in replaced_rows and b in relics]
-    replaceable = [r for r in relics if r not in pools.protected]
-    others = [r for r in replaceable if r not in forced]
+    # Losing Potion Belt leaves 2 slots, so it stays when more than 2 potions are held.
+    replaceable = [r for r in relics if r not in pools.protected
+                   and not (r == POTION_BELT and len(potions) > potion_slots([]))]
     held = set(relics)
     count = min(level, len(replaceable), len([r for r in pools.relics if r not in held]))
-    if len(forced) > count:
-        raise ValueError("the relic pool cannot replace a bottle whose card was replaced")
+    for bottle in forced[count:]:
+        # The pool cannot replace this bottle, so its card stays: undo that card replacement.
+        deck[bottle_rows[bottle]] = original[bottle_rows[bottle]]
+        replaced_rows.remove(bottle_rows[bottle])
+    forced = forced[:count]
+    others = [r for r in replaceable if r not in forced]
     chosen = forced + rng.sample(others, count - len(forced))
     for relic in chosen:
         new = rng.choice([r for r in pools.relics if r not in held])
@@ -315,6 +342,9 @@ def fuzz(state: Mapping[str, object], level: int, pools: FuzzPools, rng: random.
         bottled.pop(relic, None)   # a replaced bottle leaves its card unbottled
     if "bottled_cards" in entry and not bottled:
         del entry["bottled_cards"]
+    slots = potion_slots(relics)
+    if slots != len(entry["potions"]):  # Potion Belt came or went; held potions are unchanged
+        entry["potions"] = potions + [None] * (slots - len(potions))
     return entry, FuzzRecord(len(replaced_rows), len(chosen))
 
 

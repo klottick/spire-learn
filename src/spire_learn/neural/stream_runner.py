@@ -257,6 +257,8 @@ def _standard_preparation(recipe_path: Path, destination: Path, *, arm: str, spl
     document = tomllib.loads(Path(template).read_text())
     if document.get('mode') != 'standard-standalone':
         raise ValueError('a Standard recipe needs a standard-standalone template')
+    from .config import require_standard_learner_identity
+    require_standard_learner_identity(document.get('accepted_identities') or [None])
     document.update(manifest_path=f'shard-{shard_index}.json', output_root='runs',
                     operation='train', split=split, partition=split)
     document['scenario_stream'] = {'schema': 'spire-learn-scenario-stream-v1',

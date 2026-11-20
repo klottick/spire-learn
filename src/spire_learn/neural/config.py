@@ -250,6 +250,22 @@ _MODE_FAMILIES = {
 }
 
 
+def require_standard_learner_identity(identities) -> None:
+    """Curriculum streams of Standard recipes train only the Standard learner identity.
+
+    Each identity must use the Standard model/features IDs and declare only Standard raw
+    modes. (Historical non-stream Standard configs keep their v1 identities.) ``identities``
+    may be NeuralIdentity values or raw template tables.
+    """
+    for identity in identities:
+        get = identity.get if isinstance(identity, Mapping) else lambda name: getattr(identity, name, None)
+        mappings = get("accepted_raw_mode_mappings")
+        if ((get("model_id"), get("features_id"), get("action_id")) != STANDARD_LEARNER_IDENTITY_IDS
+                or not isinstance(mappings, Mapping) or not mappings or not set(mappings) <= _STANDARD_MODES):
+            raise ValueError("a Standard curriculum stream requires the Standard learner identity "
+                             "(model/features *-standard-v1) with only Standard raw-mode mappings")
+
+
 def mode_family(mode: str) -> str:
     """Driver family of a config mode: standalone combat or combat inside a Run."""
     try:
@@ -565,6 +581,7 @@ __all__ = [
     "RUN_PROFILE_ID",
     "RUN_REPLAY_VERSION",
     "STANDARD_LEARNER_IDENTITY_IDS",
+    "require_standard_learner_identity",
     "SeedStreams",
     "WINLOSS_OBJECTIVE_ID",
     "load_neural_config",

@@ -141,6 +141,9 @@ def normalize_stream_config(raw: Mapping[str, object], source: Path,
     recipe_path = (source.parent / table['recipe_path']).resolve()
     recipe = load_recipe(recipe_path)
     _require_recipe_mode(recipe, raw['mode'])
+    if isinstance(recipe, StandardRecipe):
+        from .config import require_standard_learner_identity
+        require_standard_learner_identity(raw.get('accepted_identities') or [None])
     shard = generate_shard(recipe, split='train', shard_index=table['shard_index'],
                            arm=table['arm'])
     if table['distribution_sha256'] != shard.distribution_sha256:
@@ -193,6 +196,9 @@ def _identity(config: NeuralConfig, table: Mapping[str, object],
     if (config.mode, config.operation, config.split, config.partition) not in _STREAM_MODES:
         raise ValueError('scenario_stream requires standalone train')
     _require_recipe_mode(recipe, config.mode)
+    if isinstance(recipe, StandardRecipe):
+        from .config import require_standard_learner_identity
+        require_standard_learner_identity(config.accepted_identities)
     # M10 binds its support file; Standard binds its run-states table (key order is part of the bytes).
     source = ({'states_table_sha256': recipe.table_sha256} if isinstance(recipe, StandardRecipe)
               else {'support_sha256': recipe.support.sha256})

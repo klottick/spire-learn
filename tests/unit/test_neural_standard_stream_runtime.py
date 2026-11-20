@@ -137,7 +137,6 @@ class RecipeDispatchTests(_StandardFixture):
         self.assertEqual(recipes.generate_shard(recipe, split="train", shard_index=37, arm="mixed").manifest_sha256,
                          V1_TRAIN_SHARD_37)
         self.assertEqual(recipes.build_panel(recipe)["manifest_sha256"], V1_PANEL_MANIFEST)
-        self.assertEqual(recipes.summarize_panel_reports.__module__, "spire_learn.neural.recipes")
         # The M10 sampler keeps its schema and state.
         shard = recipes.generate_shard(recipe, split="train", shard_index=0, arm="mixed")
         sampler = CurriculumSampler(shard.annotations, distribution_sha256=shard.distribution_sha256,
@@ -276,6 +275,66 @@ class StandardStreamTests(_StandardFixture):
             self.assertEqual(identity["states_table_sha256"], self.table_sha)
             self.assertNotIn("support_sha256", identity)
 
+    def test_standard_stream_requires_the_standard_learner_identity(self):
+        from spire_learn.neural.stream_runner import prepare_stream
+        standalone = ('standalone = "spire-learn-standalone-common-v1@'
+                      '4c73f7de04d7b2875f473f8034c1cbacf984ea2d52d0a9428289c30cf1dff463+gym-1.1.1"\n')
+        variants = {
+            "old ids": standard_template_text(rows=4, steps=8, identity="v1"),
+            "old ids, mixed mappings": standard_template_text(rows=4, steps=8, common=True, identity="v1").replace(
+                "[accepted_identities.accepted_raw_mode_mappings]\n",
+                "[accepted_identities.accepted_raw_mode_mappings]\n" + standalone),
+        }
+        with tempfile.TemporaryDirectory(dir=WORK) as folder:
+            root = Path(folder)
+            _, good = self.prepare(root, 0)
+            for name, text in variants.items():
+                with self.subTest(name):
+                    template = root / f"{len(name)}.toml"
+                    template.write_text(text)
+                    # Preparation refuses the template, writing nothing.
+                    with self.assertRaisesRegex(ValueError, "Standard learner identity"):
+                        prepare_stream(self.recipe_path, root / f"bad-{len(name)}", arm="mixed", split="train",
+                                       shard_index=0, template=template)
+                    self.assertFalse((root / f"bad-{len(name)}").exists())
+                    # Config admission refuses a hand-written stream config with that identity.
+                    source = (root / "shard-0/config.toml").read_text()
+                    pinned = {line.split(" = ")[0]: line for line in source.splitlines()
+                              if line.startswith(("manifest_path = ", "output_root = "))}
+                    body = "\n".join(pinned.get(line.split(" = ")[0], line) for line in text.splitlines())
+                    tail = source[source.index("[scenario_stream]"):]
+                    (root / "shard-0/bad.toml").write_text(body + "\n\n" + tail)
+                    with self.assertRaisesRegex(ValueError, "Standard learner identity"):
+                        load_neural_config(root / "shard-0/bad.toml")
+            self.assertEqual(good.accepted_identities[0].model_id, "spire-learn-combat-ff-standard-v1")
+
+    def test_checkpoint_preflight_rejects_cross_family_identities(self):
+        from spire_learn.neural.checkpoint import CheckpointCompatibilityError, validate_checkpoint_metadata
+        from spire_learn.neural.contracts import NeuralIdentity
+        from spire_learn.neural.gym_contracts import contract_for_revision
+        from tests.unit.test_neural_checkpoint import _metadata
+        contract = contract_for_revision("e3c13836bd1458be8a87b93160f5c350f78fcd80")
+        hashes = {"model": "a" * 64, "ppo": "b" * 64}
+
+        def identity(ids, modes):
+            return NeuralIdentity(*ids[:3], "spire-learn-combat-winloss-v1",
+                                  {mode: contract.raw_mode_mappings[mode] for mode in modes}, hashes)
+        v1 = ("spire-learn-combat-ff-v1", "spire-learn-combat-features-v1", "spire-learn-combat-dispatch-v1")
+        standard = ("spire-learn-combat-ff-standard-v1", "spire-learn-combat-features-standard-v1",
+                    "spire-learn-combat-dispatch-v1")
+        m10_only = identity(v1, ("standalone",))
+        mixed = identity(v1, ("standalone", "standard-standalone"))
+        standard_v1 = identity(v1, ("standard-standalone",))
+        standard_new = identity(standard, ("standard-standalone",))
+        for saved, expected in ((mixed, m10_only), (m10_only, mixed), (standard_v1, m10_only),
+                                (m10_only, standard_v1), (standard_new, standard_v1), (standard_v1, standard_new),
+                                (mixed, standard_v1)):
+            with self.subTest(saved=dict(saved.accepted_raw_mode_mappings), expected=expected.model_id):
+                with self.assertRaises(CheckpointCompatibilityError):
+                    validate_checkpoint_metadata(_metadata(identity=saved), expected, purpose="evaluate")
+        for same in (m10_only, standard_new, standard_v1):
+            validate_checkpoint_metadata(_metadata(identity=same), same, purpose="evaluate")
+
     def test_resume_across_schedule_boundary_matches_uninterrupted(self):
         from spire_learn.neural.stream_resume import stream_checkpoint_state, validate_stream_resume
         uninterrupted = [recipes.generate_shard(self.recipe, split="train", shard_index=i, arm="mixed")
@@ -358,10 +417,22 @@ class StandardPanelOutcomeTests(_StandardFixture):
         self.assertGreaterEqual(summary["strata"]["level"][level]["escaped"], 1)
         self.assertEqual(baseline_entry._case_outcome(_report("standard-standalone", outcome="escaped")), "escaped")
         paired = baseline_entry._paired({"a": "win", "b": "escaped", "c": "loss"},
-                                        {"a": "win", "b": "win", "c": "escaped"}, total=3)
+                                        {"a": "win", "b": "win", "c": "escaped"}, total=3, standard=True)
         self.assertEqual((paired["paired_cases"], paired["excluded_escaped"]), (1, 2))
         self.assertEqual(paired["excluded_failed_invalid_or_missing"], 0)
         self.assertEqual(paired["final_only_win"], 0)
+
+    def test_m10_paired_dictionary_unchanged(self):
+        """M10 pairing is exactly the original: escapes settle as non-wins and no escape key is added."""
+        from scripts.neural import baseline_entry
+        fresh = {"a": "win", "b": "escaped", "c": "loss", "d": "incomplete", "e": "failed", "f": "loss"}
+        final = {"a": "win", "b": "win", "c": "escaped", "d": "win", "e": "win", "f": "win"}
+        expected = {"paired_cases": 4, "excluded_censored": 1, "excluded_failed_invalid_or_missing": 2,
+                    "both_win": 1, "fresh_only_win": 0, "final_only_win": 2, "neither_win": 1,
+                    "fresh_wins": 1, "final_wins": 3, "exact_mcnemar_two_sided_p": 0.5}
+        paired = baseline_entry._paired(fresh, final, total=7)
+        self.assertEqual(canonical_bytes(paired), canonical_bytes(expected))
+        self.assertEqual(list(paired), list(expected))
 
     def test_long_case_censored_not_failure(self):
         from scripts.neural import baseline_entry

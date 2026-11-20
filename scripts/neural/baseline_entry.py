@@ -618,19 +618,20 @@ def _case_outcome(report) -> str:
     return 'incomplete'
 
 
-def _paired(fresh: Mapping[str, str], final: Mapping[str, str], *, total: int) -> dict:
-    """Fresh vs final on cases both decided healthily; exact two-sided McNemar test.
+def _paired(fresh: Mapping[str, str], final: Mapping[str, str], *, total: int,
+            standard: bool = False) -> dict:
+    """Fresh vs final on cases both evaluated healthily; exact two-sided McNemar test.
 
-    A case escaped (Smoke Bomb) under either checkpoint is neither a win nor a loss: it
-    is excluded from pairing and counted in ``excluded_escaped`` (always 0 for M10, whose
-    view has no escape outcome).
+    Standard panels only: a case escaped (Smoke Bomb) under either checkpoint is neither a
+    win nor a loss, so it is excluded from pairing and counted in ``excluded_escaped``. M10
+    panels keep the original dictionary exactly (escape is unreachable in their view).
     """
     from math import comb
     shared = sorted(set(fresh) & set(final))
-    decided = ('win', 'loss')
-    healthy = [c for c in shared if fresh[c] in decided and final[c] in decided]
+    settled = ('win', 'loss') if standard else ('win', 'loss', 'escaped')
+    healthy = [c for c in shared if fresh[c] in settled and final[c] in settled]
     escaped = [c for c in shared if c not in healthy and 'escaped' in (fresh[c], final[c])
-               and {fresh[c], final[c]} <= {'win', 'loss', 'escaped'}]
+               and {fresh[c], final[c]} <= {'win', 'loss', 'escaped'}] if standard else []
     censored = [c for c in shared if c not in healthy and c not in escaped
                 and {fresh[c], final[c]} <= {'win', 'loss', 'escaped', 'incomplete'}]
     both = sum(fresh[c] == 'win' and final[c] == 'win' for c in healthy)
@@ -640,12 +641,14 @@ def _paired(fresh: Mapping[str, str], final: Mapping[str, str], *, total: int) -
     discordant = fresh_only + final_only
     tail = sum(comb(discordant, k) for k in range(min(fresh_only, final_only) + 1)) / 2**discordant \
         if discordant else 1.0
-    return {'paired_cases': len(healthy), 'excluded_censored': len(censored),
-            'excluded_escaped': len(escaped),
-            'excluded_failed_invalid_or_missing': total - len(healthy) - len(censored) - len(escaped),
-            'both_win': both, 'fresh_only_win': fresh_only, 'final_only_win': final_only,
-            'neither_win': neither, 'fresh_wins': both + fresh_only, 'final_wins': both + final_only,
-            'exact_mcnemar_two_sided_p': min(1.0, 2 * tail) if discordant else 1.0}
+    result = {'paired_cases': len(healthy), 'excluded_censored': len(censored),
+              'excluded_failed_invalid_or_missing': total - len(healthy) - len(censored) - len(escaped),
+              'both_win': both, 'fresh_only_win': fresh_only, 'final_only_win': final_only,
+              'neither_win': neither, 'fresh_wins': both + fresh_only, 'final_wins': both + final_only,
+              'exact_mcnemar_two_sided_p': min(1.0, 2 * tail) if discordant else 1.0}
+    if standard:
+        result['excluded_escaped'] = len(escaped)
+    return result
 
 
 def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, clock, journal,
@@ -729,7 +732,8 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, 
             break
     if 'fresh-initial' in outcomes and 'final' in outcomes:
         result_container['paired_fresh_vs_final'] = _paired(
-            outcomes['fresh-initial'], outcomes['final'], total=len(rows))
+            outcomes['fresh-initial'], outcomes['final'], total=len(rows),
+            standard=panel.get('schema') == 'spire-learn-standard-panel-v1')
 
 
 class _Stop(Exception):

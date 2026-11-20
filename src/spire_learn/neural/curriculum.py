@@ -28,6 +28,11 @@ _ANNOTATION_KEYS = {"family", "deck_stage", "lesson_kind", "category", "target_c
                     "encounter_tier", "lineage_id", "composition_sha256", "composition_scope"}
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _KEY = re.compile(r"(?:card|pair|group):[A-Za-z0-9_.:+-]{1,120}\Z")
+# baalorlord-standard-v1 (standard-standalone) shards: reconstructed fight states at fuzz levels.
+_STANDARD_SCHEMA = "spire-learn-curriculum-standard-v1"
+_STANDARD_ANNOTATION_KEYS = {"run_id", "floor", "act", "room_kind", "level", "fuzz", "tags"}
+_STANDARD_KEY = re.compile(r"(?:room:[1-4]:(?:monster|elite|boss|event)|level:(?:[0-9]|1[0-6]))\Z")
+_OUTCOMES = ("victory", "death", "escaped")
 
 
 def _count(value: object) -> int:
@@ -83,6 +88,11 @@ class CurriculumSampler:
     the separately checkpointed curriculum RNG to reproduce future choices.
     All diagnostic counters saturate at 2**63 - 1; that value is a lower bound,
     not an exact exposure/completion count. Outcome windows continue to roll.
+
+    Standard (``baalorlord-standard-v1``) annotations select a second schema, detected
+    from the annotation keys: uniform choice over the shard's cases, with per-room and
+    per-level diagnostic counters and snapshot schema ``spire-learn-curriculum-standard-v1``.
+    M10 annotations keep everything above unchanged.
     """
 
     def __init__(self, annotations: Mapping[str, Mapping[str, object]], *,
@@ -90,8 +100,12 @@ class CurriculumSampler:
                  state: Mapping[str, object] | None = None) -> None:
         if not isinstance(distribution_sha256, str) or not _HASH.fullmatch(distribution_sha256):
             raise ValueError("distribution_sha256 must be a lowercase SHA256")
+        # Standard shards carry the run-state annotation schema; anything else is the M10 schema.
+        self._standard = (isinstance(annotations, Mapping) and bool(annotations) and all(
+            isinstance(item, Mapping) and set(item) == _STANDARD_ANNOTATION_KEYS for item in annotations.values()))
+        key_pattern = _STANDARD_KEY if self._standard else _KEY
         if (not _sequence(categories) or len(categories) > 256
-                or any(not isinstance(key, str) or not _KEY.fullmatch(key) for key in categories)
+                or any(not isinstance(key, str) or not key_pattern.fullmatch(key) for key in categories)
                 or len(set(categories)) != len(categories)):
             raise ValueError("categories must be at most 256 unique declared lesson keys")
         self._distribution = distribution_sha256
@@ -100,6 +114,9 @@ class CurriculumSampler:
         self._categories = tuple(categories)
         if not isinstance(annotations, Mapping) or not 1 <= len(annotations) <= 256:
             raise ValueError("annotations must describe 1..256 current catalog cases")
+        if self._standard:
+            self._init_standard(annotations, state)
+            return
         self._annotations = {}
         for case_id, annotation in annotations.items():
             if (not isinstance(case_id, str) or not 1 <= len(case_id) <= 128
@@ -196,6 +213,9 @@ class CurriculumSampler:
                 or len({case.case_id for case in cases}) != len(cases)
                 or {case.case_id for case in cases} != set(self._annotations)):
             raise ValueError("cases must exactly match the current annotation catalog")
+        if self._standard:
+            self._validate_standard_cases(cases)
+            return
         for case in cases:
             annotation = self._annotations[case.case_id]
             if (case.mode != "standalone" or case.lineage_id != annotation["lineage_id"]
@@ -216,6 +236,8 @@ class CurriculumSampler:
         self.validate_cases(cases)
         if not isinstance(rng, random.Random):
             raise TypeError("curriculum requires an injected random.Random")
+        if self._standard:
+            return self._choose_standard(cases, rng)
         families = {self._annotations[case.case_id]["family"] for case in cases}
         family, family_cursor = ("fixed", self._family_cursor) if families == {"fixed"} else _cycle_choice(
             _FAMILY_CYCLE, self._family_cursor, families)
@@ -249,6 +271,9 @@ class CurriculumSampler:
             raise ValueError("natural outcome must belong to the current catalog")
         if not isinstance(outcome, str) or outcome not in ("victory", "death", "escaped"):
             raise ValueError("only natural settlement outcomes may update curriculum")
+        if self._standard:
+            self._observe_standard(case_id, outcome)
+            return
         self._completed = _increment(self._completed)
         category = self._annotations[case_id]["category"]
         if category is not None:
@@ -256,8 +281,99 @@ class CurriculumSampler:
             stats["completed"] = _increment(stats["completed"])
             stats["recent"] = (stats["recent"] + [outcome])[-128:]
 
+    # ------------------------------------------------------------ Standard (baalorlord-standard-v1)
+    #
+    # A Standard shard already draws each case's fuzz level uniformly from the schedule's
+    # enabled levels, so the sampler chooses uniformly over the shard's cases. Each case
+    # belongs to two declared categories, ``room:<act>:<kind>`` and ``level:<k>``; both
+    # count allocations and natural outcomes (diagnostics only; they never steer choices).
+
+    def _init_standard(self, annotations: Mapping[str, Mapping[str, object]],
+                       state: Mapping[str, object] | None) -> None:
+        self._annotations = {}
+        for case_id, annotation in annotations.items():
+            fuzz, tags, level = annotation["fuzz"], annotation["tags"], annotation["level"]
+            if (not isinstance(case_id, str) or not 1 <= len(case_id) <= 128
+                    or not isinstance(annotation["run_id"], str) or not 1 <= len(annotation["run_id"]) <= 64
+                    or type(annotation["floor"]) is not int or not 0 <= annotation["floor"] <= 99
+                    or type(annotation["act"]) is not int or not 1 <= annotation["act"] <= 4
+                    or annotation["room_kind"] not in ("monster", "elite", "boss", "event")
+                    or type(level) is not int or not 0 <= level <= 16
+                    or not isinstance(fuzz, Mapping) or set(fuzz) != {"cards_replaced", "relics_replaced"}
+                    or any(type(fuzz[name]) is not int or not 0 <= fuzz[name] <= level for name in fuzz)
+                    or not _sequence(tags) or len(tags) > 32
+                    or any(not isinstance(tag, str) or not 1 <= len(tag) <= 64 for tag in tags)):
+                raise ValueError("invalid current Standard catalog annotation values")
+            keys = (f"room:{annotation['act']}:{annotation['room_kind']}", f"level:{level}")
+            if any(key not in self._categories for key in keys):
+                raise ValueError("Standard annotation room/level is not a declared category")
+            self._annotations[case_id] = {**annotation, "tags": tuple(tags), "category_keys": keys}
+        self._allocated = self._completed = 0
+        self._stats = {key: {"allocated": 0, "completed": 0, "recent": []} for key in self._categories}
+        if state is not None:
+            self._restore_standard(state)
+
+    def _restore_standard(self, state: Mapping[str, object]) -> None:
+        keys = {"schema", "distribution_sha256", "categories", "allocated", "category_stats", "completed"}
+        if (not isinstance(state, Mapping) or set(state) != keys or state["schema"] != _STANDARD_SCHEMA
+                or state["distribution_sha256"] != self._distribution
+                or not _sequence(state["categories"]) or tuple(state["categories"]) != self._categories):
+            raise ValueError("curriculum state identity/schema mismatch")
+        allocated, completed = _count(state["allocated"]), _count(state["completed"])
+        stats = state["category_stats"]
+        if not isinstance(stats, Mapping) or set(stats) != set(self._categories):
+            raise ValueError("curriculum state category mismatch")
+        copied = {}
+        for key in self._categories:
+            item = stats[key]
+            if not isinstance(item, Mapping) or set(item) != {"allocated", "completed", "recent"}:
+                raise ValueError("invalid category statistics")
+            recent, count = item["recent"], _count(item["completed"])
+            if (count > completed or not _sequence(recent) or len(recent) != min(128, count)
+                    or any(not isinstance(outcome, str) or outcome not in _OUTCOMES for outcome in recent)):
+                raise ValueError("invalid bounded natural outcome window")
+            copied[key] = {"allocated": _count(item["allocated"]), "completed": count, "recent": list(recent)}
+        # Every choice and outcome counts once under room and once under level.
+        for prefix in ("room:", "level:"):
+            group = [copied[key] for key in self._categories if key.startswith(prefix)]
+            if (min(_MAX_COUNT, sum(item["allocated"] for item in group)) != allocated
+                    or min(_MAX_COUNT, sum(item["completed"] for item in group)) != completed):
+                raise ValueError("category allocations/completions disagree with the totals")
+        self._allocated, self._completed, self._stats = allocated, completed, copied
+
+    def _validate_standard_cases(self, cases: Sequence[NeuralCase]) -> None:
+        for case in cases:
+            annotation = self._annotations[case.case_id]
+            level = annotation["level"]
+            base = f"baalorlord:{annotation['run_id']}-{annotation['floor']}:k{level}"
+            if (case.mode != "standard-standalone" or not isinstance(case.entry, Mapping)
+                    or case.cohort != f"baalorlord_level_{level}"
+                    or (case.lineage_id != base and not case.lineage_id.startswith(base + ":"))):
+                raise ValueError("case mode/lineage/level disagrees with annotations")
+
+    def _choose_standard(self, cases: Sequence[NeuralCase], rng: random.Random) -> NeuralCase:
+        selected = cases[rng.randrange(len(cases))]
+        self._allocated = _increment(self._allocated)
+        for key in self._annotations[selected.case_id]["category_keys"]:
+            self._stats[key]["allocated"] = _increment(self._stats[key]["allocated"])
+        return selected
+
+    def _observe_standard(self, case_id: str, outcome: str) -> None:
+        self._completed = _increment(self._completed)
+        for key in self._annotations[case_id]["category_keys"]:
+            stats = self._stats[key]
+            stats["completed"] = _increment(stats["completed"])
+            stats["recent"] = (stats["recent"] + [outcome])[-128:]
+
+
     def snapshot(self) -> Mapping[str, object]:
         """Return an owned JSON value, bounded independently of shard history."""
+        if self._standard:
+            return {"schema": _STANDARD_SCHEMA, "distribution_sha256": self._distribution,
+                    "categories": list(self._categories), "allocated": self._allocated,
+                    "category_stats": {key: {"allocated": item["allocated"], "completed": item["completed"],
+                                             "recent": list(item["recent"])} for key, item in self._stats.items()},
+                    "completed": self._completed}
         return {"schema": _SCHEMA, "distribution_sha256": self._distribution,
                 "categories": list(self._categories), "family_cursor": self._family_cursor,
                 "lesson_cursor": self._lesson_cursor, "family_allocated": dict(self._family_allocated),

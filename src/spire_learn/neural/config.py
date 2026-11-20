@@ -49,6 +49,15 @@ LEARNER_IDENTITY_IDS = (
     "spire-learn-combat-winloss-v1",
 )
 WINLOSS_OBJECTIVE_ID = LEARNER_IDENTITY_IDS[3]
+# Model and features for the Standard combat view (16 groups, 2048 actions). M10/common-view
+# checkpoints (LEARNER_IDENTITY_IDS) never load into them. Standard identities may declare only
+# Standard raw modes; the action dispatch identity is shared.
+STANDARD_LEARNER_IDENTITY_IDS = (
+    "spire-learn-combat-ff-standard-v1",
+    "spire-learn-combat-features-standard-v1",
+    LEARNER_IDENTITY_IDS[2],
+)
+_STANDARD_MODES = frozenset({"standard-standalone", "standard-run"})
 # Win/loss plus a potential-based enemy-HP term; requires the [objective] table.
 HP_SHAPED_OBJECTIVE_ID = "spire-learn-combat-winloss-hpshaped-v1"
 OBJECTIVE_IDS = (WINLOSS_OBJECTIVE_ID, HP_SHAPED_OBJECTIVE_ID)
@@ -151,8 +160,8 @@ class NeuralConfig:
     manifest_sha256: str
     config_sha256: str
     environment_revision: str
-    common_view_id: str
-    common_view_fingerprint: str
+    common_view_id: str | None  # None only in Standard-only configs
+    common_view_fingerprint: str | None
     run_observation_fingerprint: str | None
     standard_view_fingerprint: str | None
     standard_run_fingerprint: str | None
@@ -226,9 +235,12 @@ def _identity(raw: object, *, model_hash: str, ppo_hash: str, contract: GymContr
         accepted_raw_mode_mappings=mappings,
         config_hashes=hashes,
     )
-    if ((identity.model_id, identity.features_id, identity.action_id) != LEARNER_IDENTITY_IDS[:3]
+    learner_ids = (identity.model_id, identity.features_id, identity.action_id)
+    if (learner_ids not in (LEARNER_IDENTITY_IDS[:3], STANDARD_LEARNER_IDENTITY_IDS)
             or identity.objective_id not in OBJECTIVE_IDS):
         raise ValueError("identity must use the supported combat learner model/features/action/objective IDs")
+    if learner_ids == STANDARD_LEARNER_IDENTITY_IDS and not set(mappings) <= _STANDARD_MODES:
+        raise ValueError("the Standard learner identity declares only standard-standalone/standard-run mappings")
     return identity
 
 
@@ -315,6 +327,12 @@ def load_neural_config(path: Path) -> NeuralConfig:
     expected_environment_keys = {
         "gym_revision", "common_view_id", "common_view_fingerprint",
     }
+    # A Standard-only config (no identity declaring an M10 mode, checked below) may omit
+    # the common view; it is then recorded as None. Both common fields or neither.
+    common_omitted = (standard_mode and isinstance(environment, dict)
+                      and "common_view_id" not in environment and "common_view_fingerprint" not in environment)
+    if common_omitted:
+        expected_environment_keys -= {"common_view_id", "common_view_fingerprint"}
     if standard_mode:
         expected_environment_keys.add("standard_view_fingerprint")
         if mode == "standard-run":
@@ -330,10 +348,15 @@ def load_neural_config(path: Path) -> NeuralConfig:
             or environment["gym_revision"] not in ACCEPTED_RUNTIME_GYM_REVISIONS):
         raise ValueError("unsupported Gym revision")
     contract = contract_for_revision(environment["gym_revision"])
-    if environment["common_view_id"] != COMMON_VIEW_ID:
-        raise ValueError("unsupported common combat view")
-    if environment["common_view_fingerprint"] != contract.common_fingerprint:
-        raise ValueError("unsupported common combat view fingerprint")
+    common_view_id: str | None = None
+    common_view_fingerprint: str | None = None
+    if not common_omitted:
+        if environment["common_view_id"] != COMMON_VIEW_ID:
+            raise ValueError("unsupported common combat view")
+        if environment["common_view_fingerprint"] != contract.common_fingerprint:
+            raise ValueError("unsupported common combat view fingerprint")
+        common_view_id = environment["common_view_id"]
+        common_view_fingerprint = environment["common_view_fingerprint"]
     standard_view_fingerprint: str | None = None
     standard_run_fingerprint: str | None = None
     workers = 1
@@ -428,6 +451,9 @@ def load_neural_config(path: Path) -> NeuralConfig:
                        for item in identity_values)
     if any(mode not in identity.accepted_raw_mode_mappings for identity in identities):
         raise ValueError("every accepted identity must declare the selected raw mode")
+    if common_omitted and any(not set(identity.accepted_raw_mode_mappings) <= _STANDARD_MODES
+                              for identity in identities):
+        raise ValueError("a config declaring an M10 raw mode must pin the common combat view")
     identity_keys = [
         (item.model_id, item.features_id, item.action_id, item.objective_id)
         for item in identities
@@ -491,8 +517,8 @@ def load_neural_config(path: Path) -> NeuralConfig:
         manifest_sha256=cases.sha256,
         config_sha256=_canonical_hash(raw),
         environment_revision=environment["gym_revision"],
-        common_view_id=environment["common_view_id"],
-        common_view_fingerprint=environment["common_view_fingerprint"],
+        common_view_id=common_view_id,
+        common_view_fingerprint=common_view_fingerprint,
         run_observation_fingerprint=run_observation_fingerprint,
         standard_view_fingerprint=standard_view_fingerprint,
         standard_run_fingerprint=standard_run_fingerprint,
@@ -538,6 +564,7 @@ __all__ = [
     "RUN_OBSERVATION_VERSION",
     "RUN_PROFILE_ID",
     "RUN_REPLAY_VERSION",
+    "STANDARD_LEARNER_IDENTITY_IDS",
     "SeedStreams",
     "WINLOSS_OBJECTIVE_ID",
     "load_neural_config",

@@ -10,7 +10,9 @@ import math
 from typing import Any
 
 from spire_learn.contracts import ContractError
-from spire_learn.neural.config import OBJECTIVE_IDS, WINLOSS_OBJECTIVE_ID
+from spire_learn.neural.config import (
+    LEARNER_IDENTITY_IDS, OBJECTIVE_IDS, STANDARD_LEARNER_IDENTITY_IDS, WINLOSS_OBJECTIVE_ID,
+)
 from spire_learn.neural.contracts import CombatFrame, ModelConfig
 from spire_learn.neural.features import EncodedBatch, FeatureContract, encode_frames, feature_contract
 from spire_learn.neural.schema import CombatSchema
@@ -273,13 +275,25 @@ def build_policy(
     seed: int,
     device: str,
     objective_id: str = _OBJECTIVE_ID,
+    model_id: str = MODEL_ID,
+    features_id: str | None = None,
 ) -> Any:
     """Compile a capped shared candidate actor and public-state critic lazily.
 
     ``objective_id`` labels the reward the policy is trained under; it does not
     change the architecture, but checkpoints and rollouts carry and check it.
+    ``model_id``/``features_id`` select the learner identity: the default v1 pair, or
+    the Standard pair, which requires the Standard combat view. Neither changes the
+    descriptor-derived architecture.
     """
     plan = _compile_model_plan(schema, model_config)
+    if features_id is None:
+        features_id = plan.feature_contract.features_id
+    if (model_id, features_id) not in (LEARNER_IDENTITY_IDS[:2], STANDARD_LEARNER_IDENTITY_IDS[:2]):
+        raise ContractError("policy model_id/features_id must be a supported learner identity pair")
+    if ((model_id, features_id) == STANDARD_LEARNER_IDENTITY_IDS[:2]
+            and schema.view.view_id != "spire-gym-standard-combat-view-v1"):
+        raise ContractError("the Standard learner identity requires the Standard combat view")
     if type(seed) is not int:
         raise ContractError("policy seed must be a primitive integer")
     if not isinstance(objective_id, str) or objective_id not in OBJECTIVE_IDS:
@@ -310,8 +324,8 @@ def build_policy(
             self._behavior_policy_version: int = 0
             self._consumed_decision_ids: set[tuple[str, str]] = set()
             self._consumed_decision_limit = 65_536
-            self.model_id = MODEL_ID
-            self.features_id = plan.feature_contract.features_id
+            self.model_id = model_id
+            self.features_id = features_id
             self.action_id = _ACTION_ID
             self.objective_id = objective_id
 

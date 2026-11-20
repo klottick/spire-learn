@@ -129,9 +129,10 @@ class Collector:
         if not cases:
             raise ContractError(f"neural case manifest has no {config.mode} cases")
         if case_sampler is not None:
-            # The curriculum sampler targets legacy Ironclad scenario cases only.
-            if (config.mode != "standalone" or config.operation != "train" or config.split != "train"
-                    or not learned_combat_policy):
+            # The curriculum sampler targets generated standalone cases: M10 scenario shards
+            # (standalone) or baalorlord-standard-v1 shards (standard-standalone).
+            if (config.mode not in {"standalone", "standard-standalone"} or config.operation != "train"
+                    or config.split != "train" or not learned_combat_policy):
                 raise ContractError("case_sampler requires standalone learned-policy training")
             if rows != (None,) * batch_size:
                 raise ContractError("case_sampler requires fresh, unattributed driver rows")

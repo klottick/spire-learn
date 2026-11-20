@@ -29,7 +29,9 @@ from spire_learn.neural.checkpoint import (
     save_checkpoint,
 )
 from spire_learn.neural.collector import Collector, CollectorRecovery
-from spire_learn.neural.config import WINLOSS_OBJECTIVE_ID, NeuralConfig, mode_family
+from spire_learn.neural.config import (
+    STANDARD_LEARNER_IDENTITY_IDS, WINLOSS_OBJECTIVE_ID, NeuralConfig, mode_family,
+)
 from spire_learn.neural.contracts import (
     CollectionDiagnostics,
     CombatFrame,
@@ -2170,10 +2172,10 @@ def create_runtime(
     case_sampler = None
     if config.scenario_stream is not None and config.scenario_stream["arm"] == "mixed":
         from .curriculum import CurriculumSampler
-        from .scenario_stream import generate_scenario_shard, load_scenario_recipe
+        from .recipes import generate_shard, load_recipe
         table = config.scenario_stream
-        recipe = load_scenario_recipe(Path(table["resolved_recipe_path"]))
-        shard = generate_scenario_shard(recipe, split="train",
+        recipe = load_recipe(Path(table["resolved_recipe_path"]))
+        shard = generate_shard(recipe, split="train",
             shard_index=table["shard_index"], arm=table["arm"])
         sampler_state = None
         if purpose == "resume":
@@ -2206,6 +2208,10 @@ def create_runtime(
                 {} if selected_identity.objective_id == WINLOSS_OBJECTIVE_ID
                 else {"objective_id": selected_identity.objective_id}
             )
+            # Standard learner identities label the policy; v1 identities keep the historical call.
+            if (selected_identity.model_id, selected_identity.features_id) == STANDARD_LEARNER_IDENTITY_IDS[:2]:
+                objective_kwargs.update(model_id=selected_identity.model_id,
+                                        features_id=selected_identity.features_id)
             policy = build_policy(
                 driver.schema, config.model, seed=config.seed_streams.policy,
                 device=device_plan.device, **objective_kwargs,

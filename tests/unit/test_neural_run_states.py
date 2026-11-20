@@ -501,12 +501,120 @@ class UnrecordedEffectsTest(unittest.TestCase):
         run = _base()
         run["campfire_choices"] = [{"floor": 5, "key": "SMITH", "data": "Strike_R"},
                                    {"floor": 11, "key": "PURGE", "data": "Strike_R"}]
+        run["items_purged"] = ["Defend_R"]  # so only the floor-11 PURGE can have taken the smithed Strike
         run["master_deck"][run["master_deck"].index("Bash+1")] = "Bash"
         run["master_deck"][run["master_deck"].index("Shrug It Off+1")] = "Shrug It Off"
-        run["master_deck"].remove("Strike_R")  # the purged Strike was the smithed one
+        run["master_deck"].remove("Defend_R")
         self.assertIn(("strike", 1), _cards(self.state(run, 7)))
         self.assertNotIn(("strike", 1), _cards(self.state(run, 4)))
         self.assertNotIn(("strike", 1), _cards(self.state(run, 12)))
+
+    def test_which_removed_copy_was_upgraded_is_ambiguous(self):
+        run = _base()
+        run["campfire_choices"] = [{"floor": 5, "key": "SMITH", "data": "Strike_R"},
+                                   {"floor": 11, "key": "PURGE", "data": "Strike_R"}]
+        run["master_deck"][run["master_deck"].index("Bash+1")] = "Bash"
+        run["master_deck"][run["master_deck"].index("Shrug It Off+1")] = "Shrug It Off"
+        run["master_deck"].remove("Strike_R")  # purged on 6 and 11, both logged as plain Strikes
+        # The smithed Strike left on floor 6 or on floor 11: states between them are unknown.
+        self.assertEqual(self.drop(run, 7), "deck_unrecoverable")
+        self.assertEqual(_cards(self.state(run, 4)).count(("strike", 0)), 5)
+        f12 = _cards(self.state(run, 12))
+        self.assertEqual((f12.count(("strike", 0)), f12.count(("strike", 1))), (3, 0))
+
+    def test_upgraded_removal_is_not_upgraded_again(self):
+        # Task 3 found Strike+2: a purge logged as "Strike_R+1" was fixed up one more level
+        # for a second Shining Light upgrade that belonged to a plainly-logged removal.
+        run = _base()
+        run["event_choices"][0] = {"floor": 3, "event_name": "Shining Light", "player_choice": "Entered Light",
+                                   "cards_upgraded": ["Strike_R", "Strike_R"]}
+        run["master_deck"][run["master_deck"].index("Defend_R+1")] = "Defend_R"
+        run["items_purged"] = ["Strike_R"]  # floor 6: logged plainly, yet one of the upgraded two
+        run["campfire_choices"][1] = {"floor": 11, "key": "PURGE", "data": "Strike_R+1"}
+        run["master_deck"][run["master_deck"].index("Shrug It Off+1")] = "Shrug It Off"
+        run["master_deck"].remove("Strike_R")
+        f4 = _cards(self.state(run, 4))
+        self.assertEqual((f4.count(("strike", 0)), f4.count(("strike", 1))), (3, 2))
+        f7 = _cards(self.state(run, 7))
+        self.assertEqual((f7.count(("strike", 0)), f7.count(("strike", 1))), (3, 1))
+        self.assertEqual(_cards(self.state(run, 12)).count(("strike", 0)), 3)
+        self.assertFalse(any(u > 1 for c, u in f4))
+
+    def test_two_upgrade_histories_drop_the_floors_they_disagree_on(self):
+        # Two Searing Blows (floors 1 and 2), Upgrade Shrine on 3, SMITHs on 5 and 8, one
+        # purged on 11 logged plainly; Searing Blow+1 survives. Entering floor 7 the pair is
+        # +1/+1 or +0/+2 depending on which copy took which upgrade.
+        run = _base()
+        run["card_choices"][0]["picked"] = "Searing Blow"
+        run["card_choices"][1]["picked"] = "Searing Blow"
+        run["master_deck"].remove("Anger")
+        run["master_deck"].append("Searing Blow+1")
+        for card in ("Bash", "Shrug It Off", "Defend_R"):
+            run["master_deck"][run["master_deck"].index(card + "+1")] = card
+        run["event_choices"] = [{"floor": 3, "event_name": "Upgrade Shrine", "cards_upgraded": ["Searing Blow"]}]
+        run["campfire_choices"] = [{"floor": 5, "key": "SMITH", "data": "Searing Blow"},
+                                   {"floor": 8, "key": "SMITH", "data": "Searing Blow"},
+                                   {"floor": 11, "key": "PURGE", "data": "Searing Blow"}]
+        run["path_per_floor"][7] = "R"
+        self.assertEqual(self.drop(run, 7), "deck_unrecoverable")
+        searing = lambda floor: sorted(u for c, u in _cards(self.state(run, floor)) if c == "searing_blow")
+        self.assertEqual(searing(2), [0])  # one copy so far: settled
+        self.assertEqual(searing(12), [1])
+
+    def test_upgraded_acquisition_removed_under_a_plain_name(self):
+        # Searing Blow on 1 and 2, Searing Blow+1 on 4; plain purges on 6 and 11; SMITH on 8;
+        # one Searing Blow+1 left. Entering floor 7 the pair is [0, 0] or [0, 1].
+        run = _base()
+        for row, pick in zip(run["card_choices"], ["Searing Blow", "Searing Blow", "Searing Blow+1"]):
+            row["picked"] = pick
+        run["master_deck"].remove("Anger")
+        run["master_deck"].remove("Shrug It Off+1")
+        run["master_deck"].append("Searing Blow+1")
+        run["master_deck"][run["master_deck"].index("Bash+1")] = "Bash"
+        run["campfire_choices"] = [{"floor": 8, "key": "SMITH", "data": "Searing Blow"},
+                                   {"floor": 11, "key": "PURGE", "data": "Searing Blow"}]
+        run["path_per_floor"][7] = "R"
+        run["items_purged"].append("Searing Blow")
+        run["items_purged_floors"].append(6)
+        self.assertEqual(self.drop(run, 7), "deck_unrecoverable")
+
+    def test_emitted_deck_equals_the_unique_history(self):
+        # Searing Blow on floor 1, Searing Blow+1 on floor 2, a plainly logged purge on 11,
+        # one plain Searing Blow left: the purged copy must have been the +1 one, so floors
+        # 4-9 hold [0, 1]. The replay alone restores the purge at +0.
+        run = _base()
+        run["card_choices"][0]["picked"] = "Searing Blow"
+        run["card_choices"][1]["picked"] = "Searing Blow+1"
+        run["master_deck"].remove("Anger")
+        run["master_deck"].append("Searing Blow")
+        run["master_deck"][run["master_deck"].index("Shrug It Off+1")] = "Shrug It Off"
+        run["campfire_choices"][1] = {"floor": 11, "key": "PURGE", "data": "Searing Blow"}
+        for floor in (4, 7, 9):
+            state = _state(run, floor)
+            if isinstance(state, rs.FightState):
+                self.assertEqual(sorted(u for c, u in _cards(state) if c == "searing_blow"), [0, 1], floor)
+            else:
+                self.assertEqual(state.reason, "deck_unrecoverable", floor)
+        self.assertEqual(sorted(u for c, u in _cards(self.state(run, 12)) if c == "searing_blow"), [0])
+
+    def test_no_feasible_upgrade_history_fails_closed(self):
+        # The greedy replay settles this log, but no assignment of copies fits it: Strike_R+1
+        # obtained on floor 1 (no egg), so the search finds nothing and nothing is certified.
+        changes = [(1, 0, "remove", "Strike_R+1")]
+        floors = rs._base_ambiguity(["Strike_R+1"], [0], changes, changes, 1, [4, 7])
+        self.assertEqual(floors, set())  # obtained upgraded and kept: one history
+        floors = rs._base_ambiguity(["Strike_R"], [0], changes, changes, 1, [4, 7])
+        self.assertEqual(floors, {4, 7})  # held below the level it was obtained at: none fits
+
+    def test_upgrades_above_the_gym_limit_drop(self):
+        run = _base()  # a consistent log can still claim an impossible card: Strike smithed twice
+        run["campfire_choices"] = [{"floor": 5, "key": "SMITH", "data": "Strike_R"},
+                                   {"floor": 11, "key": "SMITH", "data": "Strike_R"}]
+        run["master_deck"][run["master_deck"].index("Bash+1")] = "Bash"
+        run["master_deck"][run["master_deck"].index("Shrug It Off+1")] = "Shrug It Off"
+        run["master_deck"][run["master_deck"].index("Strike_R")] = "Strike_R+2"
+        self.assertEqual(self.drop(run, 12), "upgrades_exceed_max")
+        self.assertIn(("strike", 1), _cards(self.state(run, 7)))
 
     def test_event_card_choice_counted_once(self):
         run = _base()

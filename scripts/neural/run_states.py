@@ -22,7 +22,7 @@ import math
 import os
 from pathlib import Path
 import sys
-from typing import Callable, Iterable, Sequence
+from typing import Iterable, Sequence
 
 if __package__ in (None, ''):
     _repo = Path(__file__).resolve().parents[2]
@@ -32,31 +32,20 @@ from spire_learn.neural.run_states import (  # noqa: E402
     Drop, FightState, as_int, fight_floors, run_history, state_at, CHARACTERS, POTION_BELT,
 )
 from spire_learn.neural.scenario_support import canonical_bytes  # noqa: E402
+from spire_learn.neural.standard_catalog import (  # noqa: E402
+    CATALOG_SCHEMA, MAX_CATALOG, PROFILE, CatalogRejected, Validate, bind_gym, potion_slots, validate_entries,
+)
 from spire_learn.neural.standard_names import NameAliases, load_aliases  # noqa: E402
 
 SCHEMA = 'spire-learn-run-states-v1'
 REPORT_SCHEMA = 'spire-learn-run-states-report-v1'
 GYM_REVISION = 'e3c13836bd1458be8a87b93160f5c350f78fcd80'
-CATALOG_SCHEMA = 'spire-gym-standard-combat-catalog-v1'
-PROFILE = 'standard-combat-v1'
-MAX_CATALOG = 256
 ASCENSION = 20
 BURNING_KINDS = ('strength', 'max_hp', 'metallicize', 'regeneration')  # the Gym's order
 DROP_LIMIT = 0.10
 DEFAULT_ENCOUNTER_MAP = Path(__file__).resolve().parents[2] / 'configs/neural/standard/encounter-map.json'
 DEFAULT_ALIASES = Path(__file__).resolve().parents[2] / 'configs/neural/standard/name-aliases.json'
 STATS_SCHEMA = 'spire-learn-run-states-stats-v1'
-
-Validate = Callable[[dict], None]
-
-
-class CatalogRejected(Exception):
-    """The Gym refused a catalog as invalid input; the only error ``validate_entries`` bisects on.
-
-    ``bind_gym`` translates the Gym's ``RunInputError`` into this. Any other error (a native
-    fault, MemoryError, a validator bug) is a fault, not a rejection, and propagates.
-    """
-
 
 # ---------------------------------------------------------------- input
 
@@ -88,11 +77,6 @@ def burning_kind(run_id: str, floor: int) -> str:
     return BURNING_KINDS[int.from_bytes(digest[:8], 'big') % len(BURNING_KINDS)]
 
 
-def potion_slots(relics: Sequence[str]) -> int:
-    """Standard slots at A20: 2 (3 below A11), plus 2 with Potion Belt."""
-    return 2 + (2 if 'potion_belt' in relics else 0)
-
-
 def to_standard_entry(state: FightState, encounter: str) -> dict:
     """The ``standard-combat-v1`` catalog entry for a state fought at ``encounter``."""
     slots = potion_slots(state.relics)
@@ -109,36 +93,6 @@ def to_standard_entry(state: FightState, encounter: str) -> dict:
     if state.burning:
         entry['burning'] = burning_kind(state.run_id, state.floor)
     return entry
-
-
-# ---------------------------------------------------------------- Gym acceptance
-
-def validate_entries(entries: list[dict], validate: Validate) -> tuple[list[dict], list[tuple[dict, str]]]:
-    """Split entries into (accepted, [(rejected, reason)]), validating catalogs of at most 256.
-
-    A rejected catalog is bisected until each bad entry stands alone; the reason is the
-    Gym's error for that entry. An entry accepted in a catalog is never revalidated. Only
-    ``CatalogRejected`` is bisected; any other exception propagates at once, unretried.
-    """
-    accepted: list[dict] = []
-    rejected: list[tuple[dict, str]] = []
-
-    def check(chunk: list[dict]) -> None:
-        try:
-            validate({'catalog_schema_id': CATALOG_SCHEMA, 'profile_id': PROFILE, 'entries': chunk})
-        except CatalogRejected as error:
-            if len(chunk) == 1:
-                rejected.append((chunk[0], f'gym_rejected:{str(error)[:200]}'))
-                return
-            middle = len(chunk) // 2
-            check(chunk[:middle])
-            check(chunk[middle:])
-        else:
-            accepted.extend(chunk)
-
-    for start in range(0, len(entries), MAX_CATALOG):
-        check(entries[start:start + MAX_CATALOG])
-    return accepted, rejected
 
 
 # ---------------------------------------------------------------- extraction
@@ -359,28 +313,6 @@ def aggregate_stats(table: dict, card_types: dict[str, str], *, aliases_sha256: 
     if 'gym_revision' in table:
         result['gym_revision'] = table['gym_revision']
     return result
-
-
-def bind_gym() -> tuple[Validate, list[dict]]:
-    """The Gym's catalog validator and encounter listing (needs the pinned runtime)."""
-    from spire_lab import _native
-    from spire_lab.gymnasium import StandardCombatEnv
-    probe = {'id': 'probe', 'character': 'ironclad', 'ascension': ASCENSION, 'encounter': 'cultist', 'hp': 70,
-             'max_hp': 80, 'gold': 0, 'deck': [{'card': 'strike', 'upgrades': 0, 'misc': 0}],
-             'relics': ['burning_blood'], 'relic_counters': {}, 'potions': [None, None]}
-    env = StandardCombatEnv({'catalog_schema_id': CATALOG_SCHEMA, 'profile_id': PROFILE, 'entries': [probe]})
-    try:
-        encounters = list(env.environment_spec()['support']['encounters'])
-    finally:
-        env.close()
-
-    def validate(catalog: dict) -> None:
-        try:
-            StandardCombatEnv(catalog).close()
-        except _native.RunInputError as error:  # invalid catalog input: the one recognized rejection
-            raise CatalogRejected(str(error)) from error
-
-    return validate, encounters
 
 
 def main(argv: list[str] | None = None) -> int:

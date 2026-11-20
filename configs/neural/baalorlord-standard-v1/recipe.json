@@ -13,9 +13,9 @@
  "fuzz_levels_max": 4,
  "fuzz_schedule": [
   {"from_shard": 0, "levels": [0]},
-  {"from_shard": 25, "levels": [0, 1]},
-  {"from_shard": 50, "levels": [0, 1, 2]},
-  {"from_shard": 75, "levels": [0, 1, 2, 4]}
+  {"from_shard": 99, "levels": [0, 1]},
+  {"from_shard": 198, "levels": [0, 1, 2]},
+  {"from_shard": 297, "levels": [0, 1, 2, 4]}
  ],
  "redraw_bound": 8,
  "excluded_strata": []

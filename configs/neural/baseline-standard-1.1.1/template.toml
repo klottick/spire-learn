@@ -1,0 +1,65 @@
+# Standard v1.1.1 baseline template: prepare_stream replaces manifest/output paths and split.
+# Model and PPO settings match baseline-gym-1.1.1-cv2; this file grants no execution authority.
+schema = "spire-learn-neural-config-v1"
+mode = "standard-standalone"
+operation = "train"
+split = "train"
+partition = "train"
+manifest_path = "../../cases/neural/standard-standalone-train.json"
+output_root = "../../../artifacts/development/neural-combat/runs/gym-1.1.1/standard-baseline"
+device = "cuda:0"
+
+[environment]
+gym_revision = "e3c13836bd1458be8a87b93160f5c350f78fcd80"
+standard_view_fingerprint = "5d8147e13ded030c7faa501a8202eb2588915c2e1330b30cac5b06afc9f9916e"
+workers = 1
+
+[seeds]
+policy = 1103
+optimizer = 2207
+curriculum = 3301
+noncombat = 4409
+
+[model]
+embedding_width = 16
+hidden_width = 64
+max_parameters = 10000000
+
+[ppo]
+learning_rate = 0.0003
+gamma = 0.99
+gae_lambda = 0.95
+clip_epsilon = 0.2
+value_coefficient = 0.5
+entropy_coefficient = 0.01
+max_grad_norm = 0.5
+epochs = 4
+minibatch_rows = 64
+adam_eps = 0.00001
+
+[rollout]
+rows = 16
+steps = 32
+
+[budgets]
+max_optimizer_steps = 262144
+max_training_decisions = 1638400
+max_environment_actions = 8000000
+max_wall_seconds = 12600.0
+
+[[accepted_identities]]
+model_id = "spire-learn-combat-ff-standard-v1"
+features_id = "spire-learn-combat-features-standard-v1"
+action_id = "spire-learn-combat-dispatch-v1"
+objective_id = "spire-learn-combat-winloss-v1"
+
+[accepted_identities.accepted_raw_mode_mappings]
+standard-standalone = "spire-learn-standard-combat-v1@5d8147e13ded030c7faa501a8202eb2588915c2e1330b30cac5b06afc9f9916e+gym-1.1.1"
+standard-run = "spire-learn-standard-run-v1@bf8e1d111bbf2171594231b99d8d6b701244249abfbb90a11e86c4b4a405f7ae:5d8147e13ded030c7faa501a8202eb2588915c2e1330b30cac5b06afc9f9916e+gym-1.1.1"
+
+[accepted_identities.config_hashes]
+model = "4fb628e06bf4952847795ac5d8548d12dfeede4c97e874ab843857ae0f91cd2f"
+ppo = "f08075e0b01a15095b542fc20cba11c3258381bcb5721bb5066a4448e43c9e2a"
+
+[runtime]
+gpu_uuid = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"

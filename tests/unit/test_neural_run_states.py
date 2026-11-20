@@ -540,6 +540,27 @@ class UnrecordedEffectsTest(unittest.TestCase):
         self.assertEqual(_cards(self.state(run, 12)).count(("strike", 0)), 3)
         self.assertFalse(any(u > 1 for c, u in f4))
 
+    def test_two_upgrade_histories_drop_the_floors_they_disagree_on(self):
+        # Two Searing Blows (floors 1 and 2), Upgrade Shrine on 3, SMITHs on 5 and 8, one
+        # purged on 11 logged plainly; Searing Blow+1 survives. Entering floor 7 the pair is
+        # +1/+1 or +0/+2 depending on which copy took which upgrade.
+        run = _base()
+        run["card_choices"][0]["picked"] = "Searing Blow"
+        run["card_choices"][1]["picked"] = "Searing Blow"
+        run["master_deck"].remove("Anger")
+        run["master_deck"].append("Searing Blow+1")
+        for card in ("Bash", "Shrug It Off", "Defend_R"):
+            run["master_deck"][run["master_deck"].index(card + "+1")] = card
+        run["event_choices"] = [{"floor": 3, "event_name": "Upgrade Shrine", "cards_upgraded": ["Searing Blow"]}]
+        run["campfire_choices"] = [{"floor": 5, "key": "SMITH", "data": "Searing Blow"},
+                                   {"floor": 8, "key": "SMITH", "data": "Searing Blow"},
+                                   {"floor": 11, "key": "PURGE", "data": "Searing Blow"}]
+        run["path_per_floor"][7] = "R"
+        self.assertEqual(self.drop(run, 7), "deck_unrecoverable")
+        searing = lambda floor: sorted(u for c, u in _cards(self.state(run, floor)) if c == "searing_blow")
+        self.assertEqual(searing(2), [0])  # one copy so far: settled
+        self.assertEqual(searing(12), [1])
+
     def test_upgrades_above_the_gym_limit_drop(self):
         run = _base()  # a consistent log can still claim an impossible card: Strike smithed twice
         run["campfire_choices"] = [{"floor": 5, "key": "SMITH", "data": "Strike_R"},

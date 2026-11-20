@@ -754,6 +754,7 @@ class _DeckHistory:
     unexplained: tuple[str, ...]
     windows: tuple[tuple[int, int, tuple[str, ...]], ...]  # (after, through, effects): states in (after, through] drop
     omamori_negations: tuple[int, ...] = ()
+    ambiguous_floors: frozenset[int] = frozenset()  # floors where feasible upgrade histories disagree
 
 
 def _residual(run: dict, deck: list[str], missed: list[int], changes: list[Change],
@@ -917,7 +918,123 @@ def _account_history(run: dict, sources: dict[str, int], account: _Negations, na
     # Which of several removed copies held an upgrade logged on a plain name is unknown
     # between their removal floors.
     windows += [(first, last, ('upgraded copy',)) for first, last in spans]
-    return _DeckHistory(changes, (), tuple(windows), tuple(negations))
+    logged = account.changes + inferred  # restores at their logged levels, before upgrade fixes
+    fights = sorted({_floor(row) for row in run.get('damage_taken') or []})
+    ambiguous = _upgrade_ambiguity(master, changes, logged, names, fights)
+    return _DeckHistory(changes, (), tuple(windows), tuple(negations), ambiguous)
+
+
+_SEARCH_LIMIT = 20000  # explored nodes per card before giving up (then every floor of that card drops)
+
+
+def _upgrade_ambiguity(master: list[str], changes: list[Change], logged: list[Change], names: NameAliases,
+                       fights: list[int]) -> frozenset[int]:
+    """Fight floors whose deck depends on which copy of a card took which upgrade.
+
+    The replay settles each upgrade on one copy (the most upgraded, then a removed
+    copy whose logged name may hide upgrades). Another copy can often take it
+    too, and copies differ in when they were obtained or removed and in how far
+    they can be upgraded (Searing Blow without limit). For every card with an
+    upgrade, enumerate every assignment of its upgrades to its copies that fits
+    the whole log, and report the floors where they give different card
+    multisets entering the fight.
+    """
+    ambiguous: set[int] = set()
+    upgraded_bases = {split_card(card)[0] for _at, _o, kind, card in changes if kind == 'downgrade'}
+    for base in sorted(upgraded_bases):
+        mapped = names.card(base)
+        limit = names.max_upgrades(mapped[0]) if mapped else None
+        events = sorted((i for i, c in enumerate(changes) if split_card(c[3])[0] == base), key=lambda i: changes[i],
+                        reverse=True)
+        copies = [name for name in master if split_card(name)[0] == base]
+        floors = _base_ambiguity(copies, events, changes, logged, limit, fights)
+        ambiguous |= floors
+    return frozenset(ambiguous)
+
+
+def _base_ambiguity(final_copies: list[str], events: list[int], changes: list[Change], logged: list[Change],
+                    limit: int | None, fights: list[int]) -> set[int]:
+    """Floors where the feasible assignments of one card's upgrades disagree (see _upgrade_ambiguity).
+
+    A copy is (level now in the undo, removal floor, hidden levels taken, room left
+    for hidden levels, upgrade floors, obtain floor or -1, level when obtained).
+    Removed copies are restored at their logged level; a logged name may hide
+    upgrades, which an upgrade with no copy to take it can claim as hidden levels.
+    """
+    downgrades = sum(1 for i in events if changes[i][2] == 'downgrade')
+    outcomes: set[tuple] = set()
+    nodes = [0]
+
+    def finish(copies: tuple) -> None:
+        if any(level for level, *_rest in copies):
+            return  # the deck before any recorded change has no upgraded copy of this card
+        result = []
+        for floor in fights:
+            levels = sorted(sum(1 for up in ups if up < floor) + (start_level if start >= 0 else 0)
+                            for _l, end, _h, _r, ups, start, start_level in copies
+                            if (start < 0 or start < floor) and floor <= end)
+            result.append(tuple(levels))
+        outcomes.add(tuple(result))
+
+    def search(step: int, copies: tuple) -> None:
+        nodes[0] += 1
+        if nodes[0] > _SEARCH_LIMIT:
+            raise OverflowError
+        if step == len(events):
+            finish(copies)
+            return
+        index = events[step]
+        at, _order, kind, card = changes[index]
+        level = split_card(logged[index][3])[1]
+        if kind == 'restore':
+            room = None if limit is None else limit - level
+            search(step + 1, copies + ((level, at, 0, room, (), -1, 0),))
+            return
+        tried = set()
+        if kind in ('remove', 'remove_if_present'):
+            want = split_card(card)[1]
+            options = [i for i, c in enumerate(copies) if c[5] < 0 and c[0] == want]
+            if not options:
+                if kind == 'remove':
+                    return
+                search(step + 1, copies)
+                return
+            for i in options:
+                key = copies[i][:5]
+                if key in tried:
+                    continue
+                tried.add(key)
+                c = copies[i]
+                search(step + 1, copies[:i] + ((0, c[1], c[2], c[3], c[4], at, c[0]),) + copies[i + 1:])
+            return
+        # A downgrade (an upgrade on this floor): a copy alive then, at level >= 1 in the
+        # undo, loses it; or a removed copy whose logged name hid it takes a hidden level.
+        for i, c in enumerate(copies):
+            if c[5] >= 0:
+                continue  # already obtained later in the undo: not alive at this upgrade
+            for hidden in (False, True):
+                if hidden and not (c[1] < _LAST_FLOOR and (c[3] is None or c[3] > 0) and c[2] < downgrades):
+                    continue
+                if not hidden and c[0] < 1:
+                    continue
+                key = (c[:5], hidden)
+                if key in tried:
+                    continue
+                tried.add(key)
+                if hidden:
+                    new = (c[0], c[1], c[2] + 1, None if c[3] is None else c[3] - 1, c[4] + (at,), -1, 0)
+                else:
+                    new = (c[0] - 1, c[1], c[2], c[3], c[4] + (at,), -1, 0)
+                search(step + 1, copies[:i] + (new,) + copies[i + 1:])
+
+    final = tuple((split_card(name)[1], _LAST_FLOOR, 0, 0, (), -1, 0) for name in final_copies)
+    try:
+        search(0, final)
+    except OverflowError:
+        return set(fights)
+    if len(outcomes) <= 1:
+        return set()
+    return {floor for k, floor in enumerate(fights) if len({o[k] for o in outcomes}) > 1}
 
 
 def _deck_before(run: dict, floor: int, history: _DeckHistory,
@@ -1171,6 +1288,8 @@ def state_at(run: dict, fight: FightFloor, names: NameAliases,
             reason = 'untracked_deck_relic' if _RELIC_EFFECTS & set(effects) else 'deck_unrecoverable'
             until = 'the end' if through == _LAST_FLOOR else through
             return Drop(reason, f'{" or ".join(effects)} changed the deck unrecorded on floors {after + 1}-{until}')
+    if at in deck_history.ambiguous_floors:
+        return Drop('deck_unrecoverable', 'which copy of a card held an upgrade here is not determined by the log')
     deck_names, missed = _deck_before(run, at, deck_history, names)
     if missed:
         return Drop('deck_unrecoverable', f'no card to undo {missed[0][2]} {missed[0][3]} (floor {missed[0][0]})')

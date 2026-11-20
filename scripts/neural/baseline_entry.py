@@ -31,8 +31,13 @@ if __package__ in (None, ''):
 
 PLAN_SCHEMA = 'spire-learn-baseline-plan-v1'
 MIN_FREE_BYTES = 30 * 2**30
-# Final first: it is the result the baseline exists to measure.
-_EVALUATION_ORDER = ('final', 'fresh-initial', 'near-135168', 'near-270336')
+
+
+def _evaluation_order(plan: Mapping) -> tuple[str, ...]:
+    """Labels in evaluation order: final first (the result the baseline exists to measure),
+    fresh-initial, then ``near-<n>`` for each retained decision the plan declares, ascending."""
+    return ('final', 'fresh-initial',
+            *(f'near-{near}' for near in sorted(set(plan['retain_near_decisions']))))
 
 
 def _default_dependencies() -> dict[str, Callable]:
@@ -652,9 +657,10 @@ def _paired(fresh: Mapping[str, str], final: Mapping[str, str], *, total: int,
 
 
 def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, clock, journal,
-              storage_stop, *, result_container=None, labels=_EVALUATION_ORDER,
+              storage_stop, *, result_container=None, labels=None,
               panel_id='primary', evaluation=None) -> None:
     result_container = summary if result_container is None else result_container
+    labels = _evaluation_order(plan) if labels is None else labels
     settings = plan['evaluation'] if evaluation is None else evaluation
     evaluations = result_container.setdefault('evaluations', {})
     output.mkdir(parents=True, exist_ok=True)

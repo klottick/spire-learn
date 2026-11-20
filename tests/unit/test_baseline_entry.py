@@ -493,6 +493,34 @@ class BaselineEntryTests(unittest.TestCase):
                           if entry[0] == "create_runtime" and entry[1].get("purpose") == "evaluate"]
         self.assertTrue(all(call["action_selection"] == "deterministic" for call in evaluate_calls))
 
+    def test_evaluation_order_is_derived_from_the_plan(self):
+        cv2 = baseline_entry.load_plan(ROOT / "configs/neural/baseline-gym-1.1.1-cv2/plan.json")
+        self.assertEqual(baseline_entry._evaluation_order(cv2),
+                         ("final", "fresh-initial", "near-135168", "near-270336"))
+        for name in ("baseline-8726d467", "baseline-gym-1.1.1-cv2-r2", "baseline-gym-1.1.1-cv2-hp"):
+            plan = baseline_entry.load_plan(ROOT / "configs/neural" / name / "plan.json")
+            self.assertEqual(baseline_entry._evaluation_order(plan),
+                             ("final", "fresh-initial", "near-135168", "near-270336"), name)
+        standard = baseline_entry.load_plan(ROOT / "configs/neural/baseline-standard-1.1.1/plan.json")
+        self.assertEqual(baseline_entry._evaluation_order(standard),
+                         ("final", "fresh-initial", "near-405504", "near-811008", "near-1216512"))
+
+    def test_plan_declared_near_labels_are_evaluated_and_can_complete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plan_path = Path(directory) / "plan.json"
+            plan = json.loads((ROOT / PLAN).read_text())
+            plan["retain_near_decisions"] = [245760, 81920, 163840]  # unsorted on purpose
+            plan_path.write_text(json.dumps(plan))
+            fakes = _Fakes(decisions_per_segment=4096, panel_cases=1)
+            summary, _, written = _run(fakes, plan_path=plan_path)
+        self.assertEqual([row["label"] for row in summary["checkpoints"]],
+                         ["fresh-initial", "final", "near-245760", "near-81920", "near-163840"])
+        self.assertEqual(list(summary["evaluations"]),
+                         ["final", "fresh-initial", "near-81920", "near-163840", "near-245760"])
+        self.assertTrue(all(row["status"] == "complete" for row in summary["evaluations"].values()))
+        self.assertEqual(summary["result"], "complete")
+        self.assertEqual(written["result"], "complete")
+
     def test_evaluation_fault_still_writes_summary(self):
         fakes = _Fakes(decisions_per_segment=405504)
 

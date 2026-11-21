@@ -266,7 +266,10 @@ recipe-hash and resume machinery, generalized from the M10 `standalone` mode to
   - fresh-vs-final paired tests;
   - drop counts from reconstruction;
   - qualifications (simulator only, RNG-001/TIME-001, one player's data, the
-    burning-elite labelling).
+    burning-elite labelling, and persistent relic counters left at the Gym
+    default: Pen Nib, Nunchaku, Ink Bottle, Incense Burner, Happy Flower,
+    Sundial and Inserter, held in 38.8% of kept Ironclad states and tagged
+    `relic_counter_defaulted`).
 
 ## Constraints
 

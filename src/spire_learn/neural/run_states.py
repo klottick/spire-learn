@@ -35,7 +35,9 @@ without a consistent Neow log, or a second fight on one floor),
 ``relic_counter_unrecorded`` (Lizard Tail used, floor not recorded), ``gold_unrecorded``
 (Maw Bank's floor-entry gold not pinned) and ``outcome_unrecorded`` (the last
 fight of a lost run whose killer is not that fight's enemies, or of an abandoned run).
-Tags: ``potions_assumed_empty`` and ``misc_defaulted`` (ruling A).
+Tags: ``potions_assumed_empty``, ``misc_defaulted`` (ruling A) and
+``relic_counter_defaulted`` (a held relic's counter is not recorded and is left at the
+Gym default; see ``_relic_counters`` and ``DEFAULTED_COUNTER_RELICS``).
 
 Relic counters: see ``_relic_counters``. relic_stats holds lifetime usage
 statistics; only Lizard Tail's (HP restored, 0 if unused), Omamori's (curses negated),
@@ -69,6 +71,11 @@ ROOM_KINDS = {'M': 'monster', 'E': 'elite', 'B': 'boss', '?': 'event'}
 BOTTLES = ('Bottled Flame', 'Bottled Lightning', 'Bottled Tornado')
 # Ruling A: runs do not record card ``misc``; these take the Gym minimum.
 MISC_DEFAULTS = {'genetic_algorithm': 1, 'ritual_dagger': 15}
+# Gym relic ids whose persistent counter no run file records (see _relic_counters): left at the
+# Gym default, and a state holding one is tagged relic_counter_defaulted. Keep in step with
+# standard_stream.DEFAULTED_COUNTER_RELICS.
+DEFAULTED_COUNTER_RELICS = ('pen_nib', 'nunchaku', 'ink_bottle', 'incense_burner', 'happy_flower', 'sundial',
+                            'inserter', 'wing_boots', 'tiny_chest', 'matryoshka')
 CURSES = frozenset({'AscendersBane', 'Clumsy', 'CurseOfTheBell', 'Decay', 'Doubt', 'Injury',
                     'Necronomicurse', 'Normality', 'Pain', 'Parasite', 'Pride', 'Regret', 'Shame',
                     'Writhe'})
@@ -1208,6 +1215,7 @@ def _relic_counters(run: dict, floor: int, held: list[str], sources: dict[str, i
     Gym's defaults: Pen Nib, Nunchaku, Ink Bottle, Incense Burner, Happy Flower,
     Sundial and Inserter (relic_stats holds their lifetime trigger totals, not
     the counter), and the out-of-combat Wing Boots, Tiny Chest and Matryoshka.
+    ``state_at`` tags a state holding any of them ``relic_counter_defaulted``.
     """
     counters: dict[str, int] = {}
 
@@ -1323,6 +1331,8 @@ def state_at(run: dict, fight: FightFloor, names: NameAliases,
     counters = _relic_counters(run, at, relic_names, sources, names, deck_history.omamori_negations)
     if isinstance(counters, Drop):
         return counters
+    if any(relic in DEFAULTED_COUNTER_RELICS for relic in relics):
+        tags.append('relic_counter_defaulted')
     hp, max_hp, gold = resources
     if 'MawBank' in relic_names or ('MawBank' in sources and sources['MawBank'] < at):
         maw = _maw_bank(run, at, sources)

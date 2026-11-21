@@ -531,7 +531,7 @@ def summarize_standard_reports(panel: Mapping[str, object], reports: Mapping[str
     from .runner import NeuralReport
     manifest = panel['manifest']
     cases = manifest['cases']
-    if (panel.get('schema') != 'spire-learn-standard-panel-v1'
+    if (panel.get('schema') != 'spire-learn-standard-panel-v2'
             or panel['manifest_sha256'] != content_sha256(json_value(manifest))
             or set(reports) - {c['case_id'] for c in cases}):
         raise ValueError('reports must bind cases in the supplied Standard panel')
@@ -607,8 +607,8 @@ def summarize_standard_reports(panel: Mapping[str, object], reports: Mapping[str
         row['coverage_fraction'] = row['reported'] / row['scheduled']
         row['mean_hp_retention'] = (row['hp_retention_sum'] / row['hp_retention_samples']
                                     if row['hp_retention_samples'] else None)
-    return {'schema': 'spire-learn-standard-panel-summary-v1',
-        'panel_manifest_sha256': panel['manifest_sha256'], 'recipe_sha256': panel['recipe_sha256'],
+    return {'schema': 'spire-learn-standard-panel-summary-v2',
+        'panel_manifest_sha256': panel['manifest_sha256'], 'panel_sha256': panel['panel_sha256'],
         'split': panel['split'], 'total': total, 'strata': strata,
         'status': ('operational_failure' if failures else
                    'complete' if total['completed'] == len(cases) else 'incomplete'),

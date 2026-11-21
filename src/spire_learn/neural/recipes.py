@@ -7,8 +7,8 @@ panels and hashes are byte-identical to calling those functions directly.
 
 Standard recipes need the Gym's catalog validator for fuzzed shards and for panels. It is
 bound once per process: ``gym_validator()`` binds the pinned Gym lazily on first use (so
-it only works inside the runtime container), and ``bind_validator`` injects a fake in host
-tests. One validator object per process keeps the Standard shard cache effective, and a
+it only works inside the runtime container; outside it ``GymUnavailable`` says so), and
+``bind_validator`` injects a fake in host tests. One validator object per process keeps the Standard shard cache effective, and a
 resumed process regenerates byte-identical shards because generation depends only on the
 recipe, the shard position and the Gym's (deterministic) verdicts. Importing this module
 never imports the Gym.
@@ -35,6 +35,11 @@ _LOCK = threading.Lock()
 _VALIDATOR: Validate | None = None
 _RECIPE_CACHE: OrderedDict[tuple, StandardRecipe] = OrderedDict()
 _RECIPE_CACHE_CAPACITY = 4
+_NO_GYM = "Standard {what} require the Gym validator; run inside the runtime container"
+
+
+class GymUnavailable(RuntimeError):
+    """The pinned Gym is not importable here (host-side tooling outside the runtime container)."""
 
 
 def bind_validator(validate: Validate | None) -> Validate | None:
@@ -47,12 +52,19 @@ def bind_validator(validate: Validate | None) -> Validate | None:
     return previous
 
 
-def gym_validator() -> Validate:
-    """The bound validator, binding the pinned Gym on first use (runtime container only)."""
+def gym_validator(what: str = "fuzzed shards") -> Validate:
+    """The bound validator, binding the pinned Gym on first use (runtime container only).
+
+    Without the Gym (host-side resume inspection past the first fuzz boundary, say) this
+    raises ``GymUnavailable`` instead of an ``ImportError``.
+    """
     global _VALIDATOR
     with _LOCK:
         if _VALIDATOR is None:
-            _VALIDATOR = bind_gym()[0]
+            try:
+                _VALIDATOR = bind_gym()[0]
+            except ImportError as error:
+                raise GymUnavailable(_NO_GYM.format(what=what)) from error
         return _VALIDATOR
 
 
@@ -109,7 +121,7 @@ def build_panel(recipe: Recipe, split: str = "selection") -> Mapping[str, object
     """The evaluation panel: M10's 64-case development panel, or a Standard selection/final panel."""
     if isinstance(recipe, StandardRecipe):
         # Plain JSON values, like the development panel, so callers can serialize and slice it.
-        return json_value(build_standard_panel(recipe, split, validate=gym_validator()))
+        return json_value(build_standard_panel(recipe, split, validate=gym_validator("panels")))
     if split != "selection":
         raise ValueError("M10 recipes have only the selection development panel")
     from .stream_runner import build_development_panel
@@ -124,5 +136,5 @@ def summarize_panel_reports(panel: Mapping[str, object], reports: Mapping[str, o
     return summarize_development_reports(panel, reports)
 
 
-__all__ = ["Recipe", "bind_validator", "build_panel", "generate_shard", "gym_validator",
+__all__ = ["GymUnavailable", "Recipe", "bind_validator", "build_panel", "generate_shard", "gym_validator",
            "is_standard_recipe_file", "load_recipe", "summarize_panel_reports"]

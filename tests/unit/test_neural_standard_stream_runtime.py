@@ -116,7 +116,7 @@ class RecipeDispatchTests(_StandardFixture):
             self.recipe, split="train", shard_index=2, validate=self.gym).manifest_sha256)
         # Panels: M10 is the development panel; Standard is the selection panel by default.
         panel = recipes.build_panel(self.recipe)
-        self.assertEqual(panel["schema"], "spire-learn-standard-panel-v1")
+        self.assertEqual(panel["schema"], "spire-learn-standard-panel-v2")
         self.assertEqual(panel["split"], "selection")
         self.assertEqual(json_value(panel), json_value(ss.build_standard_panel(self.recipe, "selection",
                                                                               validate=self.gym)))
@@ -366,6 +366,28 @@ class StandardStreamTests(_StandardFixture):
             self.assertLessEqual(levels, set(ss.levels_for_shard(self.recipe, index)))
         self.assertEqual({row["level"] for row in json_value(uninterrupted[4].annotations).values()}, {0, 1, 2})
 
+    def test_host_side_resume_past_the_fuzz_boundary_says_gym_is_needed(self):
+        # Outside the runtime container the Gym does not import: resume inspection that needs a
+        # fuzzed successor fails with a clear message, not an ImportError.
+        from spire_learn.neural.stream_resume import stream_checkpoint_state
+
+        def no_gym():
+            raise ModuleNotFoundError("No module named 'spire_lab'")
+
+        with tempfile.TemporaryDirectory(dir=WORK) as folder:
+            _, before = self.prepare(Path(folder), 1)  # shard 1 is level 0; its successor is fuzzed
+            recipes.bind_validator(None)
+            ss.clear_shard_cache()
+            message = "Standard fuzzed shards require the Gym validator; run inside the runtime container"
+            with patch.object(recipes, "bind_gym", no_gym):
+                with self.assertRaisesRegex(recipes.GymUnavailable, message) as caught:
+                    stream_checkpoint_state(before, {})
+                self.assertNotIsInstance(caught.exception, ImportError)
+                with self.assertRaisesRegex(recipes.GymUnavailable, "Standard panels require the Gym validator"):
+                    recipes.build_panel(self.recipe)
+                # Level-0 shards still need no Gym.
+                recipes.generate_shard(self.recipe, split="train", shard_index=0, arm="mixed")
+
 
 def _report(mode: str, *, outcome: str | None, censored: bool = False):
     from spire_learn.neural.runner import NeuralReport
@@ -407,7 +429,7 @@ class StandardPanelOutcomeTests(_StandardFixture):
         reports = {case["case_id"]: _bind_case(_report("standard-standalone", outcome=outcome), case["case_id"])
                    for case, outcome in zip(cases, ("victory", "death", "escaped"))}
         summary = recipes.summarize_panel_reports(self.panel, reports)
-        self.assertEqual(summary["schema"], "spire-learn-standard-panel-summary-v1")
+        self.assertEqual(summary["schema"], "spire-learn-standard-panel-summary-v2")
         total = summary["total"]
         self.assertEqual((total["wins"], total["deaths"], total["escaped"]), (1, 1, 1))
         self.assertEqual(total["win_rate"], 0.5)  # escapes are neither wins nor losses

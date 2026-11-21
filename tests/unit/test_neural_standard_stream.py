@@ -9,6 +9,7 @@ from pathlib import Path
 import random
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from spire_learn.neural import standard_stream as ss
 from spire_learn.neural.cases import _parse_case
@@ -365,6 +366,59 @@ class ShardTest(_Fixture):
                                            validate=NO_FUZZ)
         self.assertNotEqual(first.manifest_sha256, other.manifest_sha256)
 
+    def test_shard_bytes_pinned(self):
+        # Panel identity (I1) and tag recomputation (M3) leave training shard bytes unchanged.
+        for index, pinned in SHARD_PINS.items():
+            ss.clear_shard_cache()
+            shard = ss.generate_standard_shard(self.recipe, split="train", shard_index=index, validate=NO_FUZZ)
+            self.assertEqual(shard.manifest_sha256, pinned, index)
+            self.assertEqual(shard.manifest_sha256, content_sha256(shard.manifest))
+
+    def test_shipped_recipe_shard_zero_pinned(self):
+        document = json.loads(SHIPPED.read_text())
+        if not (SHIPPED.parent / document["states_table"]["path"]).resolve().is_file():
+            self.skipTest("local run-states table is absent")
+        recipe = ss.load_standard_recipe(SHIPPED)
+        self.assertEqual(recipe.sha256, "d0e08c447919ff6133bb11f0d2c1184eb8612412512e9dcf15441daee7a51b5b")
+        ss.clear_shard_cache()
+        shard = ss.generate_standard_shard(recipe, split="train", shard_index=0)
+        self.assertEqual(shard.manifest_sha256, "bcb11640c0f848e88699477b6df2108e5812b8e76ba65bb5d922ce694b15f1d9")
+
+    def test_defaulting_tags_follow_the_fuzzed_entry(self):
+        ss.clear_shard_cache()
+        shard = ss.generate_standard_shard(self.recipe, split="train", shard_index=6, validate=NO_FUZZ)
+        seen = Counter()
+        for entry in shard.catalog["entries"]:
+            tags = shard.annotations[entry["id"]]["tags"]
+            misc = any(row["card"] in ss.MISC_DEFAULTS for row in entry["deck"])
+            relic = any(r in ss.DEFAULTED_COUNTER_RELICS for r in entry["relics"])
+            self.assertEqual("misc_defaulted" in tags, misc)
+            self.assertEqual("relic_counter_defaulted" in tags, relic)
+            seen[misc, relic] += 1
+        self.assertEqual(len({key[0] for key in seen}), 2)
+        self.assertEqual(len({key[1] for key in seen}), 2)
+
+    def test_misc_tag_dropped_with_its_card(self):
+        deck = [_row("ritual_dagger"), _row("strike"), _row("defend"), _row("bash")]
+        state = _state("1", 3, 1, "monster", "cultist", deck, ["burning_blood", "pen_nib", "vajra"])
+        self.assertEqual(ss._tags(state, state["entry"]), ["misc_defaulted", "relic_counter_defaulted"])
+        outcomes = Counter()
+        for seed in range(60):
+            entry, _ = self.fuzz(state, 2, seed)
+            tags = ss._tags(state, entry)
+            kept = any(row["card"] in ss.MISC_DEFAULTS for row in entry["deck"])
+            self.assertEqual("misc_defaulted" in tags, kept)
+            self.assertEqual("relic_counter_defaulted" in tags,
+                             any(r in ss.DEFAULTED_COUNTER_RELICS for r in entry["relics"]))
+            outcomes[kept] += 1
+        self.assertEqual(set(outcomes), {True, False})
+        # An added misc-defaulted card brings the tag in.
+        plain = _state("2", 3, 1, "monster", "cultist", [_row("strike")] * 4, ["burning_blood"])
+        added = json_value(plain["entry"])
+        added["deck"][0] = _row("ritual_dagger")
+        self.assertEqual(ss._tags(plain, added), ["misc_defaulted"])
+        self.assertEqual(ss._tags(plain, plain["entry"]), [])
+
     def test_generation_ignores_table_row_order(self):
         shuffled = list(self.recipe.states)
         random.Random(3).shuffle(shuffled)
@@ -441,7 +495,8 @@ class PanelTest(_Fixture):
         self.assertEqual(len({c["case_id"] for c in cases}), 256)
         self.assertEqual(len({c["environment_seed"] for c in cases}), 256)
         annotations = panel["annotations"]
-        sizes = Counter(f"{s['act']}:{s['room_kind']}" for s in self.recipe.states_for("selection"))
+        sizes = Counter(f"{s['act']}:{s['room_kind']}" for s in self.recipe.states_for("selection")
+                        if s["room_kind"] != "event")
         expected = ss.allocate_quotas(64, dict(sizes))
         for level in (0, 1, 2, 4):
             rows = [annotations[c["case_id"]] for c in cases if annotations[c["case_id"]]["level"] == level]
@@ -481,6 +536,47 @@ class PanelTest(_Fixture):
         for level in ("0", "1", "2", "4"):
             self.assertEqual(sum(panel["strata"][level].values()), 64)
 
+    def test_panel_excludes_event_fights(self):
+        self.assertTrue(any(s["room_kind"] == "event" for s in self.recipe.states_for("selection")))
+        for split in ("selection", "final"):
+            panel = json_value(ss.build_standard_panel(self.recipe, split, validate=NO_FUZZ))
+            self.assertFalse(any(a["room_kind"] == "event" for a in panel["annotations"].values()))
+            self.assertFalse(any(key.endswith(":event") for key in panel["available"]))
+            self.assertEqual(panel["panel_identity"]["panel_kinds"], ["monster", "elite", "boss"])
+
+    def test_panel_ignores_training_only_recipe_fields(self):
+        base = {split: canonical_bytes(ss.build_standard_panel(self.recipe, split, validate=NO_FUZZ))
+                for split in ("selection", "final")}
+        schedule = [{"from_shard": 0, "levels": [0]}, {"from_shard": 50, "levels": [0, 1, 2, 4]}]
+        for overrides in ({"fuzz_schedule": schedule}, {"shard_size": 128}, {"generator_seed": 1},
+                          {"fuzz_schedule": schedule, "shard_size": 7, "generator_seed": 99}):
+            recipe = self.load(**overrides)
+            self.assertNotEqual(recipe.sha256, self.recipe.sha256)
+            self.assertEqual(ss.panel_sha256(recipe), ss.panel_sha256(self.recipe))
+            for split in ("selection", "final"):
+                with self.subTest(overrides=overrides, split=split):
+                    self.assertEqual(canonical_bytes(ss.build_standard_panel(recipe, split, validate=NO_FUZZ)),
+                                     base[split])
+
+    def test_panel_fields_move_the_panel(self):
+        base = {split: content_sha256(ss.build_standard_panel(self.recipe, split, validate=NO_FUZZ))
+                for split in ("selection", "final")}
+        panel = json_value(ss.build_standard_panel(self.recipe, "selection", validate=NO_FUZZ))
+        self.assertEqual(panel["panel_sha256"], ss.panel_sha256(self.recipe))
+        self.assertEqual(panel["panel_sha256"], content_sha256(panel["panel_identity"]))
+        self.assertEqual(panel["panel_identity"]["states_table"], {"sha256": self.sha})
+        self.assertNotIn("recipe_sha256", panel)
+        changed = [self.load(redraw_bound=4), self.load(fuzz_levels_max=5), self.load(excluded_strata=["4:elite"]),
+                   dataclasses.replace(self.recipe, table_sha256="f" * 64)]
+        for recipe in changed:
+            self.assertNotEqual(ss.panel_sha256(recipe), ss.panel_sha256(self.recipe))
+            for split in ("selection", "final"):
+                with self.subTest(identity=ss.panel_identity(recipe), split=split):
+                    self.assertNotEqual(content_sha256(ss.build_standard_panel(recipe, split, validate=NO_FUZZ)),
+                                        base[split])
+        with patch.object(ss, "PANEL_VERSION", "baalorlord-standard-panel-test"):
+            self.assertNotEqual(ss.panel_sha256(self.recipe), panel["panel_sha256"])
+
     def test_panel_deterministic_hash(self):
         first = ss.build_standard_panel(self.recipe, "selection", validate=NO_FUZZ)
         second = ss.build_standard_panel(self.load(), "selection", validate=NO_FUZZ)
@@ -492,7 +588,10 @@ class PanelTest(_Fixture):
             ss.build_standard_panel(self.recipe, "train", validate=NO_FUZZ)
 
 
-PINNED_SELECTION_PANEL = "23efdf4e1874dcd9320d11e77feac65e3cb676d6823604fc2aa7d567ee20d909"
+SHARD_PINS = {0: "23d6abab4341df1e1c60815166b71ce73bb8642fac855b5a71563418312bd388",
+              2: "ae19a9c3b4e29971286fc32a1dbda01d717b30272977cc7968cb3dea4661d2a8",
+              6: "86dbaa45a1d4831fb753f8c954d4d3076831944ce60a96744186b4c81d3d0523"}
+PINNED_SELECTION_PANEL = "8e6da5392c7da0ed79436887a2e6b5189021a9118e8bf47705cd1ce6b9b2f058"
 
 
 if __name__ == "__main__":

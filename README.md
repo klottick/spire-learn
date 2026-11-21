@@ -126,6 +126,11 @@ training-time boss wins far more common (act 2 and 3 rise from near zero to
 v2 panel, an HP-shaped reward trends slightly higher, not yet significantly. See the
 [v1.1.1 baseline results and limits](docs/neural-baseline-gym-1.1.1.md).
 
+The [Standard foundation results](docs/neural-standard-foundation-results.md) cover
+the Standard-view baseline (two replicates, a new series not comparable with the
+M10 results) on a panel of reconstructed public-run fight states, beside a search
+reference and the player's recorded outcomes.
+
 The separately approved fresh-weight campaign on this release has now completed
 its development comparisons. Across 438,272 learned decisions, the final mixed
 combat policy improved from **18/64 to 41/64 development wins**. All eight panels

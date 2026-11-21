@@ -87,11 +87,14 @@ def main(argv: list[str] | None = None) -> int:
         document = json_value(panel)
         summary['panels'][split] = {
             'panel_sha256': content_sha256(document), 'manifest_sha256': document['manifest_sha256'],
+            'panel_identity_sha256': document['panel_sha256'], 'panel_identity': document['panel_identity'],
             'cases': len(document['manifest']['cases']), 'strata': document['strata'],
             'available': document['available'], 'skipped': document['skipped'],
             'gym': gym_check(document['manifest'], validate)}
         (output / f'panel-{split}.json').write_bytes(canonical_bytes(document))
         print(json.dumps({'panel': split, 'panel_sha256': summary['panels'][split]['panel_sha256'],
+                          'manifest_sha256': document['manifest_sha256'],
+                          'panel_identity_sha256': document['panel_sha256'],
                           'skipped': document['skipped']}), flush=True)
     (output / 'summary.json').write_text(json.dumps(summary, indent=1, sort_keys=True) + '\n')
     return 0

@@ -326,6 +326,7 @@ def standard_panel_winnability(output: Path, *, recipe: Path, samples: int, play
     result = {'schema': SCHEMA, 'mode': 'standard-panel', 'cases': len(cases), 'samples': samples,
               'playout_steps': playout_steps, 'max_steps': max_steps, 'seed': seed,
               'panel_sha256': content_sha256(panel), 'panel_manifest_sha256': panel.get('manifest_sha256'),
+              'panel_identity_sha256': panel.get('panel_sha256'),
               'search_wins': sum(c.get('victory', 0) for c in by_cell.values()),
               'search_stats': dict(stats),
               'by_stratum_level': {key: dict(value) for key, value in sorted(by_cell.items())}}

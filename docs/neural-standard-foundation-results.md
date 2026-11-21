@@ -98,8 +98,12 @@ The plan SHA256 values of the committed `plan.json` files are
 - **Budget.** 1,622,016 learned decisions (4 x 405,504; 396 shards of 4,096 decisions), 1 worker, 16 rows,
   planned training wall 12,600 s plus evaluation headroom. Both runs stopped with `target_reached`.
 - **Fuzz schedule.** Shards 0 to 98 use level {0}; 99 to 197 levels {0, 1}; 198 to 296 levels {0, 1, 2}; 297
-  onward levels {0, 1, 2, 4}. The three intermediate checkpoints are at shards 99, 198 and 297, i.e. 405,504,
-  811,008 and 1,216,512 decisions.
+  onward levels {0, 1, 2, 4}. The three intermediate checkpoints are the weights at the end of shards 98, 197
+  and 296 (405,504, 811,008 and 1,216,512 decisions), before each new level joins.
+- **Fuzz pools.** Replacement cards and relics are drawn from those held in the kept train-split Ironclad states
+  (the reconstructed table), not from every card or relic seen anywhere in his train-split runs: a card or relic
+  that appears only on dropped floors is not in the pool. The spec's wording ("appearing in train-split runs")
+  is broader; the pool is narrower by exactly the dropped floors.
 - **Evaluation.** Selection panel, 256 cases, deterministic (argmax) action selection, 1024 actions and 120 s
   per case, on `cuda:0`. Checkpoints retained and evaluated: fresh (untrained), the three intermediates and
   final.
@@ -232,6 +236,16 @@ Potions are assumed empty (tagged `potions_assumed_empty`) for 3,174 of the 14,6
 - **Labelling.** Burning elites are labelled only from the green-key log, and the burning elite kind is sampled
   (371 Ironclad states carry `burning_kind_sampled`). Potions are assumed empty where tagged (above). Reconstruction
   drops differ by character and stratum (above).
+- **Persistent relic counters are defaulted.** No run file records the counters of Pen Nib, Nunchaku, Ink Bottle,
+  Incense Burner, Happy Flower, Sundial or Inserter (`relic_stats` holds lifetime trigger totals, not the
+  counter), so every state holding one starts at the Gym's default counter, not at the value he had. In the
+  current states table 5,678 of the 14,645 kept Ironclad states (38.8%) hold at least one of these seven relics
+  (6,535, 44.6%, counting the out-of-combat Wing Boots, Tiny Chest and Matryoshka, which also default). For
+  those states, level 0 is his state except for these counters, so "his exact state" and the "His L0"
+  comparisons are not like for like there: a Pen Nib he entered at 9 does not double his first attack. The
+  current table predates the tag; reconstruction now tags such states `relic_counter_defaulted`, and the
+  generator recomputes the tag for every shard and panel case, so panel summaries stratify by it. The real
+  counters are not recovered (deferred to project 2).
 - **Thin cells.** The panel is proportional to the kept states, so bosses are few (40 of 256 cases, with 2 to
   4 per level in each act cell). Cells hold 2 to 14 cases per level; do not read single-cell
   differences.

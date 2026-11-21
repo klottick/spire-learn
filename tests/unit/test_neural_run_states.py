@@ -11,6 +11,7 @@ import tempfile
 import unittest
 
 from spire_learn.neural import run_states as rs
+from spire_learn.neural import standard_stream as ss
 from spire_learn.neural.standard_names import load_aliases
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -222,6 +223,28 @@ class RunStatesTest(unittest.TestCase):
         f9 = self.assertState(_state(run, 9))
         self.assertIn({"card": "genetic_algorithm", "upgrades": 0, "misc": 1}, f9.deck)
         self.assertIn("misc_defaulted", f9.tags)
+
+    def test_unrecorded_relic_counters_are_tagged_defaulted(self):
+        run = _base()
+        self.assertNotIn("relic_counter_defaulted", self.assertState(_state(run, 4)).tags)
+        _add_relic(run, "Pen Nib", 5)
+        f4 = self.assertState(_state(run, 4))
+        self.assertNotIn("relic_counter_defaulted", f4.tags)  # not yet held
+        f7 = self.assertState(_state(run, 7))
+        self.assertIn("pen_nib", f7.relics)
+        self.assertNotIn("pen_nib", f7.relic_counters)  # the Gym default
+        self.assertIn("relic_counter_defaulted", f7.tags)
+        self.assertEqual(f7.tags.count("relic_counter_defaulted"), 1)
+        for name in ("Nunchaku", "InkBottle", "Incense Burner", "Happy Flower", "Sundial", "WingedGreaves",
+                     "Tiny Chest", "Matryoshka"):
+            other = _base()
+            _add_relic(other, name, 2)
+            self.assertIn("relic_counter_defaulted", self.assertState(_state(other, 4)).tags, name)
+        # A relic whose counter the run does record is not tagged.
+        recorded = _base()
+        _add_relic(recorded, "Girya", 2)
+        self.assertNotIn("relic_counter_defaulted", self.assertState(_state(recorded, 4)).tags)
+        self.assertEqual(set(rs.DEFAULTED_COUNTER_RELICS), set(ss.DEFAULTED_COUNTER_RELICS))
 
     def test_neows_lament_counts_down_combats(self):
         run = _base()

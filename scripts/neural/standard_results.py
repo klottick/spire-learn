@@ -8,17 +8,54 @@ run ids, floors and case ids never appear in the output.
 
 Usage:
   python3 scripts/neural/standard_results.py --run1 SUMMARY --run2 SUMMARY \
-      --panel standard_panel.jsonl --run-states run-states.json
+      --panel standard_panel.jsonl --run-states run-states.json \
+      [--search standard_panel.json] [--recipe recipe.json]
+
+Before aggregating it checks that every evaluation in both summaries and the search
+output (``standard_panel.json``, default: beside the jsonl) name one panel manifest
+SHA256, that the run-states file's SHA256 is the recipe's pin, and that every panel case
+is a monster, elite or boss fight; any mismatch exits with an error.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections import defaultdict
 from math import comb
+from pathlib import Path
 
 LABELS = ("fresh-initial", "near-405504", "near-811008", "near-1216512", "final")
 KIND_ORDER = {"monster": 0, "elite": 1, "boss": 2}
+DEFAULT_RECIPE = Path(__file__).resolve().parents[2] / "configs/neural/baalorlord-standard-v1/recipe.json"
+
+
+class InputMismatch(SystemExit):
+    """The inputs do not describe one panel and one states table."""
+
+
+def check_inputs(r1: dict, r2: dict, search: dict, panel: list[dict],
+                 run_states_sha256: str, recipe: dict) -> str:
+    """The one panel manifest SHA256 all inputs agree on; raises InputMismatch otherwise."""
+    pin = (recipe.get("states_table") or {}).get("sha256")
+    if run_states_sha256 != pin:
+        raise InputMismatch(f"run-states SHA256 {run_states_sha256} is not the recipe pin {pin}")
+    seen: dict[str, set[str]] = defaultdict(set)
+    for name, summary in (("run1", r1), ("run2", r2)):
+        for label, evaluation in sorted(summary["evaluations"].items()):
+            sha = (evaluation.get("summary") or {}).get("panel_manifest_sha256")
+            seen[str(sha)].add(f"{name}:{label}")
+    seen[str(search.get("panel_manifest_sha256"))].add("search")
+    if len(seen) != 1:
+        detail = "; ".join(f"{sha}: {', '.join(sorted(where))}" for sha, where in sorted(seen.items()))
+        raise InputMismatch(f"inputs name different panel manifests: {detail}")
+    (sha,) = seen
+    if sha == "None":
+        raise InputMismatch("inputs do not record a panel manifest SHA256")
+    kinds = {c["room_kind"] for c in panel} - set(KIND_ORDER)
+    if kinds:
+        raise InputMismatch(f"panel holds room kinds {sorted(kinds)}; panel strata are monster/elite/boss only")
+    return sha
 
 
 def mcnemar_exact(only_a: int, only_b: int) -> float:
@@ -151,7 +188,7 @@ def render(r1: dict, r2: dict, panel: list[dict], states: list[dict]) -> str:
         out.append("")
 
     kinds = stratify(panel, both, recorded,
-                     lambda c: (c["act"], KIND_ORDER[c["room_kind"]], c["room_kind"]))
+                     lambda c: (c["act"], KIND_ORDER.get(c["room_kind"], len(KIND_ORDER)), c["room_kind"]))
     table("By act x kind:", [
         {**g, "key": f"{g['key'][0]} {g['key'][2]}"} for g in kinds], "Act / kind")
     table("By fuzz level:", [
@@ -169,6 +206,8 @@ def main() -> int:
     ap.add_argument("--run2", required=True)
     ap.add_argument("--panel", required=True, help="standard_panel.jsonl")
     ap.add_argument("--run-states", required=True)
+    ap.add_argument("--search", help="standard_panel.json (default: beside --panel)")
+    ap.add_argument("--recipe", default=str(DEFAULT_RECIPE))
     args = ap.parse_args()
     with open(args.run1) as f:
         r1 = json.load(f)
@@ -176,8 +215,14 @@ def main() -> int:
         r2 = json.load(f)
     with open(args.panel) as f:
         panel = [json.loads(line) for line in f if line.strip()]
-    with open(args.run_states) as f:
-        states = json.load(f)["states"]
+    data = Path(args.run_states).read_bytes()
+    states = json.loads(data)["states"]
+    search_path = Path(args.search) if args.search else Path(args.panel).with_name("standard_panel.json")
+    with open(search_path) as f:
+        search = json.load(f)
+    with open(args.recipe) as f:
+        recipe = json.load(f)
+    check_inputs(r1, r2, search, panel, hashlib.sha256(data).hexdigest(), recipe)
     ids = {c["case_id"] for c in panel}
     for s in (r1, r2):
         if set(s["evaluations"]["final"]["cases"]) != ids:

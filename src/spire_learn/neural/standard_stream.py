@@ -7,8 +7,13 @@ non-starter relics with ones seen in his train-split runs (capped at what the st
 Runs are split whole by a hash of ``run_id`` (80 / 10 / 10 train / selection / final);
 training shards draw only train-split states, panels only selection or final ones, and
 fuzz pools come from train-split states only. Every random choice comes from an RNG
-seeded by the recipe hash and the case's position, so a recipe fixes every shard and
-panel byte for byte. The Gym validator is injected: fuzzed entries need it, and a
+seeded by the case's position and an identity hash, so a recipe fixes every shard and
+panel byte for byte. Training shards are seeded from the full recipe hash. Panels are seeded
+from ``panel_sha256``, a panel-only identity (states table, character, ascension, panel
+levels and size, ``fuzz_levels_max``, ``excluded_strata``, ``redraw_bound`` and a fixed
+panel version), so training-only fields (``fuzz_schedule``, ``shard_size``,
+``generator_seed``) never move a panel. Panel strata are monster, elite and boss fights
+only; event fights never enter a panel. The Gym validator is injected: fuzzed entries need it, and a
 rejected draw is redrawn up to ``redraw_bound`` times and then skipped. Importing this
 module never imports the Gym.
 
@@ -52,7 +57,8 @@ from .standard_names import NameAliases, load_aliases
 GENERATOR = "baalorlord-standard-v1"
 RECIPE_SCHEMA = "spire-learn-standard-recipe-v1"
 TABLE_SCHEMA = "spire-learn-run-states-v1"
-PANEL_SCHEMA = "spire-learn-standard-panel-v1"
+PANEL_SCHEMA = "spire-learn-standard-panel-v2"
+PANEL_VERSION = "baalorlord-standard-panel-v1"  # fixed: part of every panel identity
 MODE = "standard-standalone"
 SPLITS = ("train", "selection", "final")
 SPLIT_FRACTIONS = (0.8, 0.1, 0.1)
@@ -62,6 +68,11 @@ BOTTLES = ("bottled_flame", "bottled_lightning", "bottled_tornado")
 POTION_BELT = "potion_belt"
 NO_DEFAULT_COUNTER = ("neows_lament",)  # the Gym requires an explicit counter, so it cannot be a replacement
 MISC_DEFAULTS = {"genetic_algorithm": 1, "ritual_dagger": 15}  # Ruling A
+# Relics whose counter no run file records, so every state holds them at the Gym default
+# (run_states._relic_counters); a state holding one is tagged ``relic_counter_defaulted``.
+DEFAULTED_COUNTER_RELICS = ("pen_nib", "nunchaku", "ink_bottle", "incense_burner", "happy_flower", "sundial",
+                            "inserter", "wing_boots", "tiny_chest", "matryoshka")
+PANEL_KINDS = ("monster", "elite", "boss")  # event fights are never panel strata
 PANEL_LEVELS = (0, 1, 2, 4)
 PANEL_PER_LEVEL = 64
 PANEL_SEED_OFFSET = 2**33  # panel ordinals sit above every shard ordinal (index * 256 + local < 2**32)
@@ -349,9 +360,14 @@ def fuzz(state: Mapping[str, object], level: int, pools: FuzzPools, rng: random.
 
 
 def _tags(state: Mapping[str, object], entry: Mapping[str, object]) -> list[str]:
-    tags = set(state["tags"])
+    """The base state's tags, with the defaulting tags recomputed for the (fuzzed) entry:
+    ``misc_defaulted`` iff a deck card takes a Ruling A misc default, and
+    ``relic_counter_defaulted`` iff a held relic's counter is the Gym default."""
+    tags = set(state["tags"]) - {"misc_defaulted", "relic_counter_defaulted"}
     if any(row["card"] in MISC_DEFAULTS for row in entry["deck"]):
         tags.add("misc_defaulted")
+    if any(relic in DEFAULTED_COUNTER_RELICS for relic in entry["relics"]):
+        tags.add("relic_counter_defaulted")
     return sorted(tags)
 
 
@@ -399,8 +415,34 @@ def _resolve(drafts: Sequence[_Draft], recipe: StandardRecipe, validate: Validat
 
 
 def _rng(recipe: StandardRecipe, *parts: object) -> random.Random:
-    # Seeded from the recipe hash and the case's position only; no global or Gym RNG.
+    # Training shards: seeded from the recipe hash and the case's position only; no global or Gym RNG.
     return random.Random(int(content_sha256([recipe.sha256, *parts]), 16))
+
+
+def _panel_rng(identity: str, *parts: object) -> random.Random:
+    # Panels: seeded from the panel identity hash and the case's position only.
+    return random.Random(int(content_sha256([identity, *parts]), 16))
+
+
+def panel_identity(recipe: StandardRecipe) -> Mapping[str, object]:
+    """Everything a panel depends on, and nothing training-only.
+
+    The fuzz pools and ``max_upgrades`` follow from the states table (which pins the alias
+    table) and the character, so the table hash covers them.
+    """
+    if not isinstance(recipe, StandardRecipe):
+        raise ValueError("recipe must be a StandardRecipe")
+    return _freeze_json({
+        "panel_version": PANEL_VERSION, "generator_version": recipe.generator_version,
+        "states_table": {"sha256": recipe.table_sha256}, "character": recipe.character,
+        "ascension": recipe.ascension, "panel_levels": list(PANEL_LEVELS), "panel_per_level": PANEL_PER_LEVEL,
+        "panel_kinds": list(PANEL_KINDS), "fuzz_levels_max": recipe.fuzz_levels_max,
+        "excluded_strata": list(recipe.excluded_strata), "redraw_bound": recipe.redraw_bound})
+
+
+def panel_sha256(recipe: StandardRecipe) -> str:
+    """The panel seed: the hash of ``panel_identity(recipe)``."""
+    return content_sha256(panel_identity(recipe))
 
 
 def _annotation(draft: _Draft) -> dict[str, object]:
@@ -534,8 +576,8 @@ def allocate_quotas(total: int, sizes: Mapping[str, int], caps: Mapping[str, int
 
 def build_standard_panel(recipe: StandardRecipe, split: str, *, validate: Validate) -> Mapping[str, object]:
     """The ``split`` panel: 64 cases at each of levels 0, 1, 2 and 4, with distinct base
-    states within a level, stratified by act x room kind in proportion to the available
-    states. A stratum that runs out of Gym-accepted fuzz draws takes what it has and its
+    states within a level, stratified by act x room kind (monster, elite and boss only) in
+    proportion to the available states, and seeded from ``panel_sha256(recipe)`` only. A stratum that runs out of Gym-accepted fuzz draws takes what it has and its
     shortfall goes to the level's other strata."""
     if not isinstance(recipe, StandardRecipe):
         raise ValueError("recipe must be a StandardRecipe")
@@ -543,16 +585,19 @@ def build_standard_panel(recipe: StandardRecipe, split: str, *, validate: Valida
         raise ValueError("panels are built from selection or final runs only")
     if validate is None:
         raise ValueError("panels need the Gym validator")
+    identity = panel_identity(recipe)
+    seed = content_sha256(identity)
     by_stratum: dict[str, list] = {}
     for state in recipe.states_for(split):
-        by_stratum.setdefault(stratum(state), []).append(state)
+        if state["room_kind"] in PANEL_KINDS:  # event fights are not panel strata (spec)
+            by_stratum.setdefault(stratum(state), []).append(state)
     sizes = {key: len(rows) for key, rows in by_stratum.items()}
     cases, annotations, counts, skipped = [], {}, {}, {}
     for level in PANEL_LEVELS:
         orders = {}
         for key, rows in by_stratum.items():
             order = list(rows)
-            _rng(recipe, "panel", split, level, key, "order").shuffle(order)
+            _panel_rng(seed, "panel", split, level, key, "order").shuffle(order)
             orders[key] = order
         accepted = {key: [] for key in by_stratum}
         cursor = dict.fromkeys(by_stratum, 0)
@@ -566,8 +611,8 @@ def build_standard_panel(recipe: StandardRecipe, split: str, *, validate: Valida
                     start = cursor[key]
                     batch = orders[key][start:start + quotas[key] - len(accepted[key])]
                     cursor[key] += len(batch)
-                    drafts = [_Draft(state, level, _rng(recipe, "panel", split, level, key, start + offset, "fuzz"),
-                                     [recipe.sha256, "panel", split, level, key, start + offset], "p-")
+                    drafts = [_Draft(state, level, _panel_rng(seed, "panel", split, level, key, start + offset, "fuzz"),
+                                     [seed, "panel", split, level, key, start + offset], "p-")
                               for offset, state in enumerate(batch)]
                     skipped[str(level)] += _resolve(drafts, recipe, validate)
                     accepted[key].extend(d for d in drafts if d.entry is not None)
@@ -585,7 +630,8 @@ def build_standard_panel(recipe: StandardRecipe, split: str, *, validate: Valida
                 annotations[case["case_id"]] = _annotation(draft)
     manifest = {"schema": "spire-learn-neural-cases-v1", "split": split, "partition": split, "cases": cases}
     return _freeze_json({
-        "schema": PANEL_SCHEMA, "generator_version": GENERATOR, "recipe_sha256": recipe.sha256, "split": split,
+        "schema": PANEL_SCHEMA, "generator_version": GENERATOR, "panel_identity": identity,
+        "panel_sha256": seed, "split": split,
         "manifest": manifest, "manifest_sha256": content_sha256(manifest), "annotations": annotations,
         "available": {key: sizes[key] for key in sorted(sizes, key=_stratum_order)},
         "strata": counts, "skipped": skipped,
@@ -594,4 +640,4 @@ def build_standard_panel(recipe: StandardRecipe, split: str, *, validate: Valida
 
 __all__ = ["FuzzPools", "FuzzRecord", "StandardRecipe", "allocate_quotas", "build_standard_panel",
            "clear_shard_cache", "fuzz", "generate_standard_shard", "levels_for_shard", "load_standard_recipe",
-           "run_split", "stratum"]
+           "panel_identity", "panel_sha256", "run_split", "stratum"]

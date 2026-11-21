@@ -739,7 +739,7 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, 
     if 'fresh-initial' in outcomes and 'final' in outcomes:
         result_container['paired_fresh_vs_final'] = _paired(
             outcomes['fresh-initial'], outcomes['final'], total=len(rows),
-            standard=panel.get('schema') == 'spire-learn-standard-panel-v1')
+            standard=panel.get('schema') == 'spire-learn-standard-panel-v2')
 
 
 class _Stop(Exception):

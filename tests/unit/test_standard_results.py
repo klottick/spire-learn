@@ -7,8 +7,9 @@ import unittest
 from scripts.neural import standard_results as sr
 
 
-def _summary(final: dict, fresh: dict) -> dict:
-    wrap = lambda m: {"cases": {c: {"outcome": o} for c, o in m.items()}}
+def _summary(final: dict, fresh: dict, manifest: str = "a" * 64) -> dict:
+    wrap = lambda m: {"cases": {c: {"outcome": o} for c, o in m.items()},
+                      "summary": {"panel_manifest_sha256": manifest}}
     evaluations = {label: wrap(final) for label in sr.LABELS}
     evaluations["fresh-initial"] = wrap(fresh)
     return {"evaluations": evaluations}
@@ -52,6 +53,45 @@ class StandardResultsTest(unittest.TestCase):
         self.assertNotIn("zz-secret", text)
         self.assertNotIn("424242", text)
         self.assertIn("| 2 monster | 1 | 1 | 1 | 1 |", text)
+
+
+class InputCheckTest(unittest.TestCase):
+    PANEL = [{"case_id": "x", "act": 1, "room_kind": "elite", "level": 0, "run_id": "9", "floor": 7,
+              "search": {"outcome": "victory"}}]
+    RECIPE = {"states_table": {"path": "t.json", "sha256": "b" * 64}}
+
+    def check(self, r1=None, r2=None, search=None, panel=None, table="b" * 64):
+        r1 = r1 or _summary({"x": "win"}, {"x": "loss"})
+        r2 = r2 or _summary({"x": "win"}, {"x": "loss"})
+        search = {"panel_manifest_sha256": "a" * 64} if search is None else search
+        return sr.check_inputs(r1, r2, search, self.PANEL if panel is None else panel, table, self.RECIPE)
+
+    def test_agreeing_inputs_pass(self) -> None:
+        self.assertEqual(self.check(), "a" * 64)
+
+    def test_panel_manifest_must_agree_everywhere(self) -> None:
+        stale = _summary({"x": "win"}, {"x": "loss"})
+        stale["evaluations"]["near-405504"]["summary"]["panel_manifest_sha256"] = "c" * 64
+        for kwargs in ({"r1": stale}, {"r2": stale}, {"search": {"panel_manifest_sha256": "c" * 64}},
+                       {"search": {}}):
+            with self.subTest(kwargs=list(kwargs)), self.assertRaisesRegex(sr.InputMismatch, "panel manifests"):
+                self.check(**kwargs)
+        missing = {"panel_manifest_sha256": None}
+        none = _summary({"x": "win"}, {"x": "loss"}, manifest=None)
+        with self.assertRaisesRegex(sr.InputMismatch, "do not record"):
+            self.check(r1=none, r2=none, search=missing)
+
+    def test_states_table_must_match_the_recipe_pin(self) -> None:
+        with self.assertRaisesRegex(sr.InputMismatch, "recipe pin"):
+            self.check(table="d" * 64)
+
+    def test_unexpected_room_kind_is_rejected_and_render_does_not_crash(self) -> None:
+        panel = [dict(self.PANEL[0], room_kind="event")]
+        with self.assertRaisesRegex(sr.InputMismatch, "event"):
+            self.check(panel=panel)
+        s = _summary({"x": "win"}, {"x": "loss"})
+        states = [{"character": "ironclad", "run_id": "9", "floor": 7, "won": True}]
+        self.assertIn("1 event", sr.render(s, s, panel, states))
 
 
 if __name__ == "__main__":

@@ -50,9 +50,9 @@ cases are his unmodified states; fuzzed levels have no recorded outcome):
 | 4 | elite | 1/2 | 1/2 | 1/2 | 1/2 | 4/8 | 2/2 |
 | 4 | boss | 2/2 | 1/2 | 1/2 | 1/2 | 5/8 | 2/2 |
 
-A recorded win means the fight was won in his run. His overall rate in the table is 842 lost fights out of 49,895
-states (1.7%), so 63/64 here is near the top by construction and a property of this sample, not a ceiling. On
-this panel search is below his recorded outcome mainly in act 4 elites and in a few act 1 and act 3 cells; with
+A recorded win means the fight was won in his run. His Ironclad rate over all kept states is 228 lost fights out of 14,645
+(1.56%; 842 of 49,895, 1.7%, across all four characters), so 63/64 here is near the top by construction and a property of this sample, not a ceiling. On
+this panel search is below his recorded outcome in a few cells; at level 0 the one-fight gaps are act 1 elite, act 2 monster, act 3 elite and act 4 elite; with
 2 to 14 cases per cell these differences are mostly one or two fights.
 
 **Excluded strata.** None. Every stratum has at least one search win or one recorded win, so the recipe's
@@ -183,15 +183,15 @@ act 3 (76) 58 and 55 against 70; act 4 (16) 3 and 3 against 9.
 
 What the data support:
 
-- **Both runs end well above where the first run started, and about the same as each other.** Final wins are
+- **Both finals are well above r1's untrained checkpoint (35 wins) and about the same as each other.** Final wins are
   182 (r1) and 184 (r2) of 256, with a replicate disagreement that is symmetric (20 against 21 discordant cases,
   exact p = 1.0). Both are below search's 231 and below his recorded 63 of 64 level-0 outcomes; at level 0 the finals
   win 52 and 54 of 64 against search's 59.
 - **The untrained policy is already strong in r2.** r2's fresh checkpoint, a deterministic argmax over a random
-  initialisation, won 154 of 256, against 35 for r1's. So many panel fights are winnable by simple play, and the
-  fresh policy's win count depends heavily on the seed. This is why the fresh-vs-final gain differs between runs
+  initialisation, won 154 of 256, against 35 for r1's. This is consistent with many panel fights being winnable by simple play, and
+  the fresh policy's win count depends heavily on the seed. That is consistent with the fresh-vs-final gain differing between runs
   (+147 wins for r1, +30 for r2) while the finals match. The fresh-vs-final tests are significant for both runs
-  (p = 3.5e-37 and 1.5e-05), so training helped in both, but r2's gain is much smaller than r1's.
+  (p = 3.5e-37 and 1.5e-05), so training helped in both in the paired fresh-vs-final sense, but r2's gain is much smaller than r1's.
 - **Most of the gain arrives by the 25% checkpoint, then the curve is flat.** r1 goes 35 to 177 by 405,504
   decisions and then 170, 184, 182; r2 goes 154 to 188 and then 182, 181, 184. After 25% the differences between
   checkpoints (at most 14 wins in r1 and 7 in r2) are of the size of the replicate disagreement and are not
@@ -226,8 +226,9 @@ Potions are assumed empty (tagged `potions_assumed_empty`) for 3,174 of the 14,6
 
 - **Simulator only.** Every number here is a simulator result on reconstructed states; there is no claim about
   the original game. The RNG-001 and TIME-001 qualifications apply.
-- **One player's data.** All states come from Baalorlord's Ironclad A20 runs. His recorded outcomes (63 of 64
-  at level 0; 1.7% of all kept fights lost) reflect selection into reaching those states.
+- **One player's data.** The panel and curriculum use Baalorlord's Ironclad A20 states only; the
+  reconstructed table covers all four characters. His recorded Ironclad outcomes (63 of 64
+  at level 0; 1.56% of kept Ironclad fights lost) reflect selection into reaching those states.
 - **Labelling.** Burning elites are labelled only from the green-key log, and the burning elite kind is sampled
   (371 Ironclad states carry `burning_kind_sampled`). Potions are assumed empty where tagged (above). Reconstruction
   drops differ by character and stratum (above).

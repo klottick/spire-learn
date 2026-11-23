@@ -78,10 +78,14 @@ def gym_validator(what: str = "fuzzed shards", recipe: Recipe | None = None, *,
                 identity = (build_info or _native_build_info)()
             except ImportError as error:
                 raise GymUnavailable(_NO_GYM.format(what=what)) from error
-            validator.live_gym_revision = identity.get("revision")
+            validator.live_gym_revision = identity.get("revision")  # may be missing: refused below
             _VALIDATOR = validator
+        checked = hasattr(_VALIDATOR, "live_gym_revision")
         live = getattr(_VALIDATOR, "live_gym_revision", None)
-        if isinstance(recipe, StandardRecipe) and live is not None and live != recipe.gym_revision:
+        if isinstance(recipe, StandardRecipe) and checked and not isinstance(live, str):
+            raise ValueError("the loaded Spire Gym's build_info reports no revision, so it cannot be "
+                             "matched against the Standard recipe's table revision")
+        if isinstance(recipe, StandardRecipe) and checked and live != recipe.gym_revision:
             raise ValueError(f"the loaded Spire Gym is revision {live}, but the Standard recipe's run-states "
                              f"table is for Gym {recipe.gym_revision}; run it in that Gym's runtime")
         return _VALIDATOR

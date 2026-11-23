@@ -177,6 +177,10 @@ class StandardRecipe:
     def __post_init__(self) -> None:
         if self.generator_version != GENERATOR:
             raise ValueError(f"generator_version must be {GENERATOR}")
+        if self.gym_revision not in _TABLE_REVISIONS:
+            raise ValueError(f"unsupported Gym revision {self.gym_revision!r}")
+        if (self.entry_resources is not None) != (self.gym_revision == GYM_V1_2_0_CONTRACT.source_revision):
+            raise ValueError("entry_resources are required for Gym 1.2.0 recipes and only for them")
         if self.character not in STARTER_RELICS:
             raise ValueError("the curriculum character must be ironclad")
         if self.ascension != 20:

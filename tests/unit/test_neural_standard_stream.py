@@ -248,6 +248,17 @@ class EntryResourceRulesTest(unittest.TestCase):
             self.assertEqual(self.recipe_for(tmp, GYM_1_2_0).gym_revision, GYM_1_2_0)
             self.assertEqual(self.recipe_for(tmp, GYM_1_1_1).gym_revision, GYM_1_1_1)
 
+    def test_recipe_revision_and_descriptor_must_agree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r_1_2_0 = self.recipe_for(tmp, GYM_1_2_0)
+            r_1_1_1 = self.recipe_for(tmp, GYM_1_1_1)
+        with self.assertRaisesRegex(ValueError, "entry_resources"):
+            dataclasses.replace(r_1_2_0, entry_resources=None)
+        with self.assertRaisesRegex(ValueError, "entry_resources"):
+            dataclasses.replace(r_1_1_1, entry_resources=load_entry_resources())
+        with self.assertRaisesRegex(ValueError, "Gym revision"):
+            dataclasses.replace(r_1_1_1, gym_revision="0" * 40)
+
     def test_unknown_table_revision_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError, "Gym revision"):

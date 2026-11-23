@@ -46,6 +46,19 @@ class ControlContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             low.assert_phase_inspect(json.dumps([wrong]), spec=qualified, container_id='a'*64)
 
+    def test_budget_accepts_launcher_deadline_whatever_the_float_rounding(self):
+        api = self.controls()
+        whole = api.profiles.current().whole_seconds
+        # The launcher sets deadline = start + whole_seconds. For this start the
+        # subtraction (start + whole) - start rounds to slightly above whole.
+        start = 105442.292253
+        self.assertGreater((start + whole) - start, whole)
+        budget = api.CampaignBudget(api.CAPS, start=start, deadline=start + whole, clock=lambda: start)
+        self.assertEqual(budget.deadline, start + whole)
+        for deadline in (start, start - 1., start + whole + 1e-6):
+            with self.subTest(deadline=deadline), self.assertRaises(ValueError):
+                api.CampaignBudget(api.CAPS, start=start, deadline=deadline, clock=lambda: start)
+
     def test_budget_reserves_before_dispatch_and_never_refunds_uncertainty(self):
         api = self.controls()
         now = [10.]

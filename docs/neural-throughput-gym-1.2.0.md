@@ -62,8 +62,11 @@ capacity fault would mean a Gym or entry defect, not a long fight. The play pres
 10-14% faster, but its smaller capacities (96 permanent cards, 832 combat cards, 64 powers,
 32 relics, 192 actions) can overflow in legitimate late-game states; an overflow is a typed Gym
 `Capacity` fault that Learn surfaces as a `DriverFault` (an operational failure of the segment,
-never a loss or truncation), so a stream on it could stop mid-run. The play preset was measured
-only; no Learn config uses it for training or panels.
+never a loss or truncation), so a stream on it could stop mid-run. Shard and panel entry
+validation (`standard_catalog.bind_gym`) builds a dense environment and never resets, so it
+cannot catch a compact overflow in advance; with the play preset the first sign would be a
+fault during training or a panel. The play preset was measured only: baseline plans refuse it
+(`baseline_entry._refuse_overflowing_preset`), and no Learn config uses it for training or panels.
 
 ## Method
 
@@ -78,9 +81,10 @@ only; no Learn config uses it for training or panels.
   `artifacts/development/neural-combat/t3-profile-{16,64}-{dense,compact,play}/` (not committed).
 - The `gpu_wait` gate (min free 13,958,643,712 B, poll 30 s, cap 21,600 s) was on; the GPU had
   about 30 GiB free throughout, so no wait occurred in any run.
-- The compact and dense views give the network identical inputs: the gated test
-  `test_compact_and_dense_give_identical_policy_outputs` compared 1,280 stepped states (features,
-  coverage, logits, values and sampled actions byte for byte on CPU). The speed difference is
+- The gated test `test_compact_and_dense_give_identical_policy_outputs` found byte-equal encoded
+  features, coverage, critic values, logits and sampled and greedy actions on CPU for 2,400
+  decisions from real v1.2.0 entries of all four characters (3,128 frames, 104 terminal) and 480
+  decisions under the play preset at its capacity edge. On that sample the speed difference is
   the data path only, not a different model.
 
 ## Caveats

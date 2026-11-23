@@ -38,7 +38,7 @@ class ViewSpec:
     value_dtypes: frozenset[str] = frozenset({"int64"})
     # A compact layout of a dense view: the dense view's row capacity per row group and its
     # dispatch width. Learner inputs that depend on capacity (known-coverage means, the
-    # sampled dispatch width) use these, so the network sees the dense inputs. Empty: dense.
+    # sampled dispatch width) use these, as the dense view computes them. Empty: dense.
     dense_view_id: str | None = None
     dense_rows: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}), compare=False)
     dense_action_width: int | None = None

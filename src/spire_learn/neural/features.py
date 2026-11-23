@@ -208,7 +208,7 @@ def encode_frames(
     occupied_tensors: dict[str, Any] = {}
     coverage_tensors: dict[str, Any] = {}
     # A compact layout keeps its narrow rows; only capacity-dependent inputs use the dense view's
-    # row counts, so the network sees exactly the dense inputs (see views.STANDARD_COMBAT_COMPACT_V1).
+    # row counts, as the dense view would compute them (see views.STANDARD_COMBAT_COMPACT_V1).
     dense_rows = schema.view.dense_rows
     for group, spec in schema.tensors.items():
         if not spec.columns:

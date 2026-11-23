@@ -316,6 +316,7 @@ class FramePayloadCounter:
 
 
 def _public_frame(schema,frame):
+    from spire_learn.neural.contracts import buffer_value
     from spire_learn.neural.schema import validate_frame
     validate_frame(frame,schema); result={}
     # The approved trace projection contains only public player/enemy fields.
@@ -330,7 +331,7 @@ def _public_frame(schema,frame):
             for column_index,column in enumerate(spec.columns):
                 offset=row*width+column_index; is_known=bool(occupied[row] and known[offset]); value=None
                 if is_known:
-                    value=struct.unpack_from('=q',raw,offset*8)[0]
+                    value=buffer_value(frame.tensors[name],offset)
                     if column.vocabulary is not None: value=schema.vocabularies[column.vocabulary][value]
                     elif column.reference is not None:
                         value={'row':value,'reference':column.reference}
@@ -348,14 +349,14 @@ def _public_referenced_rows(schema,frame,legal):
     selection through to its public card. Deduplication terminates cycles; a
     hard row limit and the final decision-byte limit bound all retained data.
     """
+    from spire_learn.neural.contracts import buffer_value
     pending=[]
     seen=set()
     result={}
     def cell(spec,row,column_index):
         return row*len(spec.columns)+column_index
     def number(spec,row,column_index):
-        return struct.unpack_from('=q',frame.tensors[spec.key].data,
-                                  cell(spec,row,column_index)*8)[0]
+        return buffer_value(frame.tensors[spec.key],cell(spec,row,column_index))
     def reference(spec,row,column_index):
         column=spec.columns[column_index]
         selector=next((i for i,item in enumerate(spec.columns)

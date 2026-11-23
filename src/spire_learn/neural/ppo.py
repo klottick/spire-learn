@@ -292,7 +292,7 @@ def ppo_update(
     """
     import torch
 
-    from spire_learn.neural.distribution import masked_categorical
+    from spire_learn.neural.distribution import masked_categorical, pad_to_dispatch_width
     from spire_learn.neural.features import encode_frames
 
     if not isinstance(policy, torch.nn.Module):
@@ -433,7 +433,11 @@ def ppo_update(
                     optimizer.zero_grad(set_to_none=True)
                     batch = source_batch.select_rows(selected_cpu)
                     output = policy(batch)
-                    distribution = masked_categorical(output.logits, batch.action_mask)
+                    # Same width as act(): a compact layout pads to the dense dispatch width
+                    # (dense: unchanged), so the ratio's log-probabilities match the behaviour's.
+                    logits, mask = pad_to_dispatch_width(
+                        output.logits, batch.action_mask, schema.view.dense_action_width)
+                    distribution = masked_categorical(logits, mask)
                     new_logp = distribution.log_prob(action_batch)
                     ratio = torch.exp(new_logp - old_logp_batch)
                     unclipped = ratio * advantage_batch

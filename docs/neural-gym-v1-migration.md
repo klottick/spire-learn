@@ -39,12 +39,18 @@ and a card-queue order fix that changes gameplay and so the rules IDs.
   `standard-combat-compact-v1`. Compact frames keep their narrow dtypes and rows
   through snapshot, validation, hashing and transfer; values widen to int64 on
   the device, and the two capacity-dependent inputs (known-coverage means, the
-  sampled dispatch width) use the dense row counts, so the network sees exactly
-  the dense inputs (a gated test compares features, logits, values and sampled
-  actions byte for byte). A compact config's raw-mode mapping is
+  sampled dispatch width) use the dense row counts. A gated test showed equal
+  encoded features, critic values, logits and sampled and greedy actions, byte
+  for byte on CPU, for 2,400 decisions from real v1.2.0 entries of all four
+  characters (3,128 frames including 104 terminal frames) and for 480 decisions
+  at the play preset's capacity edge (96 cards, 32 relics); that is the evidence,
+  not a proof for every state. A compact config's raw-mode mapping is
   `spire-learn-standard-combat-compact-v1@<preset fingerprint>+gym-1.2.0`
   (standard-standalone only), so dense and compact checkpoints never load into
-  each other. A capacity overflow is a `DriverFault`. Throughput:
+  each other. A capacity overflow is a `DriverFault`. Shard and panel entry
+  validation constructs a dense environment without resetting, so a compact
+  overflow would first appear at reset in training or a panel; baseline plans
+  refuse the play preset for that reason. Throughput:
   `docs/neural-throughput-gym-1.2.0.md`.
 - Added the six `configs/neural/gym-1.2.0/` files (runtime profile and five
   templates). The package overlay is the wheel extracted unchanged; the

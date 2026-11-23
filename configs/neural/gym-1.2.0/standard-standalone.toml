@@ -12,7 +12,7 @@ gym_revision = "4d198064b3b568b6f0d08d6e3937d236fbc48e9b"
 common_view_id = "spire-gym-combat-policy-view-v1"
 common_view_fingerprint = "4c73f7de04d7b2875f473f8034c1cbacf984ea2d52d0a9428289c30cf1dff463"
 # Compact Standard combat view (Gym v1.2.0, standard-run-api.md "M39b"): the bounds preset, so
-# valid entries never overflow. The network sees the dense inputs; the identity is its own.
+# valid entries never overflow. Its own identity; inputs equal the dense ones in the gated test.
 standard_view_layout = "compact"
 standard_view_preset = "standard-combat-compact-v1"
 standard_view_fingerprint = "49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8"

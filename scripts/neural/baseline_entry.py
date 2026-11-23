@@ -150,6 +150,19 @@ def _nearest(checkpoints: list[dict], decisions: int) -> dict | None:
                                              row['learned_decisions']), default=None)
 
 
+# Compact presets that can overflow on valid entries; measured (profile_entry) but never trained
+# or evaluated: a mid-run Capacity fault would stop the baseline (see standard_catalog.bind_gym).
+_OVERFLOWING_PRESETS = frozenset({'standard-combat-compact-play-v1'})
+
+
+def _refuse_overflowing_preset(template: Path) -> None:
+    import tomllib
+    environment = tomllib.loads(Path(template).read_text()).get('environment', {})
+    if environment.get('standard_view_preset') in _OVERFLOWING_PRESETS:
+        raise ValueError('baseline training and panels refuse the play compact preset; '
+                         'use standard-combat-compact-v1 (sized to the entry bounds)')
+
+
 def _additional_panels(plan: Mapping) -> list[tuple[str, dict]]:
     """(recipe path, evaluation settings) per additional panel; settings default to the plan's."""
     panels = []
@@ -365,6 +378,7 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
     journal = _Journal(output / 'progress.jsonl', clock, started)
     gate = _GpuGate(plan, deps, clock, journal, budget)
     template = root / plan['template']
+    _refuse_overflowing_preset(template)
     recipe_path = root / plan['recipe']
     prepared = output / 'prepared'
     summary: dict = {'schema': SUMMARY_SCHEMA, 'plan': plan, 'stop_reason': None,

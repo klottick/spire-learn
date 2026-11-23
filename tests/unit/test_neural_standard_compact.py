@@ -186,6 +186,31 @@ class CompactConfigTests(unittest.TestCase):
         projection = _stream_runtime_projection(config)
         self.assertEqual((projection["standard_view_layout"], projection["standard_view_preset"]),
                          ("compact", "standard-combat-compact-v1"))
+        # Dense v1.1.1 and dense v1.2.0 standard-standalone identities do not cross either.
+        with patch("builtins.__import__", side_effect=_refuse_torch):
+            for saved, expected in ((old, dense), (dense, old)):
+                with self.subTest(dense_epochs=True), self.assertRaisesRegex(
+                        CheckpointCompatibilityError, "raw-mode mapping"):
+                    validate_checkpoint_metadata(_metadata(identity=saved), expected, purpose="evaluate")
+
+    def test_mappings_for_view_accept_only_known_fingerprints(self):
+        contract = GYM_V1_2_0_CONTRACT
+        self.assertEqual(dict(contract.raw_mode_mappings_for_view(None)), dict(contract.raw_mode_mappings))
+        self.assertEqual(dict(contract.raw_mode_mappings_for_view(DENSE)), dict(contract.raw_mode_mappings))
+        self.assertEqual(dict(contract.raw_mode_mappings_for_view(COMPACT_PLAY)),
+                         {"standard-standalone": COMPACT_PLAY_MAPPING})
+        for fingerprint in ("0" * 64, contract.common_fingerprint):
+            with self.subTest(fingerprint=fingerprint), self.assertRaises(ValueError):
+                contract.raw_mode_mappings_for_view(fingerprint)
+        with self.assertRaises(ValueError):  # dense-only releases have no compact presets
+            GYM_V1_1_1_CONTRACT.raw_mode_mappings_for_view(COMPACT)
+
+    def test_baselines_refuse_the_play_preset(self):
+        from scripts.neural.baseline_entry import _refuse_overflowing_preset
+        _refuse_overflowing_preset(COMPACT_TEMPLATE)
+        _refuse_overflowing_preset(ROOT / "configs/neural/gym-1.1.1/standard-stream.toml")
+        with self.assertRaisesRegex(ValueError, "play compact preset"):
+            _refuse_overflowing_preset(ROOT / "configs/neural/profile-standard-1.2.0/template-16-play.toml")
 
 
 class CompactSchemaTests(unittest.TestCase):
@@ -444,10 +469,66 @@ def _cases_manifest(directory: Path, entries: list[dict]) -> Path:
     return path
 
 
+TABLE_1_2_0 = ARTIFACTS / "run-states/run-states-gym-1.2.0.json"
+CHARACTERS = ("ironclad", "silent", "defect", "watcher")
+
+
+def _table_states() -> list[dict]:
+    return json.loads(TABLE_1_2_0.read_text())["states"]
+
+
+def diverse_entries(states: list[dict], per_character: int = 8) -> list[dict]:
+    """A deterministic, diverse sample of real v1.2.0 entries for each character.
+
+    Per character (states in (run_id, floor) order): the largest deck, the most relics, the most
+    filled potion slots, the latest act, then evenly strided states up to ``per_character``.
+    """
+    chosen = []
+    for character in CHARACTERS:
+        rows = sorted((s for s in states if s["character"] == character),
+                      key=lambda s: (s["run_id"], s["floor"]))
+        picks = [max(rows, key=lambda s: len(s["entry"]["deck"])),
+                 max(rows, key=lambda s: len(s["entry"]["relics"])),
+                 max(rows, key=lambda s: sum(p is not None for p in s["entry"]["potions"])),
+                 max(rows, key=lambda s: (s["act"], s["floor"]))]
+        stride = max(1, len(rows) // per_character)
+        picks += rows[stride // 2::stride]
+        seen = []
+        for state in picks:
+            if state["entry"]["id"] not in [e["id"] for e in seen]:
+                seen.append(state["entry"])
+            if len(seen) == per_character:
+                break
+        chosen.extend(seen)
+    return chosen
+
+
+def near_capacity_entry(states: list[dict]) -> dict:
+    """An Ironclad entry filling the play preset: 96 permanent cards and 32 relics, full potions."""
+    from spire_learn.neural.entry_resources import load_entry_resources
+    resources = load_entry_resources()
+    ironclad = sorted((s for s in states if s["character"] == "ironclad"), key=lambda s: (s["run_id"], s["floor"]))
+    base = max(ironclad, key=lambda s: (len(s["entry"]["relics"]), len(s["entry"]["deck"])))["entry"]
+    refused = (set(resources.counter_required_relics()) | set(resources.bottle_relics())
+               | {"potion_belt", "black_blood", "mark_of_pain"})
+    counts = {}
+    for state in ironclad:
+        for relic in state["entry"]["relics"]:
+            if relic not in refused and relic != "burning_blood" and resources.admits_relic("ironclad", relic):
+                counts[relic] = counts.get(relic, 0) + 1
+    relics = ["burning_blood"] + sorted(counts, key=lambda r: (-counts[r], r))[:31]
+    deck = [dict(row) for row in base["deck"]]
+    deck = (deck * (96 // len(deck) + 1))[:96]
+    potions = next(s["entry"]["potions"] for s in ironclad
+                   if len(s["entry"]["potions"]) == 2 and all(p is not None for p in s["entry"]["potions"]))
+    entry = {key: value for key, value in base.items() if key != "bottled_cards"}  # no bottles here
+    return {**entry, "id": "near-capacity-play", "deck": sorted(deck, key=lambda r: (r["card"], r["upgrades"])),
+            "relics": relics, "relic_counters": {}, "potions": list(potions), "hp": base["max_hp"]}
+
+
 @unittest.skipUnless(_RUN_NATIVE, "set SPIRE_LEARN_RUN_NATIVE_INTEGRATION=1 in the approved v1.2.0 runtime")
 class GatedCompactTests(unittest.TestCase):
     ROWS = 8
-    STEPS = 160
 
     def setUp(self):
         from spire_lab import _native
@@ -457,99 +538,138 @@ class GatedCompactTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.dir = Path(self._tmp.name)
 
-    def _configs(self, entries, *, preset="standard-combat-compact-v1"):
+    def _configs(self, entries, *, preset="standard-combat-compact-v1", rows=None):
+        rows = self.ROWS if rows is None else rows
         manifest = _cases_manifest(self.dir, entries)
         fingerprint, mapping = ((COMPACT, COMPACT_MAPPING) if preset == "standard-combat-compact-v1"
                                 else (COMPACT_PLAY, COMPACT_PLAY_MAPPING))
-        texts = {"dense": dense_text(rows=self.ROWS),
-                 "compact": compact_text(rows=self.ROWS, preset=preset, fingerprint=fingerprint, mapping=mapping)}
+        texts = {"dense": dense_text(rows=rows),
+                 "compact": compact_text(rows=rows, preset=preset, fingerprint=fingerprint, mapping=mapping)}
         configs = {}
         for name, text in texts.items():
-            path = self.dir / f"{name}.toml"
+            path = self.dir / f"{name}-{preset}.toml"
             path.write_text(text.replace(f'manifest_path = "{CASES}"', f'manifest_path = "{manifest}"'))
             configs[name] = load_neural_config(path)
         return configs
 
-    def test_compact_and_dense_give_identical_policy_outputs(self):
-        """Step seeded states in both layouts; features and policy outputs are byte-identical on CPU."""
+    def _compare(self, entries, *, preset, rows, steps, seed):
+        """Step both layouts with the dense policy's sampled actions and compare everything.
+
+        Every frame either layout returns (reset outputs, every step's successors including
+        terminal ones, before any reset) is compared: widened bytes, encoded values/known/
+        occupied/coverage/mask, critic values and logits. Each pre-step batch also compares
+        sampled and deterministic ``act`` choices.
+        """
         import torch
         from spire_learn.neural.features import encode_frames
         from spire_learn.neural.model import build_policy
-        from tests.unit.test_neural_standard_stream_runtime import smoke_states
-        entries = [state["entry"] for state in smoke_states(runs=6)][:16]
-        configs = self._configs(entries)
+        configs = self._configs(entries, preset=preset, rows=rows)
         drivers = {name: envs.make_driver(config, config.cases) for name, config in configs.items()}
         self.addCleanup(lambda: [driver.close() for driver in drivers.values()])
-        dense_schema, compact_schema = drivers["dense"].schema, drivers["compact"].schema
-        self.assertEqual(compact_schema.schema_fingerprint, COMPACT)
-        model = configs["dense"].model
-        policies = {name: build_policy(drivers[name].schema, model, seed=1103, device="cpu",
-                                       model_id="spire-learn-combat-ff-v1", features_id="spire-learn-combat-features-v1")
-                    for name in drivers}
+        compact_schema = drivers["compact"].schema
+        width = compact_schema.action_space.n
+        policies = {name: build_policy(drivers[name].schema, configs["dense"].model, seed=1103, device="cpu",
+                                       model_id="spire-learn-combat-ff-v1",
+                                       features_id="spire-learn-combat-features-v1") for name in drivers}
         for (name, tensor), (_, other) in zip(policies["dense"].state_dict().items(),
                                               policies["compact"].state_dict().items()):
             self.assertTrue(torch.equal(tensor, other), name)
-        ids = [entry["id"] for entry in entries]
-        seed = 500
-        rows = {}
-        for name, driver in drivers.items():
-            rows[name] = list(driver.reset(seeds=list(range(seed, seed + self.ROWS)),
-                                           entry_ids=ids[:self.ROWS]))
-        next_entry = self.ROWS
-        compared = terminals = 0
-        width = compact_schema.action_space.n
-        generators = {name: torch.Generator(device="cpu").manual_seed(77) for name in drivers}
-        for step in range(self.STEPS):
-            frames = {name: [row.frame for row in rows[name]] for name in drivers}
-            for dense_frame, compact_frame in zip(frames["dense"], frames["compact"]):
+        stats = {"frames_compared": 0, "terminal_frames_compared": 0, "decisions_compared": 0,
+                 "states_by_character": {}, "max_rows": {}}
+        character_of = {entry["id"]: entry["character"] for entry in entries}
+
+        def compare(tag, dense_frames, compact_frames):
+            for dense_frame, compact_frame in zip(dense_frames, compact_frames):
                 for key, buffer in compact_frame.tensors.items():
                     self.assertEqual(_widened(buffer, dense_frame.tensors[key].shape),
-                                     dense_frame.tensors[key].data, (step, key))
-            batches = {name: encode_frames(frames[name], drivers[name].schema, device="cpu") for name in drivers}
+                                     dense_frame.tensors[key].data, (tag, key))
+            batches = {"dense": encode_frames(dense_frames, drivers["dense"].schema, device="cpu"),
+                       "compact": encode_frames(compact_frames, compact_schema, device="cpu")}
             dense_batch, compact_batch = batches["dense"], batches["compact"]
             for group, values in compact_batch.values.items():
-                rows_c = values.shape[1]
-                self.assertEqual(values.dtype, dense_batch.values[group].dtype)
-                self.assertTrue(torch.equal(values, dense_batch.values[group][:, :rows_c]), group)
-                self.assertFalse(dense_batch.values[group][:, rows_c:].any().item(), group)
-                self.assertTrue(torch.equal(compact_batch.known[group], dense_batch.known[group][:, :rows_c]))
-                self.assertFalse(dense_batch.known[group][:, rows_c:].any().item())
+                count = values.shape[1]
+                self.assertTrue(torch.equal(values, dense_batch.values[group][:, :count]), (tag, group))
+                self.assertFalse(dense_batch.values[group][:, count:].any().item(), (tag, group))
+                self.assertTrue(torch.equal(compact_batch.known[group], dense_batch.known[group][:, :count]))
+                self.assertFalse(dense_batch.known[group][:, count:].any().item())
                 if group in compact_batch.occupied:
-                    self.assertTrue(torch.equal(compact_batch.occupied[group],
-                                                dense_batch.occupied[group][:, :rows_c]))
+                    occupied = compact_batch.occupied[group]
+                    self.assertTrue(torch.equal(occupied, dense_batch.occupied[group][:, :count]))
+                    stats["max_rows"][group] = max(stats["max_rows"].get(group, 0),
+                                                   int(occupied.sum(dim=1).max().item()))
                 self.assertEqual(compact_batch.known_coverage[group].numpy().tobytes(),
-                                 dense_batch.known_coverage[group].numpy().tobytes(), group)
+                                 dense_batch.known_coverage[group].numpy().tobytes(), (tag, group))
             self.assertTrue(torch.equal(compact_batch.action_mask, dense_batch.action_mask[:, :width]))
             self.assertFalse(dense_batch.action_mask[:, width:].any().item())
             with torch.no_grad():
-                outputs = {name: policies[name](batches[name]) for name in drivers}
-            self.assertEqual(outputs["compact"].values.numpy().tobytes(), outputs["dense"].values.numpy().tobytes())
+                outputs = {name: policies[name](batches[name]) for name in batches}
+            self.assertEqual(outputs["compact"].values.numpy().tobytes(),
+                             outputs["dense"].values.numpy().tobytes(), tag)
             self.assertEqual(outputs["compact"].logits.numpy().tobytes(),
-                             outputs["dense"].logits[:, :width].contiguous().numpy().tobytes(), step)
-            choices = {name: policies[name].act(frames[name], generator=generators[name]) for name in drivers}
-            self.assertEqual(choices["compact"], choices["dense"], step)
-            compared += self.ROWS
-            actions = [choice.original_action_index for choice in choices["dense"]]
-            for name, driver in drivers.items():
-                transitions = driver.step(actions)
-                rows[name] = [transition.successor for transition in transitions]
-                ended = [transition.terminated or transition.truncated for transition in transitions]
-                if name == "dense":
-                    ended_dense = ended
-                else:
-                    self.assertEqual(ended, ended_dense)
-            if any(ended_dense):
-                terminals += sum(ended_dense)
-                mask = list(ended_dense)
-                entry_ids = []
-                for flag in mask:
-                    entry_ids.append(ids[next_entry % len(ids)] if flag else None)
-                    next_entry += flag
+                             outputs["dense"].logits[:, :width].contiguous().numpy().tobytes(), tag)
+            stats["frames_compared"] += len(dense_frames)
+
+        ids = [entry["id"] for entry in entries]
+        row_ids = [ids[index % len(ids)] for index in range(rows)]
+        rows_now = {name: list(driver.reset(seeds=list(range(seed, seed + rows)), entry_ids=row_ids))
+                    for name, driver in drivers.items()}
+        compare("reset", [r.frame for r in rows_now["dense"]], [r.frame for r in rows_now["compact"]])
+        next_entry = rows
+        generators = {name: torch.Generator(device="cpu").manual_seed(seed) for name in drivers}
+        for step in range(steps):
+            frames = {name: [row.frame for row in rows_now[name]] for name in drivers}
+            sampled = {name: policies[name].act(frames[name], generator=generators[name]) for name in drivers}
+            self.assertEqual(sampled["compact"], sampled["dense"], step)
+            greedy = {name: policies[name].act(frames[name], generator=None, deterministic=True)
+                      for name in drivers}
+            self.assertEqual(greedy["compact"], greedy["dense"], step)
+            stats["decisions_compared"] += rows
+            for entry_id in row_ids:
+                character = character_of[entry_id]
+                stats["states_by_character"][character] = stats["states_by_character"].get(character, 0) + 1
+            actions = [choice.original_action_index for choice in sampled["dense"]]
+            transitions = {name: driver.step(actions) for name, driver in drivers.items()}
+            ended = [t.terminated or t.truncated for t in transitions["dense"]]
+            self.assertEqual([t.terminated or t.truncated for t in transitions["compact"]], ended)
+            self.assertEqual([t.native_reward for t in transitions["compact"]],
+                             [t.native_reward for t in transitions["dense"]])
+            compare(f"step-{step}", [t.successor.frame for t in transitions["dense"]],
+                    [t.successor.frame for t in transitions["compact"]])
+            stats["terminal_frames_compared"] += sum(ended)
+            rows_now = {name: [t.successor for t in transitions[name]] for name in drivers}
+            if any(ended):
+                reset_ids = []
+                for index, flag in enumerate(ended):
+                    if flag:
+                        row_ids[index] = ids[next_entry % len(ids)]
+                        next_entry += 1
+                    reset_ids.append(row_ids[index] if flag else None)
                 for name, driver in drivers.items():
-                    rows[name] = list(driver.reset(seeds=[seed + step + index for index in range(self.ROWS)],
-                                                   entry_ids=entry_ids, reset_mask=mask))
-        self.assertGreater(terminals, 0)
-        evidence = {"states_compared": compared, "terminals": terminals, "steps": self.STEPS, "rows": self.ROWS}
+                    rows_now[name] = list(driver.reset(seeds=[seed + 1000 + step * rows + i for i in range(rows)],
+                                                       entry_ids=reset_ids, reset_mask=list(ended)))
+                compare(f"reset-{step}", [r.frame for r in rows_now["dense"]],
+                        [r.frame for r in rows_now["compact"]])
+        return stats
+
+    def test_compact_and_dense_give_identical_policy_outputs(self):
+        """Real v1.2.0 entries for all four characters: features and policy outputs byte-identical on CPU."""
+        if not TABLE_1_2_0.is_file():
+            self.skipTest("the local v1.2.0 run-states table is absent")
+        states = _table_states()
+        evidence = {"bounds": self._compare(diverse_entries(states), preset="standard-combat-compact-v1",
+                                            rows=self.ROWS, steps=300, seed=500)}
+        for character in CHARACTERS:
+            self.assertGreater(evidence["bounds"]["states_by_character"].get(character, 0), 0, character)
+        self.assertGreater(evidence["bounds"]["terminal_frames_compared"], 0)
+        # The play preset at its capacity edge: 96 permanent cards and 32 relics fill it exactly.
+        small = [s["entry"] for s in sorted(states, key=lambda s: (s["run_id"], s["floor"]))
+                 if s["character"] == "ironclad" and len(s["entry"]["deck"]) <= 40
+                 and len(s["entry"]["relics"]) <= 12][:3]
+        edge = near_capacity_entry(states)
+        evidence["play"] = self._compare([edge] + small, preset="standard-combat-compact-play-v1",
+                                         rows=4, steps=120, seed=900)
+        self.assertEqual(evidence["play"]["max_rows"]["permanent_cards"], 96)
+        self.assertEqual(evidence["play"]["max_rows"]["relics"], 32)
         (WORK / "compact-identical-outputs.json").write_text(json.dumps(evidence, sort_keys=True) + "\n")
 
     def test_capacity_overflow_is_a_driver_fault(self):

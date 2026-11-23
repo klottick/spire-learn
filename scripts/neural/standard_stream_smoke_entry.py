@@ -37,6 +37,12 @@ SMOKES = {
 }
 
 
+def _test_ids(suite) -> list[str]:
+    if isinstance(suite, unittest.TestSuite):
+        return [test_id for child in suite for test_id in _test_ids(child)]
+    return [suite.id()]
+
+
 def main() -> int:
     output = Path(os.environ['SPIRE_LEARN_RUNNER_OUTPUT'])
     if os.environ.get('SPIRE_LEARN_RUN_NATIVE_INTEGRATION') != '1':
@@ -49,12 +55,16 @@ def main() -> int:
         print(f'no Standard stream smoke for Gym revision {revision!r}', file=sys.stderr)
         return 2
     suite = unittest.defaultTestLoader.loadTestsFromNames(MODULES)
+    collected = set(_test_ids(suite))
     result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
     detail = lambda rows: [{'test': test.id(), 'message': str(message)[-4000:]} for test, message in rows]
     skipped = detail(result.skipped)
-    smoke_ran = not any(row['test'] in smoke for row in skipped)
+    # Ran = collected (a renamed or missing test is not "not skipped") and not skipped.
+    missing = [test for test in smoke if test not in collected]
+    smoke_ran = not missing and not any(row['test'] in smoke for row in skipped)
     document = {'schema': 'spire-learn-standard-stream-smoke-v1', 'gym_revision': revision,
-                'required_gated_tests': list(smoke), 'tests_run': result.testsRun,
+                'required_gated_tests': list(smoke), 'missing_required_tests': missing,
+                'tests_run': result.testsRun,
                 'failures': detail(result.failures), 'errors': detail(result.errors), 'skipped': skipped,
                 'smoke_ran': smoke_ran, 'successful': result.wasSuccessful() and smoke_ran,
                 'evidence': [json.loads(path.read_text()) for path in sorted(output.glob(

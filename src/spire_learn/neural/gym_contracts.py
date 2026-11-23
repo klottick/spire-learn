@@ -63,14 +63,16 @@ class GymContract:
     def raw_mode_mappings_for_view(self, standard_view_fingerprint: str | None) -> Mapping[str, str]:
         """The accepted raw-mode mappings for a Standard combat view fingerprint.
 
-        The dense view (or no Standard view) keeps ``raw_mode_mappings`` unchanged. A compact
+        The dense view (or no Standard view) keeps ``raw_mode_mappings`` unchanged; any other
+        fingerprint that is not one of the release's compact presets is refused. A compact
         preset fingerprint maps ``standard-standalone`` only (the Run's combat projection is
         dense only), under its own ID naming the compact schema and the preset's fingerprint,
         so dense and compact checkpoints never load into each other.
         """
-        if (standard_view_fingerprint is None
-                or standard_view_fingerprint not in self.standard_compact_fingerprints.values()):
+        if standard_view_fingerprint is None or standard_view_fingerprint == self.standard_combat_fingerprint:
             return self.raw_mode_mappings
+        if standard_view_fingerprint not in self.standard_compact_fingerprints.values():
+            raise ValueError("Standard combat view fingerprint is not accepted by this Gym release")
         mapping = f"{_STANDARD_COMPACT_MAPPING_ID}@{standard_view_fingerprint}"
         if self.rules_epoch is not None:
             mapping = f"{mapping}+{self.rules_epoch}"

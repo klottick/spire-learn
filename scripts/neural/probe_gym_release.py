@@ -22,6 +22,7 @@ def main():
     from spire_learn.neural.config import load_neural_config
     from spire_learn.neural.envs import make_driver
     from spire_learn.neural.features import feature_contract
+    from spire_learn.neural.contracts import INTEGER_DTYPES
     from spire_learn.neural.gym_contracts import CURRENT_CONTRACT
 
     prepared = json.loads(Path('/release/preparation.json').read_text())
@@ -96,7 +97,7 @@ def main():
                 adapter_checks.append({'mode': mode, 'config_sha256': config.config_sha256,
                     'batch_size': driver.batch_size, 'schema_revision': schema.gym_revision,
                     'fingerprint': schema.schema_fingerprint, 'feature_groups': len(plan.groups),
-                    'frame_bytes': sum((8 if tensor.dtype == 'int64' else 1)*__import__('math').prod(tensor.shape) for tensor in schema.tensors.values())})
+                    'frame_bytes': sum(INTEGER_DTYPES[tensor.dtype][1]*__import__('math').prod(tensor.shape) for tensor in schema.tensors.values())})
             finally: driver.close()
 
     expected = release['fingerprints']

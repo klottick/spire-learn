@@ -25,7 +25,7 @@ from .scenario_stream import ScenarioRecipe, ScenarioShard, generate_scenario_sh
 from .scenario_support import json_value, read_json
 from .standard_catalog import Validate, bind_gym
 from .standard_stream import (
-    DEFAULT_ALIASES, GENERATOR as STANDARD_GENERATOR, PANEL_SCHEMA as STANDARD_PANEL_SCHEMA, StandardRecipe,
+    DEFAULT_ALIASES, DEFAULT_ENTRY_RESOURCES, GENERATOR as STANDARD_GENERATOR, PANEL_SCHEMA as STANDARD_PANEL_SCHEMA, StandardRecipe,
     build_standard_panel, generate_standard_shard, levels_for_shard, load_standard_recipe,
 )
 
@@ -84,7 +84,8 @@ def _standard_cache_key(path: Path) -> tuple | None:
         spec = read_json(source).get("states_table")
         table = source.parent / spec["path"]
         return (str(source), data, str(table.resolve()), hashlib.sha256(table.read_bytes()).hexdigest(),
-                hashlib.sha256(DEFAULT_ALIASES.read_bytes()).hexdigest())
+                hashlib.sha256(DEFAULT_ALIASES.read_bytes()).hexdigest(),
+                hashlib.sha256(DEFAULT_ENTRY_RESOURCES.read_bytes()).hexdigest())
     except (OSError, ValueError, TypeError, KeyError):
         return None
 
@@ -107,6 +108,13 @@ def load_recipe(path: Path) -> Recipe:
             while len(_RECIPE_CACHE) > _RECIPE_CACHE_CAPACITY:
                 _RECIPE_CACHE.popitem(last=False)
     return recipe
+
+
+def require_recipe_revision(recipe: Recipe, gym_revision: str) -> None:
+    """A Standard recipe's table was built for one Gym revision; a config for another must not use it."""
+    if isinstance(recipe, StandardRecipe) and recipe.gym_revision != gym_revision:
+        raise ValueError(f"the Standard recipe's run-states table is for Gym {recipe.gym_revision}, "
+                         f"but the configuration is for Gym {gym_revision}")
 
 
 def generate_shard(recipe: Recipe, *, split: str, shard_index: int, arm: str) -> ScenarioShard:

@@ -74,6 +74,8 @@ MISC_DEFAULTS = {'genetic_algorithm': 1, 'ritual_dagger': 15}
 # Gym relic ids whose persistent counter no run file records (see _relic_counters): left at the
 # Gym default, and a state holding one is tagged relic_counter_defaulted. Keep in step with
 # standard_stream.DEFAULTED_COUNTER_RELICS.
+# This is the Gym 1.1.1 list only: Gym 1.2.0 tables pass the descriptor-derived list to ``state_at``
+# (``EntryResources.defaulted_counter_relics(RECORDED_COUNTER_RELICS)``); never rely on this default there.
 DEFAULTED_COUNTER_RELICS = ('pen_nib', 'nunchaku', 'ink_bottle', 'incense_burner', 'happy_flower', 'sundial',
                             'inserter', 'wing_boots', 'tiny_chest', 'matryoshka')
 # Gym relic ids whose counter a run file does record (``_relic_counters`` sets them, or drops the

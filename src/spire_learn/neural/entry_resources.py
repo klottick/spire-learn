@@ -19,6 +19,11 @@ SCHEMA_ID = "spire-lab-combat-entry-resources-v1"
 FINGERPRINT_PREFIX = b"spire-lab/combat-entry-resources/v1\0"
 PROFILE_ID = "standard-combat-v1"
 CATALOG_SCHEMA_ID = "spire-gym-standard-combat-catalog-v1"
+# The descriptor fingerprint each Gym revision's rules are pinned to. A table, recipe or cache that
+# used any other descriptor content fails closed (``standard_stream.load_standard_recipe``).
+EXPECTED_FINGERPRINTS = {
+    "4d198064b3b568b6f0d08d6e3937d236fbc48e9b": "4eafca3b0089e15735fb6aef24d594a084030438daa9738a1ac8cf6eab75dc5a",
+}
 DEFAULT_SNAPSHOT = Path(__file__).resolve().parents[3] / "configs/neural/standard/entry-resources-gym-1.2.0.json"
 
 
@@ -79,13 +84,17 @@ class EntryResources:
                             if rule.rule == "optional" and r not in recorded))
 
     def potion_slots(self, relics: Sequence[str], ascension: int) -> int:
-        """The slot count a fresh entry uses: the single with-belt count, or the base without it."""
-        row = self.document["potion_slots"]["allowed"][ascension]
+        """The slot count a fresh entry uses: the ascension's base count, plus the Belt's extra slots
+        when the Belt is owned. It must be one of the counts the descriptor allows for that case."""
+        slots = self.document["potion_slots"]
+        row = slots["allowed"][ascension]
         if row["ascension"] != ascension:
             raise ValueError("potion_slots.allowed is not indexed by ascension")
-        belt = self.document["potion_slots"]["potion_belt"]
-        counts = row["with_potion_belt"] if belt in relics else row["without_potion_belt"]
-        return counts[0]
+        belt = slots["potion_belt"] in relics
+        count = slots["base_by_ascension"][ascension] + (slots["belt_extra_slots"] if belt else 0)
+        if count not in row["with_potion_belt" if belt else "without_potion_belt"]:
+            raise ValueError("the descriptor's base slots and its allowed slots disagree")
+        return count
 
 
 def parse_entry_resources(document: Mapping[str, Any]) -> EntryResources:

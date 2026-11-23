@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 from .cases import _freeze_json
 from .curriculum import CurriculumSampler
-from .recipes import Recipe, generate_shard, load_recipe
+from .recipes import Recipe, generate_shard, load_recipe, require_recipe_revision
 from .scenario_stream import ScenarioShard
 from .scenario_support import content_sha256, json_value
 from .standard_stream import StandardRecipe
@@ -141,6 +141,7 @@ def normalize_stream_config(raw: Mapping[str, object], source: Path,
     recipe_path = (source.parent / table['recipe_path']).resolve()
     recipe = load_recipe(recipe_path)
     _require_recipe_mode(recipe, raw['mode'])
+    require_recipe_revision(recipe, raw['environment']['gym_revision'])
     if isinstance(recipe, StandardRecipe):
         from .config import require_standard_learner_identity
         require_standard_learner_identity(raw.get('accepted_identities') or [None])

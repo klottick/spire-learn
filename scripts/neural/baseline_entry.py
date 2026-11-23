@@ -664,7 +664,12 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, 
     settings = plan['evaluation'] if evaluation is None else evaluation
     evaluations = result_container.setdefault('evaluations', {})
     output.mkdir(parents=True, exist_ok=True)
-    panel = deps['build_panel'](deps['load_recipe'](recipe_path))
+    recipe = deps['load_recipe'](recipe_path)
+    recipe_revision = getattr(recipe, 'gym_revision', None)  # Standard recipes carry their table's Gym revision
+    if recipe_revision is not None and recipe_revision != plan['gym_revision']:
+        raise ValueError(f"panel recipe {recipe_path} is for Gym {recipe_revision}, "
+                         f"but the plan is for Gym {plan['gym_revision']}")
+    panel = deps['build_panel'](recipe)
     with (output / 'development-panel.json').open('x') as stream:
         stream.write(json.dumps(_json(panel), sort_keys=True) + '\n')
     rows = _panel_configs(panel, template, output / 'panel', plan, settings)

@@ -21,6 +21,10 @@ MAP = json.loads((ROOT / "configs/neural/standard/encounter-map.json").read_text
 ENCOUNTERS = json.loads((ROOT / "tests/fixtures/neural/gym-encounters.json").read_text())  # Gym 1.1.1 listing
 
 
+REV = "e3c13836bd1458be8a87b93160f5c350f78fcd80"  # Gym 1.1.1
+REV_1_2_0 = "4d198064b3b568b6f0d08d6e3937d236fbc48e9b"
+
+
 def _base():
     return json.loads((RUNS / "ironclad-base.json").read_text())
 
@@ -35,7 +39,7 @@ def _runs(count=1):
 
 
 def _build(runs, validate=lambda catalog: None, encounter_map=MAP, encounters=ENCOUNTERS):
-    return ex.build(runs, NAMES, encounters, encounter_map, validate, gym_revision="rev")
+    return ex.build(runs, NAMES, encounters, encounter_map, validate, gym_revision=REV)
 
 
 class ExtractTest(unittest.TestCase):
@@ -49,7 +53,7 @@ class ExtractTest(unittest.TestCase):
         keys = [(s["character"], s["run_id"], s["floor"]) for s in first["states"]]
         self.assertEqual(keys, sorted(keys))
         self.assertEqual(first["schema"], "spire-learn-run-states-v1")
-        self.assertEqual((first["aliases_sha256"], first["gym_revision"]), (NAMES.sha256, "rev"))
+        self.assertEqual((first["aliases_sha256"], first["gym_revision"]), (NAMES.sha256, REV))
         ids = [s["entry"]["id"] for s in first["states"]]
         self.assertEqual(len(ids), len(set(ids)))
 
@@ -184,11 +188,13 @@ class EntryResourcesExtractTest(unittest.TestCase):
         run["relics_obtained"].append({"floor": 5, "key": "Pen Nib"})
         return run
 
+    def _build_1_2_0(self, runs, resources=None):
+        return ex.build(runs, NAMES, ENCOUNTERS, MAP, lambda catalog: None, gym_revision=REV_1_2_0,
+                        entry_resources=self.RESOURCES if resources is None else resources)
+
     def test_extraction_tags_relic_counter_defaulted(self):
         run = self._with_pen_nib()
-        for resources in (None, self.RESOURCES):
-            document, _ = ex.build([run], NAMES, ENCOUNTERS, MAP, lambda catalog: None, gym_revision="rev",
-                                   entry_resources=resources)
+        for document, _ in (_build([run]), self._build_1_2_0([run])):
             by_floor = {s["floor"]: s for s in document["states"]}
             tagged = {f for f, s in by_floor.items() if "relic_counter_defaulted" in s["tags"]}
             self.assertTrue(tagged and all(f > 5 for f in tagged), tagged)
@@ -199,32 +205,56 @@ class EntryResourcesExtractTest(unittest.TestCase):
         run = self._with_pen_nib()
         counters = {r: rule for r, rule in self.RESOURCES.counters.items() if r != "pen_nib"}
         resources = dataclasses.replace(self.RESOURCES, counters=counters)
-        document, _ = ex.build([run], NAMES, ENCOUNTERS, MAP, lambda catalog: None, gym_revision="rev",
-                               entry_resources=resources)
+        # The pin is checked on the fingerprint: a descriptor with another one is refused outright.
+        with self.assertRaisesRegex(ValueError, "pinned"):
+            self._build_1_2_0([run], dataclasses.replace(resources, fingerprint="0" * 64))
+        document, _ = self._build_1_2_0([run], resources)
         self.assertTrue(all("relic_counter_defaulted" not in s["tags"] for s in document["states"]))
+
+    def test_table_records_the_descriptor_fingerprint_for_gym_1_2_0_only(self):
+        document, _ = self._build_1_2_0(_runs(1))
+        self.assertEqual(document["entry_resources_fingerprint"], self.RESOURCES.fingerprint)
+        self.assertNotIn("entry_resources_fingerprint", _build(_runs(1))[0])
+
+    def test_revision_and_resources_must_agree(self):
+        with self.assertRaisesRegex(ValueError, "entry_resources"):
+            ex.build(_runs(1), NAMES, ENCOUNTERS, MAP, lambda c: None, gym_revision=REV_1_2_0)
+        with self.assertRaisesRegex(ValueError, "entry_resources"):
+            ex.build(_runs(1), NAMES, ENCOUNTERS, MAP, lambda c: None, gym_revision=REV,
+                     entry_resources=self.RESOURCES)
+        with self.assertRaisesRegex(ValueError, "unsupported Gym revision"):
+            ex.build(_runs(1), NAMES, ENCOUNTERS, MAP, lambda c: None, gym_revision="rev")
 
     def test_potion_slots_follow_the_descriptor(self):
         run = _base()
         run["relics"].append("Potion Belt")
         run["relics_obtained"].append({"floor": 8, "key": "Potion Belt"})
-        document, _ = ex.build([run], NAMES, ENCOUNTERS, MAP, lambda catalog: None, gym_revision="rev",
-                               entry_resources=self.RESOURCES)
+        document, _ = self._build_1_2_0([run])
         entry = {s["floor"]: s for s in document["states"]}[10]["entry"]
         self.assertEqual(len(entry["potions"]), 4)
         legacy, _ = _build([run])
-        self.assertEqual(document, {**legacy, "gym_revision": "rev"})  # same rules at A20 on this fixture
+        self.assertEqual({k: v for k, v in document.items() if k not in ("gym_revision", "entry_resources_fingerprint")},
+                         {k: v for k, v in legacy.items() if k != "gym_revision"})
 
     def test_revision_comes_from_the_runtime_profile(self):
-        self.assertEqual(ex.profile_revision(ROOT / "configs/neural/gym-1.1.1/runtime.json"),
-                         "e3c13836bd1458be8a87b93160f5c350f78fcd80")
-        self.assertEqual(ex.profile_revision(ROOT / "configs/neural/gym-1.2.0/runtime.json"),
-                         "4d198064b3b568b6f0d08d6e3937d236fbc48e9b")
-        self.assertEqual(ex.GYM_REVISION, "e3c13836bd1458be8a87b93160f5c350f78fcd80")
+        self.assertEqual(ex.profile_revision(ROOT / "configs/neural/gym-1.1.1/runtime.json"), REV)
+        self.assertEqual(ex.profile_revision(ROOT / "configs/neural/gym-1.2.0/runtime.json"), REV_1_2_0)
+        self.assertEqual(ex.GYM_REVISION, REV)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "profile.json"
             path.write_text(json.dumps({"gym_revision": "0" * 40}))
             with self.assertRaises(ValueError):
                 ex.profile_revision(path)
+
+    def test_live_gym_must_match_the_profile_revision(self):
+        live = lambda revision, extension="spire-python": (lambda: {"revision": revision, "extension": extension})  # noqa: E731
+        ex.require_live_revision(REV_1_2_0, live(REV_1_2_0))
+        with self.assertRaisesRegex(ValueError, "profile"):  # the v1.2.0 Gym with the default v1.1.1 profile
+            ex.require_live_revision(REV, live(REV_1_2_0))
+        with self.assertRaisesRegex(ValueError, "profile"):
+            ex.require_live_revision(REV_1_2_0, live(REV))
+        with self.assertRaisesRegex(ValueError, "profile"):
+            ex.require_live_revision(REV, live(REV, "other"))
 
 
 class CollectRunsTest(unittest.TestCase):

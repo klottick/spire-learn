@@ -1078,5 +1078,16 @@ class TemplatePreparationTests(unittest.TestCase):
         self.assertEqual((default.device, default.rollout_rows), ("cpu", 4))
 
 
+class PanelRecipeRevisionTests(unittest.TestCase):
+    def test_panel_recipe_must_match_the_plan_revision(self):
+        plan = {"gym_revision": "e3c13836bd1458be8a87b93160f5c350f78fcd80", "evaluation": {}}
+        deps = {"load_recipe": lambda path: SimpleNamespace(gym_revision="4d198064b3b568b6f0d08d6e3937d236fbc48e9b"),
+                "build_panel": lambda recipe: self.fail("the panel must not be built")}
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaisesRegex(ValueError, "Gym"):
+                baseline_entry._evaluate({}, deps, plan, None, "recipe.json", Path(folder), None, None, None,
+                                         None, None, labels=())
+
+
 if __name__ == "__main__":
     unittest.main()

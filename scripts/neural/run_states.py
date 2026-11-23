@@ -23,14 +23,14 @@ import math
 import os
 from pathlib import Path
 import sys
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Mapping, Sequence
 
 if __package__ in (None, ''):
     _repo = Path(__file__).resolve().parents[2]
     sys.path[:0] = [str(_repo / 'src'), str(_repo)]
 
 from spire_learn.neural.entry_resources import (  # noqa: E402
-    DEFAULT_SNAPSHOT, EntryResources, gym_entry_resources, load_entry_resources,
+    DEFAULT_SNAPSHOT, EXPECTED_FINGERPRINTS, EntryResources, gym_entry_resources, load_entry_resources,
 )
 from spire_learn.neural.gym_contracts import GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT  # noqa: E402
 from spire_learn.neural.run_states import (  # noqa: E402
@@ -93,6 +93,19 @@ def profile_revision(path: Path) -> str:
     return revision
 
 
+def require_live_revision(revision: str, build_info: Callable[[], Mapping[str, object]]) -> None:
+    """Refuse when the Gym actually loaded is not the revision the table will record.
+
+    ``build_info`` is the loaded extension's ``build_info`` (injected in tests). Without this check
+    a missing or wrong ``--profile`` would label a table with one revision and the rules of another.
+    """
+    identity = build_info()
+    if identity.get('extension') != 'spire-python' or identity.get('revision') != revision:
+        raise ValueError(f'the loaded Spire Gym is revision {identity.get("revision")!r} '
+                         f'({identity.get("extension")!r}), but the runtime profile pins {revision!r}; '
+                         'pass the --profile of the runtime this container is running')
+
+
 def to_standard_entry(state: FightState, encounter: str, resources: EntryResources | None = None) -> dict:
     """The ``standard-combat-v1`` catalog entry for a state fought at ``encounter``.
 
@@ -141,6 +154,12 @@ def build(runs: Sequence[dict], names: NameAliases, encounters: Sequence[dict], 
     ``entry_resources`` is the Gym 1.2.0 descriptor: it supplies the potion-slot rule and the relics
     tagged ``relic_counter_defaulted``. Without it the Gym 1.1.1 rules apply.
     """
+    if gym_revision not in (GYM_V1_1_1_CONTRACT.source_revision, GYM_V1_2_0_CONTRACT.source_revision):
+        raise ValueError(f'unsupported Gym revision {gym_revision!r}')
+    if (entry_resources is not None) != (gym_revision == GYM_V1_2_0_CONTRACT.source_revision):
+        raise ValueError('entry_resources are required for Gym 1.2.0 tables and only for them')
+    if entry_resources is not None and entry_resources.fingerprint != EXPECTED_FINGERPRINTS[gym_revision]:
+        raise ValueError('the entry-resource descriptor is not the one pinned for this Gym revision')
     defaulted = (DEFAULTED_COUNTER_RELICS if entry_resources is None
                  else entry_resources.defaulted_counter_relics(RECORDED_COUNTER_RELICS))
     rows = {row['id']: row for row in encounters}
@@ -199,6 +218,8 @@ def build(runs: Sequence[dict], names: NameAliases, encounters: Sequence[dict], 
     if len(ids) != len(set(ids)):
         raise ValueError('state ids are not unique')
     document = {'schema': SCHEMA, 'aliases_sha256': names.sha256, 'gym_revision': gym_revision, 'states': kept}
+    if entry_resources is not None:  # Gym 1.2.0 tables only: the table hash then covers the descriptor
+        document['entry_resources_fingerprint'] = entry_resources.fingerprint
     return document, _report(outcomes, run_counts, kept, rejected)
 
 
@@ -373,6 +394,8 @@ def main(argv: list[str] | None = None) -> int:
     names = load_aliases(args.aliases)
     encounter_map = json.loads(args.encounter_map.read_text())['encounters']
     revision = profile_revision(args.profile)
+    from spire_lab import _native
+    require_live_revision(revision, _native.build_info)
     resources = None
     if revision == GYM_V1_2_0_CONTRACT.source_revision:
         resources = load_entry_resources(args.entry_resources)

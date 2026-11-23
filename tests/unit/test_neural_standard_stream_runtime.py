@@ -204,6 +204,58 @@ class StandardConfigTests(unittest.TestCase):
         self.assertIsNone(shipped.common_view_fingerprint)
 
 
+class RecipeRevisionTests(_StandardFixture):
+    """A Standard recipe's table is for one Gym revision; a config for the other must refuse it."""
+
+    V1_1_1 = "e3c13836bd1458be8a87b93160f5c350f78fcd80"
+    V1_2_0 = "4d198064b3b568b6f0d08d6e3937d236fbc48e9b"
+
+    def prepare_with(self, recipe_path: Path, template_revision: str, folder: str):
+        from spire_learn.neural.stream_runner import prepare_stream
+        root = Path(folder)
+        template = root / "template.toml"
+        template.write_text(standard_template_text(rows=4, steps=8).replace(self.V1_1_1, template_revision))
+        return prepare_stream(recipe_path, root / "out", arm="mixed", split="train", shard_index=0,
+                              template=template)
+
+    def test_preparation_refuses_a_recipe_of_the_other_revision(self):
+        with tempfile.TemporaryDirectory(dir=WORK) as folder:
+            _, sha = write_table(Path(folder), revision=self.V1_2_0)
+            other = Path(folder) / "recipe-1.2.0.json"
+            other.write_text(json.dumps(recipe_document(sha)))
+            with self.assertRaisesRegex(ValueError, "Gym"):  # a 1.1.1 template with the 1.2.0 recipe
+                self.prepare_with(other, self.V1_1_1, folder)
+            with self.assertRaisesRegex(ValueError, "Gym"):  # a 1.2.0 template with the 1.1.1 recipe
+                self.prepare_with(self.recipe_path, self.V1_2_0, folder)
+            self.assertFalse((Path(folder) / "out").exists())
+
+    def test_config_normalization_refuses_a_recipe_of_the_other_revision(self):
+        from spire_learn.neural.stream_resume import normalize_stream_config
+        import tomllib
+        with tempfile.TemporaryDirectory(dir=WORK) as folder:
+            root = Path(folder)
+            template = root / "template.toml"
+            template.write_text(standard_template_text(rows=4, steps=8))
+            from spire_learn.neural.stream_runner import prepare_stream
+            prepare_stream(self.recipe_path, root / "out", arm="mixed", split="train", shard_index=0,
+                           template=template)
+            source = root / "out/config.toml"
+            raw = tomllib.loads(source.read_text())
+            manifest = root / "out/shard-0.json"
+            # The matching revision passes the revision check (the rest of normalization then runs) ...
+            shard = recipes.generate_shard(self.recipe, split="train", shard_index=0, arm="mixed")
+            normalize_stream_config(raw, source, manifest, shard.manifest_sha256)
+            # ... the other revision is refused before anything is generated.
+            raw["environment"]["gym_revision"] = self.V1_2_0
+            with self.assertRaisesRegex(ValueError, "Gym"):
+                normalize_stream_config(raw, source, manifest, "0" * 64)
+
+    def test_panel_recipe_revision_must_match_the_plan(self):
+        recipes.require_recipe_revision(self.recipe, self.V1_1_1)
+        with self.assertRaisesRegex(ValueError, "Gym"):
+            recipes.require_recipe_revision(self.recipe, self.V1_2_0)
+
+
 class StandardSamplerTests(_StandardFixture):
     def test_sampler_accepts_standard_annotations_and_round_trips(self):
         shard = recipes.generate_shard(self.recipe, split="train", shard_index=2, arm="mixed")

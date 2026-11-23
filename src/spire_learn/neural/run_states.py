@@ -51,7 +51,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Collection, Iterable
 
 from spire_learn.neural.standard_names import NameAliases, normalize, split_card
 
@@ -74,8 +74,15 @@ MISC_DEFAULTS = {'genetic_algorithm': 1, 'ritual_dagger': 15}
 # Gym relic ids whose persistent counter no run file records (see _relic_counters): left at the
 # Gym default, and a state holding one is tagged relic_counter_defaulted. Keep in step with
 # standard_stream.DEFAULTED_COUNTER_RELICS.
+# This is the Gym 1.1.1 list only: Gym 1.2.0 tables pass the descriptor-derived list to ``state_at``
+# (``EntryResources.defaulted_counter_relics(RECORDED_COUNTER_RELICS)``); never rely on this default there.
 DEFAULTED_COUNTER_RELICS = ('pen_nib', 'nunchaku', 'ink_bottle', 'incense_burner', 'happy_flower', 'sundial',
                             'inserter', 'wing_boots', 'tiny_chest', 'matryoshka')
+# Gym relic ids whose counter a run file does record (``_relic_counters`` sets them, or drops the
+# state). Every other relic with an optional counter in the Gym 1.2.0 entry-resource descriptor
+# is left at the Gym default (``EntryResources.defaulted_counter_relics``).
+RECORDED_COUNTER_RELICS = ('neows_lament', 'omamori', 'girya', 'ancient_tea_set', 'nloths_hungry_face',
+                           'maw_bank', 'lizard_tail')
 CURSES = frozenset({'AscendersBane', 'Clumsy', 'CurseOfTheBell', 'Decay', 'Doubt', 'Injury',
                     'Necronomicurse', 'Normality', 'Pain', 'Parasite', 'Pride', 'Regret', 'Shame',
                     'Writhe'})
@@ -1270,8 +1277,12 @@ def run_history(run: dict, names: NameAliases) -> RunHistory:
 
 
 def state_at(run: dict, fight: FightFloor, names: NameAliases,
-             history: RunHistory | None = None) -> FightState | Drop:
+             history: RunHistory | None = None,
+             defaulted_counters: Collection[str] = DEFAULTED_COUNTER_RELICS) -> FightState | Drop:
     """The state entering ``fight``, or why it cannot be rebuilt exactly.
+
+    ``defaulted_counters`` are the relics tagged ``relic_counter_defaulted``: the Gym 1.1.1 list by
+    default, or ``EntryResources.defaulted_counter_relics(RECORDED_COUNTER_RELICS)`` for Gym 1.2.0.
 
     ``history`` is ``run_history(run, names)``; pass it to rebuild many fights of one run
     without recomputing it. It must come from this same, unmodified run.
@@ -1331,7 +1342,7 @@ def state_at(run: dict, fight: FightFloor, names: NameAliases,
     counters = _relic_counters(run, at, relic_names, sources, names, deck_history.omamori_negations)
     if isinstance(counters, Drop):
         return counters
-    if any(relic in DEFAULTED_COUNTER_RELICS for relic in relics):
+    if any(relic in defaulted_counters for relic in relics):
         tags.append('relic_counter_defaulted')
     hp, max_hp, gold = resources
     if 'MawBank' in relic_names or ('MawBank' in sources and sources['MawBank'] < at):

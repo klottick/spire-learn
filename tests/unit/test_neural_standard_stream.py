@@ -11,7 +11,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from spire_learn.neural import run_states
 from spire_learn.neural import standard_stream as ss
+from spire_learn.neural.entry_resources import DEFAULT_SNAPSHOT, load_entry_resources
 from spire_learn.neural.cases import _parse_case
 from spire_learn.neural.scenario_support import canonical_bytes, content_sha256, json_value
 from spire_learn.neural.standard_catalog import CatalogRejected
@@ -20,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ALIASES = ROOT / "configs/neural/standard/name-aliases.json"
 ALIASES_SHA = hashlib.sha256(ALIASES.read_bytes()).hexdigest()
 SHIPPED = ROOT / "configs/neural/baalorlord-standard-v1/recipe.json"
+SHIPPED_1_2_0 = ROOT / "configs/neural/baalorlord-standard-gym-1.2.0/recipe.json"
 
 EXTRAS = ("inflame", "shrug_it_off", "pommel_strike", "anger", "regret", "searing_blow", "ritual_dagger")
 OTHER_RELICS = ("neows_lament", "vajra", "anchor", "lantern", "bag_of_marbles", "akabeko", "omamori", "potion_belt",
@@ -74,10 +77,16 @@ def synthetic_states(runs=400, seed=7):
     return states
 
 
-def write_table(directory: Path, states=None, *, aliases_sha=ALIASES_SHA) -> tuple[Path, str]:
-    document = {"aliases_sha256": aliases_sha, "gym_revision": "e3c13836bd1458be8a87b93160f5c350f78fcd80",
+GYM_1_1_1 = "e3c13836bd1458be8a87b93160f5c350f78fcd80"
+GYM_1_2_0 = "4d198064b3b568b6f0d08d6e3937d236fbc48e9b"
+
+
+def write_table(directory: Path, states=None, *, aliases_sha=ALIASES_SHA, revision=GYM_1_1_1) -> tuple[Path, str]:
+    document = {"aliases_sha256": aliases_sha, "gym_revision": revision,
                 "schema": "spire-learn-run-states-v1",
                 "states": synthetic_states() if states is None else states}
+    if revision == GYM_1_2_0:  # Gym 1.2.0 tables record the descriptor they were extracted under
+        document["entry_resources_fingerprint"] = load_entry_resources().fingerprint
     data = canonical_bytes(document)
     path = directory / "run-states.json"
     path.write_bytes(data)
@@ -117,6 +126,159 @@ class _Fixture(unittest.TestCase):
 
     def fuzz(self, state, level, seed=0):
         return ss.fuzz(state, level, self.recipe.pools, random.Random(seed))
+
+
+class EntryResourceRulesTest(unittest.TestCase):
+    """Gym 1.2.0 tables take their per-relic rules from the descriptor; 1.1.1 tables keep the constants."""
+
+    def recipe_for(self, directory, revision):
+        _, sha = write_table(Path(directory), revision=revision)
+        path = Path(directory) / "recipe.json"
+        path.write_text(json.dumps(recipe_document(sha)))
+        return ss.load_standard_recipe(path)
+
+    def test_counter_required_relics_follow_descriptor(self):
+        resources = load_entry_resources()
+        self.assertEqual(resources.counter_required_relics(), ("neows_lament",))
+        with tempfile.TemporaryDirectory() as tmp:
+            recipe = self.recipe_for(tmp, GYM_1_2_0)
+        seen = {r for s in recipe.states if s["run_id"] and ss.run_split(s["run_id"]) == "train"
+                for r in s["entry"]["relics"]}
+        excluded = set(resources.counter_required_relics()) | set(resources.bottle_relics()) | set(
+            ss.STARTER_RELICS["ironclad"])
+        self.assertEqual(set(recipe.pools.relics), seen - excluded)
+        self.assertIn("neows_lament", seen)
+        self.assertEqual(recipe.pools.defaulted_counters, resources.defaulted_counter_relics(
+            run_states.RECORDED_COUNTER_RELICS))
+        self.assertEqual(recipe.pools.slots, (2, 4))
+
+    def test_descriptor_agrees_with_code_for_gym_1_1_1_rules(self):
+        resources = load_entry_resources()
+        self.assertEqual(set(ss.BOTTLES), set(resources.bottle_relics()))
+        self.assertEqual(set(ss.NO_DEFAULT_COUNTER), set(resources.counter_required_relics()))
+        self.assertEqual(set(resources.defaulted_counter_relics(run_states.RECORDED_COUNTER_RELICS))
+                         - set(ss.DEFAULTED_COUNTER_RELICS), {"circlet"})
+        self.assertEqual(set(ss.DEFAULTED_COUNTER_RELICS)
+                         - set(resources.defaulted_counter_relics(run_states.RECORDED_COUNTER_RELICS)), set())
+
+    def test_gym_1_1_1_tables_keep_the_constants(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            recipe = self.recipe_for(tmp, GYM_1_1_1)
+        self.assertEqual(recipe.pools.defaulted_counters, ss.DEFAULTED_COUNTER_RELICS)
+        self.assertNotIn("circlet", recipe.pools.defaulted_counters)
+
+    def test_defaulted_tag_for_gym_1_2_0_includes_circlet(self):
+        state = _state("1", 3, 1, "monster", "cultist", [_row("strike")] * 4, ["burning_blood", "circlet"])
+        self.assertEqual(ss._tags(state, state["entry"]), [])
+        self.assertEqual(ss._tags(state, state["entry"], ("circlet",)), ["relic_counter_defaulted"])
+
+    def snapshot_variant(self, directory):
+        """A descriptor whose rules differ (Pen Nib has no counter, Girya requires one) and whose
+        fingerprint is recomputed, so it is internally consistent but not the pinned one."""
+        from spire_learn.neural.entry_resources import descriptor_fingerprint
+        document = json.loads(DEFAULT_SNAPSHOT.read_text())
+        for relic in document["relics"]:
+            if relic["id"] == "pen_nib":
+                relic["counter"] = None
+            if relic["id"] == "girya":
+                relic["counter"]["rule"] = "required"
+        document["fingerprint"] = descriptor_fingerprint(document)
+        path = Path(directory) / "variant.json"
+        path.write_text(json.dumps(document))
+        return path
+
+    def test_descriptor_is_part_of_the_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.recipe_for(tmp, GYM_1_2_0)  # the pinned descriptor loads
+            variant = self.snapshot_variant(tmp)
+            with self.assertRaisesRegex(ValueError, "entry-resource descriptor"):
+                ss.load_standard_recipe(Path(tmp) / "recipe.json", entry_resources_path=variant)
+            # A table that does not record the descriptor, or a v1.1.1 table that does, is refused.
+            document = json.loads((Path(tmp) / "run-states.json").read_text())
+            for name, change in (("missing", lambda d: d.pop("entry_resources_fingerprint")),
+                                 ("wrong", lambda d: d.update(entry_resources_fingerprint="0" * 64)),
+                                 ("1.1.1 with field", lambda d: d.update(gym_revision=GYM_1_1_1))):
+                other = json.loads(json.dumps(document))
+                change(other)
+                data = canonical_bytes(other)
+                table = Path(tmp) / "other.json"
+                table.write_bytes(data)
+                path = Path(tmp) / f"recipe-{name.replace(' ', '-')}.json"
+                path.write_text(json.dumps(recipe_document(hashlib.sha256(data).hexdigest(),
+                                                           states_table={"path": "other.json",
+                                                                         "sha256": hashlib.sha256(data).hexdigest()})))
+                with self.subTest(name), self.assertRaisesRegex(ValueError, "entry-resource"):
+                    ss.load_standard_recipe(path)
+
+    def test_shard_cache_is_keyed_by_the_descriptor(self):
+        from spire_learn.neural.entry_resources import parse_entry_resources
+        with tempfile.TemporaryDirectory() as tmp:
+            recipe = self.recipe_for(tmp, GYM_1_2_0)
+            variant = parse_entry_resources(json.loads(Path(self.snapshot_variant(tmp)).read_text()))
+        other = dataclasses.replace(recipe, entry_resources=variant)  # same recipe sha, other rules
+        self.assertEqual(other.sha256, recipe.sha256)
+        self.assertNotEqual(other.pools.defaulted_counters, recipe.pools.defaulted_counters)
+        ss.clear_shard_cache()
+        first = ss.generate_standard_shard(recipe, split="train", shard_index=0, validate=NO_FUZZ)
+        second = ss.generate_standard_shard(other, split="train", shard_index=0, validate=NO_FUZZ)
+        self.assertIsNot(first, second)
+        self.assertNotEqual(first.annotations, second.annotations)
+
+    def test_fuzzed_in_relic_with_a_recorded_counter_is_tagged_for_gym_1_2_0(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            recipe = self.recipe_for(tmp, GYM_1_2_0)
+        pools = dataclasses.replace(recipe.pools, relics=("girya",))
+        state = _state("1", 3, 1, "monster", "cultist", [_row("strike")] * 4, ["burning_blood", "anchor"])
+        entry, _ = ss.fuzz(state, 1, pools, random.Random(0))
+        self.assertEqual((entry["relics"], entry["relic_counters"]), (["burning_blood", "girya"], {}))
+        self.assertIn("relic_counter_defaulted",
+                      ss._tags(state, entry, pools.defaulted_counters, pools.optional_counters))
+        # A Girya the state already held keeps its counter and is not tagged; a relic without a counter is not either.
+        held = _state("2", 3, 1, "monster", "cultist", [_row("strike")] * 4, ["burning_blood", "girya"],
+                      counters={"girya": 2})
+        self.assertEqual(ss._tags(held, held["entry"], pools.defaulted_counters, pools.optional_counters), [])
+        plain = json_value(state["entry"])
+        plain["relics"].append("vajra")
+        self.assertEqual(ss._tags(state, plain, pools.defaulted_counters, pools.optional_counters), [])
+        # Gym 1.1.1 keeps its list-only rule.
+        self.assertNotIn("relic_counter_defaulted", ss._tags(state, entry))
+
+    def test_recipe_carries_the_table_gym_revision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self.recipe_for(tmp, GYM_1_2_0).gym_revision, GYM_1_2_0)
+            self.assertEqual(self.recipe_for(tmp, GYM_1_1_1).gym_revision, GYM_1_1_1)
+
+    def test_recipe_revision_and_descriptor_must_agree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r_1_2_0 = self.recipe_for(tmp, GYM_1_2_0)
+            r_1_1_1 = self.recipe_for(tmp, GYM_1_1_1)
+        with self.assertRaisesRegex(ValueError, "entry_resources"):
+            dataclasses.replace(r_1_2_0, entry_resources=None)
+        with self.assertRaisesRegex(ValueError, "entry_resources"):
+            dataclasses.replace(r_1_1_1, entry_resources=load_entry_resources())
+        with self.assertRaisesRegex(ValueError, "Gym revision"):
+            dataclasses.replace(r_1_1_1, gym_revision="0" * 40)
+
+    def test_unknown_table_revision_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "Gym revision"):
+                self.recipe_for(tmp, "0" * 40)
+
+    def test_gym_1_2_0_recipe_loads_and_pins_table(self):
+        document = json.loads(SHIPPED_1_2_0.read_text())
+        old = json.loads(SHIPPED.read_text())
+        self.assertEqual(document["generator_version"], "baalorlord-standard-v1")
+        self.assertEqual({k: v for k, v in document.items() if k != "states_table"},
+                         {k: v for k, v in old.items() if k != "states_table"})
+        self.assertEqual([s["from_shard"] for s in document["fuzz_schedule"]], [0, 99, 198, 297])
+        self.assertTrue(document["states_table"]["path"].endswith("run-states/run-states-gym-1.2.0.json"))
+        table = (SHIPPED_1_2_0.parent / document["states_table"]["path"]).resolve()
+        if not table.is_file():
+            self.skipTest("local Gym 1.2.0 run-states table is absent")
+        self.assertEqual(hashlib.sha256(table.read_bytes()).hexdigest(), document["states_table"]["sha256"])
+        recipe = ss.load_standard_recipe(SHIPPED_1_2_0)
+        self.assertEqual(recipe.table_sha256, document["states_table"]["sha256"])
+        self.assertEqual(json.loads(table.read_bytes())["gym_revision"], GYM_1_2_0)
 
 
 class SplitTest(unittest.TestCase):

@@ -1,0 +1,22 @@
+{
+ "schema": "spire-learn-standard-recipe-v1",
+ "generator_version": "baalorlord-standard-v1",
+ "states_table": {
+  "path": "../../../artifacts/development/neural-combat/run-states/run-states-gym-1.2.0.json",
+  "sha256": "f4c2ae7a5d5d48277d460ec27a18adf50c437c60660e6e8595fb7ad0045350d0"
+ },
+ "character": "ironclad",
+ "ascension": 20,
+ "generator_seed": 20261120,
+ "shard_size": 256,
+ "split_fractions": [0.8, 0.1, 0.1],
+ "fuzz_levels_max": 4,
+ "fuzz_schedule": [
+  {"from_shard": 0, "levels": [0]},
+  {"from_shard": 99, "levels": [0, 1]},
+  {"from_shard": 198, "levels": [0, 1, 2]},
+  {"from_shard": 297, "levels": [0, 1, 2, 4]}
+ ],
+ "redraw_bound": 8,
+ "excluded_strata": []
+}

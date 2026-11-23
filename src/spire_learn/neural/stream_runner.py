@@ -19,7 +19,7 @@ from .scenario_stream import (
     ScenarioRecipe, _composition_split, generate_scenario_shard,
     load_scenario_recipe, validate_coverage_cycle,
 )
-from .recipes import generate_shard, is_standard_recipe_file, load_recipe
+from .recipes import generate_shard, is_standard_recipe_file, load_recipe, require_recipe_revision
 from .scenario_support import canonical_bytes, content_sha256, json_value
 from .standard_stream import levels_for_shard
 
@@ -243,6 +243,10 @@ def _standard_preparation(recipe_path: Path, destination: Path, *, arm: str, spl
     recipe = load_recipe(recipe_path)
     source_recipe = Path(recipe_path).read_bytes()
     table_path = (Path(recipe_path).resolve().parent / json.loads(source_recipe)['states_table']['path']).resolve()
+    document = tomllib.loads(Path(template).read_text())
+    if document.get('mode') != 'standard-standalone':
+        raise ValueError('a Standard recipe needs a standard-standalone template')
+    require_recipe_revision(recipe, document['environment']['gym_revision'])  # before any Gym call
     shard = generate_shard(recipe, split=split, shard_index=shard_index, arm=arm)
     files = {}
     def put(name, value):
@@ -254,9 +258,6 @@ def _standard_preparation(recipe_path: Path, destination: Path, *, arm: str, spl
     put(f'shard-{shard_index}.json', shard.manifest)
     put('catalog.json', shard.catalog)
     put('annotations.json', shard.annotations)
-    document = tomllib.loads(Path(template).read_text())
-    if document.get('mode') != 'standard-standalone':
-        raise ValueError('a Standard recipe needs a standard-standalone template')
     from .config import require_standard_learner_identity
     require_standard_learner_identity(document.get('accepted_identities') or [None])
     document.update(manifest_path=f'shard-{shard_index}.json', output_root='runs',

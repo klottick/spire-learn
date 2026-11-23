@@ -24,7 +24,8 @@ if __package__ in (None, ''):
     sys.path[:0] = [str(_repo / 'src'), str(_repo)]
 
 from spire_learn.neural.scenario_support import canonical_bytes, content_sha256, json_value  # noqa: E402
-from spire_learn.neural.standard_catalog import bind_gym, catalog, validate_entries  # noqa: E402
+from spire_learn.neural.recipes import gym_validator  # noqa: E402
+from spire_learn.neural.standard_catalog import catalog, validate_entries  # noqa: E402
 from spire_learn.neural.standard_stream import (  # noqa: E402
     build_standard_panel, generate_standard_shard, levels_for_shard, load_standard_recipe,
 )
@@ -54,7 +55,7 @@ def gym_check(manifest: dict, validate) -> dict:
     return {'entries': len(entries), 'validated': len(entries), 'resets': resets}
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, build_info=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('--recipe', type=Path, default=DEFAULT_RECIPE)
     parser.add_argument('--output', type=Path, default=os.environ.get('SPIRE_LEARN_RUNNER_OUTPUT'))
@@ -66,7 +67,8 @@ def main(argv: list[str] | None = None) -> int:
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     recipe = load_standard_recipe(args.recipe)
-    validate, _ = bind_gym()
+    # The checked path: refuses a Gym whose revision differs from the recipe's table revision.
+    validate = gym_validator('stream check', recipe, build_info=build_info)
     summary = {'schema': 'spire-learn-standard-stream-check-v1', 'recipe_sha256': recipe.sha256,
                'table_sha256': recipe.table_sha256, 'shards': {}, 'panels': {},
                'split_states': {split: len(recipe.states_for(split)) for split in ('train', 'selection', 'final')}}

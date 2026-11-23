@@ -239,25 +239,19 @@ def root_table(title: str, groups: dict[tuple, dict[str, int]], label: str) -> l
     ok = ("searched", "root")
     refused = {k for counts in groups.values() for k in counts if k not in ok and k != "single_legal"}
     every = sum(v for counts in groups.values() for k, v in counts.items() if k != "single_legal")
-    # A class below 0.5% of every decision here is folded into "other" so the tables stay readable.
     share = {k: sum(counts.get(k, 0) for counts in groups.values()) / every for k in refused} if every else {}
     classes = sorted(refused, key=lambda k: (-share.get(k, 0), k))
-    rest = sorted(refused - set(classes))
-    columns = [*classes, *(["other"] if rest else [])]
-    out = [title, _row([label, "decisions", "root", *columns]), _row(["---"] * (3 + len(columns)))]
+    out = [title, _row([label, "decisions", "root", *classes]), _row(["---"] * (3 + len(classes)))]
     total: dict[str, int] = defaultdict(int)
     for key in sorted(groups, key=lambda k: (k[0], KIND_ORDER.get(k[1], 9)) if len(k) > 1 else k):
         counts = {k: v for k, v in groups[key].items() if k != "single_legal"}
         n = sum(counts.values())
         for k, v in counts.items():
             total[k] += v
-        other = sum(counts.get(c, 0) for c in rest)
         out.append(_row([" ".join(str(part) for part in key), n, _pct(sum(counts.get(o, 0) for o in ok), n),
-                         *(_pct(counts.get(c, 0), n) for c in classes), *([_pct(other, n)] if rest else [])]))
+                         *(_pct(counts.get(c, 0), n) for c in classes)]))
     n = sum(total.values())
-    other = sum(total.get(c, 0) for c in rest)
-    out.append(_row(["all", n, _pct(sum(total.get(o, 0) for o in ok), n), *(_pct(total.get(c, 0), n) for c in classes),
-                     *([_pct(other, n)] if rest else [])]))
+    out.append(_row(["all", n, _pct(sum(total.get(o, 0) for o in ok), n), *(_pct(total.get(c, 0), n) for c in classes)]))
     out.append("")
     return out
 

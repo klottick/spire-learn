@@ -29,7 +29,7 @@ The shared panel identity SHA-256 is `2247fe2be2b32b66a746483b974c514301de19b0bb
 
 ## Selection search reference
 
-`t4-final-search` ran one fight per case with 32 samples per action, 80 playout steps, a 1,200-step fight cap, seed 20261117, dense branch observations and a four-CPU allocation. The reference uses heuristic playouts. Search won **221 of 256** (34 deaths and one escape). On the original level-0 entries it won **58 of 64** versus **63 of 64** recorded wins for Baalorlord. The tables use the `standard_results.py` join on (run_id, floor) and count his outcomes only at level 0. Escapes contribute neither wins nor deaths.
+`t4-final-search` ran one fight per case with 32 samples per action, 80 playout steps, a 1,200-step fight cap, seed 20261117, dense branch observations and a four-CPU allocation. The reference uses heuristic playouts. Commit `3101375` later changed search-branch faults from losses to errors, and the final search recorded zero such faults, so its results still hold. Search won **221 of 256** (34 deaths and one escape). On the original level-0 entries it won **58 of 64** versus **63 of 64** recorded wins for Baalorlord. The tables use the `standard_results.py` join on (run_id, floor) and count his outcomes only at level 0. Escapes contribute neither wins nor deaths.
 
 The search used the sole legal action directly on 646 decisions. It attempted a root on the remaining decisions. When Gym refused a root, the driver recorded the refusal class and chose the action with the heuristic. The root table uses attempted roots as its denominator. Gym refused 27 branch playouts. The run recorded zero branch faults.
 
@@ -138,6 +138,8 @@ The selection search refused 413 of 6,390 root attempts (6.46%). Gym v1.1.1 refu
 ## Training-fight root availability
 
 `t4-final-roots` opened and immediately closed a public search handle with minimal limits at every decision to test whether the binding can construct a public root. It ran zero branches, including at single-legal-action decisions.
+
+These tables include every decision, while the search root table excludes 646 single-legal-action decisions. A direct comparison of the root columns would mix those denominators.
 
 The corpus covers every train-split level-0 fight state for Ironclad, Silent, Defect and Watcher in the recipe's pinned v1.2.0 table. The split hashes the source run into eight train buckets out of ten. Each entry was replayed once with the play-before-end-turn heuristic, seed 20261117 plus the entry's sorted index within its character, and a 1,200-step cap. It includes event-room fights. Four entries began terminal and contribute zero decisions. The table reports decision-weighted shares. Gym's room kind `monster` is normal combat.
 

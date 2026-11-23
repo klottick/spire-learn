@@ -204,9 +204,10 @@ def play(catalog: dict, case: dict, player: str, view: View, *, seed: int, sampl
                 action = search_choice(env, view, observation, samples=samples, playout_steps=playout_steps,
                                        rng=rng, research_seed=seed * 1009 + step, stats=stats, roots=decision_roots)
                 if records is not None:
+                    (outcome,) = decision_roots
                     if roots is not None:
                         roots.update(decision_roots)
-                    records.append({'step': step, 'root_outcome': next(iter(decision_roots))})
+                    records.append({'step': step, 'root_outcome': outcome})
             observation, reward, terminated, truncated, info = env.step(action)
             if terminated or truncated:
                 return {'outcome': info.get('outcome') or ('victory' if reward > 0 else 'death' if reward < 0 else 'escaped'),
@@ -587,7 +588,7 @@ def main(argv=None) -> int:
     parser.add_argument('--per-tier', type=int, default=10)
     parser.add_argument('--samples', type=int, default=8)
     parser.add_argument('--playout-steps', type=int, default=40)
-    parser.add_argument('--max-steps', type=int, default=600)
+    parser.add_argument('--max-steps', type=int, help='fight step cap (default: 600, unavailable in root-availability mode)')
     parser.add_argument('--seed', type=int, default=20261117)
     parser.add_argument('--panel', action='store_true',
                         help="play the recipe's 64-case development panel with the search player only")
@@ -606,6 +607,9 @@ def main(argv=None) -> int:
                              "nothing is played")
     parser.add_argument('--trace-tier', help='also write trace.json for the first sampled case of this tier')
     arguments = parser.parse_args(argv)
+    if arguments.root_availability is not None and arguments.max_steps is not None:
+        parser.error('--max-steps cannot be used with --root-availability')
+    max_steps = 600 if arguments.max_steps is None else arguments.max_steps
     if not arguments.output.is_absolute():
         print('--output must be an absolute path', file=sys.stderr)
         return 2
@@ -629,19 +633,19 @@ def main(argv=None) -> int:
     if arguments.standard_panel is not None:
         standard = arguments.standard_panel if arguments.standard_panel.is_absolute() else _ROOT / arguments.standard_panel
         result = standard_panel_winnability(arguments.output, recipe=standard, samples=arguments.samples,
-                                            playout_steps=arguments.playout_steps, max_steps=arguments.max_steps,
+                                            playout_steps=arguments.playout_steps, max_steps=max_steps,
                                             seed=arguments.seed, limit=arguments.limit)
         print(json.dumps(result, sort_keys=True))
         return 0
     if arguments.panel:
         result = panel_ceiling(arguments.output, recipe=recipe, samples=arguments.samples,
-                               playout_steps=arguments.playout_steps, max_steps=arguments.max_steps,
+                               playout_steps=arguments.playout_steps, max_steps=max_steps,
                                seed=arguments.seed)
         print(json.dumps(result, sort_keys=True))
         return 0
     result = run(arguments.output, recipe=recipe, shards=range(*arguments.shards), tiers=set(arguments.tiers),
                  per_tier=arguments.per_tier, samples=arguments.samples, playout_steps=arguments.playout_steps,
-                 max_steps=arguments.max_steps, seed=arguments.seed, trace_tier=arguments.trace_tier)
+                 max_steps=max_steps, seed=arguments.seed, trace_tier=arguments.trace_tier)
     print(json.dumps({key: result[key] for key in ('cases', 'by_tier', 'search_stats', 'gate')}, sort_keys=True))
     return 0
 

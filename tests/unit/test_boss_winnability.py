@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import redirect_stderr
+import io
 import json
 from pathlib import Path
 import random
@@ -338,7 +340,6 @@ class BossWinnabilityTests(unittest.TestCase):
         self.assertEqual(rows[0]["act"], 2)
         self.assertEqual(result["by_stratum_level"]["2:monster:0"], {"victory": 1, "death": 1})
 
-
     def test_root_availability_records_class_kind_act_and_dome(self):
         import tempfile
         refusals = {1: "hidden intents are not modelled", 2: "draw knowledge exceeds the exact model"}
@@ -490,6 +491,15 @@ class BossWinnabilityTests(unittest.TestCase):
         self.assertEqual(result["panels"]["final"]["manifest_sha256"], "i" * 64)
         self.assertFalse(result["panels"]["final"]["scored"])
         self.assertEqual(result["panels"]["selection"]["cases"], 1)
+
+    def test_root_availability_rejects_explicit_max_steps(self):
+        stderr = io.StringIO()
+        with patch.object(bw, "root_availability", return_value={"characters": {}}) as measure:
+            with redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                bw.main(["--output", str(ROOT), "--root-availability", "recipe.json", "--max-steps=600"])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--max-steps cannot be used with --root-availability", stderr.getvalue())
+        measure.assert_not_called()
 
     def test_a_fight_terminal_at_reset_has_no_decisions_but_a_live_empty_mask_is_an_error(self):
         view = self.view

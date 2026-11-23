@@ -145,16 +145,27 @@ class BossWinnabilityTests(unittest.TestCase):
         self.assertEqual(choice, 1)
         self.assertEqual(stats["root_unavailable"], 1)
 
-    def test_refused_or_faulted_branches_score_as_losses(self):
+    def test_refused_branches_score_as_losses(self):
         observation = _observation(self.view, {0: "end_turn", 1: "play_card"}, [1, 1])
-        outcomes = {(0, 0): 0.0, (0, 1): 0.0, (1, 0): _Errors.Unsupported(), (1, 1): _Errors.Fault()}
+        outcomes = {(0, 0): 0.0, (0, 1): 0.0, (1, 0): _Errors.Unsupported(), (1, 1): 0.0}
         search = _Search(outcomes)
         stats = Counter()
         choice = bw.search_choice(_Env(search), self.view, observation, samples=2, playout_steps=5,
                                   rng=random.Random(0), research_seed=1, stats=stats)
         self.assertEqual(choice, 0)
-        self.assertEqual((stats["branch_refused"], stats["branch_fault"]), (1, 1))
+        self.assertEqual(stats["branch_refused"], 1)
         self.assertTrue(all(branch.closed for branch in search.branches))
+
+    def test_branch_fault_aborts_search_and_closes_handles(self):
+        observation = _observation(self.view, {0: "end_turn", 1: "play_card"}, [1, 1])
+        search = _Search({(0, 0): _Errors.Fault()})
+        stats = Counter()
+        with self.assertRaises(_Errors.Fault):
+            bw.search_choice(_Env(search), self.view, observation, samples=1, playout_steps=5,
+                             rng=random.Random(0), research_seed=1, stats=stats)
+        self.assertEqual(stats["branch_fault"], 1)
+        self.assertTrue(all(branch.closed for branch in search.branches))
+        self.assertTrue(search.closed)
 
     def test_balance_ignores_padded_enemy_rows(self):
         width_player = len(DESCRIPTOR["tensors"][[t["key"] for t in DESCRIPTOR["tensors"]].index("player")]["columns"])

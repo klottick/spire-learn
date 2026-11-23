@@ -157,7 +157,7 @@ def search_choice(env, view: View, observation, *, samples: int, playout_steps: 
                     total -= 1.0
                 except fault:
                     stats['branch_fault'] += 1
-                    total -= 1.0
+                    raise
                 finally:
                     try:
                         branch.close()

@@ -55,6 +55,32 @@ class StandardResultsTest(unittest.TestCase):
         self.assertIn("| 2 monster | 1 | 1 | 1 | 1 |", text)
 
 
+class SearchAndRootsTest(unittest.TestCase):
+    def test_search_only_tables_join_his_level_zero_and_hide_ids(self) -> None:
+        panel = [{"case_id": "zz-secret", "act": 2, "room_kind": "monster", "level": 0, "run_id": "42", "floor": 3,
+                  "search": {"outcome": "victory"}},
+                 {"case_id": "yy", "act": 2, "room_kind": "monster", "level": 1, "run_id": "42", "floor": 3,
+                  "search": {"outcome": "death"}}]
+        states = [{"character": "ironclad", "run_id": "42", "floor": 3, "won": False}]
+        text = sr.render_search(panel, states)
+        self.assertIn("Search wins 1 of 2.", text)
+        self.assertIn("| 2 monster | 2 | 1 | 1 | 0 |", text)
+        self.assertNotIn("zz-secret", text)
+        self.assertNotIn("42", text)
+
+    def test_root_availability_tables_split_by_class_kind_act_and_dome(self) -> None:
+        data = {"characters": {"ironclad": {
+            "fights": 3, "corpus_states": 9, "decisions": 8, "dome_fights": 1, "fight_outcomes": {},
+            "cells": {"1:monster:no_dome": {"root": 3, "draw knowledge exceeds the exact model": 1},
+                      "2:elite:dome": {"root": 1, "hidden intents are not modelled": 3}}}}}
+        text = sr.render_root_availability(data)
+        self.assertIn("Runic Dome in 1 fights (33.3%)", text)
+        self.assertIn("| 1 monster | 4 | 75.0% | 0.0% | 25.0% |", text)
+        dome = text.split("ironclad, Runic Dome holders:")[1].split("ironclad, no Runic Dome")[0]
+        self.assertIn("| 2 elite | 4 | 25.0% | 75.0% |", dome)
+        self.assertNotIn("1 monster", dome)
+
+
 class InputCheckTest(unittest.TestCase):
     PANEL = [{"case_id": "x", "act": 1, "room_kind": "elite", "level": 0, "run_id": "9", "floor": 7,
               "search": {"outcome": "victory"}}]

@@ -200,15 +200,129 @@ def render(r1: dict, r2: dict, panel: list[dict], states: list[dict]) -> str:
     return "\n".join(out)
 
 
+def render_search(panel: list[dict], states: list[dict]) -> str:
+    """Search wins by act x kind, by fuzz level and by act, beside his recorded level-0 outcomes."""
+    recorded = recorded_wins(states)
+    out: list[str] = []
+
+    def table(title, rows, label):
+        out.append(title)
+        out.append(_row([label, "cases", "search", "L0 cases", "his L0"]))
+        out.append(_row(["---"] * 5))
+        for g in rows:
+            out.append(_row([g["key"], g["n"], g["search"], g["his_n"], g["his"]]))
+        out.append("")
+
+    out.append(f"Search wins {sum(c['search']['outcome'] == 'victory' for c in panel)} of {len(panel)}.")
+    out.append("")
+    kinds = stratify(panel, {}, recorded,
+                     lambda c: (c["act"], KIND_ORDER.get(c["room_kind"], len(KIND_ORDER)), c["room_kind"]))
+    table("By act x kind:", [{**g, "key": f"{g['key'][0]} {g['key'][2]}"} for g in kinds], "Act / kind")
+    table("By act x kind x level:",
+          [{**g, "key": f"{g['key'][0]} {g['key'][2]} L{g['key'][3]}"}
+           for g in stratify(panel, {}, recorded,
+                             lambda c: (c["act"], KIND_ORDER[c["room_kind"]], c["room_kind"], c["level"]))],
+          "Act / kind / level")
+    table("By fuzz level:", [{**g, "key": f"L{g['key']}"}
+                             for g in stratify(panel, {}, recorded, lambda c: c["level"])], "Level")
+    table("By act:", [{**g, "key": f"act {g['key']}"}
+                      for g in stratify(panel, {}, recorded, lambda c: c["act"])], "Act")
+    return "\n".join(out)
+
+
+def _pct(part: int, whole: int) -> str:
+    return f"{100 * part / whole:.1f}%" if whole else "-"
+
+
+def root_table(title: str, groups: dict[tuple, dict[str, int]], label: str) -> list[str]:
+    """One row per group: decisions with a root (searched / root) and each refusal class, as shares."""
+    ok = ("searched", "root")
+    refused = {k for counts in groups.values() for k in counts if k not in ok and k != "single_legal"}
+    every = sum(v for counts in groups.values() for k, v in counts.items() if k != "single_legal")
+    share = {k: sum(counts.get(k, 0) for counts in groups.values()) / every for k in refused} if every else {}
+    classes = sorted(refused, key=lambda k: (-share.get(k, 0), k))
+    out = [title, _row([label, "decisions", "root", *classes]), _row(["---"] * (3 + len(classes)))]
+    total: dict[str, int] = defaultdict(int)
+    for key in sorted(groups, key=lambda k: (k[0], KIND_ORDER.get(k[1], 9)) if len(k) > 1 else k):
+        counts = {k: v for k, v in groups[key].items() if k != "single_legal"}
+        n = sum(counts.values())
+        for k, v in counts.items():
+            total[k] += v
+        out.append(_row([" ".join(str(part) for part in key), n, _pct(sum(counts.get(o, 0) for o in ok), n),
+                         *(_pct(counts.get(c, 0), n) for c in classes)]))
+    n = sum(total.values())
+    out.append(_row(["all", n, _pct(sum(total.get(o, 0) for o in ok), n), *(_pct(total.get(c, 0), n) for c in classes)]))
+    out.append("")
+    return out
+
+
+def render_search_roots(search: dict) -> str:
+    """Root outcome shares by act x kind of a search-reference output (``standard_panel.json``)."""
+    groups = {tuple(key.split(":")): counts for key, counts in search["root_outcomes"].items()}
+    groups = {(int(a), k): c for (a, k), c in groups.items()}
+    return "\n".join(root_table("Search-reference root outcomes (share of decisions with a root attempt):",
+                                 groups, "Act / kind"))
+
+
+def render_root_availability(data: dict) -> str:
+    """Root availability by act x kind, for every decision and for Runic Dome holders, per character."""
+    out: list[str] = []
+    for name, block in data["characters"].items():
+        fights, dome = block["fights"], block["dome_fights"]
+        out.append(f"{name}: {fights} fights of {block['corpus_states']} train states, {block['decisions']} decisions, "
+                   f"Runic Dome in {dome} fights ({_pct(dome, fights)}).")
+        out.append("")
+        for title, wanted in (("all entries", None), ("Runic Dome holders", "dome"), ("no Runic Dome", "no_dome")):
+            groups: dict[tuple, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+            for key, counts in block["cells"].items():
+                act, kind, held = key.split(":")
+                if wanted is None or held == wanted:
+                    for outcome, n in counts.items():
+                        groups[(int(act), kind)][outcome] += n
+            if groups:
+                out.extend(root_table(f"{name}, {title}:", groups, "Act / kind"))
+    return "\n".join(out)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--run1", required=True)
-    ap.add_argument("--run2", required=True)
-    ap.add_argument("--panel", required=True, help="standard_panel.jsonl")
-    ap.add_argument("--run-states", required=True)
+    ap.add_argument("--run1")
+    ap.add_argument("--run2")
+    ap.add_argument("--panel", help="standard_panel.jsonl")
+    ap.add_argument("--run-states")
+    ap.add_argument("--search-only", action="store_true",
+                    help="print the search tables only (no baseline replicates); needs --panel and --run-states")
+    ap.add_argument("--roots", help="root_availability.json: print its availability tables and stop")
     ap.add_argument("--search", help="standard_panel.json (default: beside --panel)")
     ap.add_argument("--recipe", default=str(DEFAULT_RECIPE))
     args = ap.parse_args()
+    if args.roots:
+        with open(args.roots) as f:
+            print(render_root_availability(json.load(f)))
+        return 0
+    needed = ("panel", "run_states") if args.search_only else ("run1", "run2", "panel", "run_states")
+    missing = [name for name in needed if not getattr(args, name)]
+    if missing:
+        ap.error("missing arguments: " + ", ".join("--" + name.replace("_", "-") for name in missing))
+    if args.search_only:
+        with open(args.panel) as f:
+            panel = [json.loads(line) for line in f if line.strip()]
+        data = Path(args.run_states).read_bytes()
+        search_path = Path(args.search) if args.search else Path(args.panel).with_name("standard_panel.json")
+        with open(search_path) as f:
+            search = json.load(f)
+        with open(args.recipe) as f:
+            recipe = json.load(f)
+        pin = (recipe.get("states_table") or {}).get("sha256")
+        if hashlib.sha256(data).hexdigest() != pin:
+            raise InputMismatch(f"run-states SHA256 is not the recipe pin {pin}")
+        if {c["room_kind"] for c in panel} - set(KIND_ORDER):
+            raise InputMismatch("panel holds room kinds outside monster/elite/boss")
+        print(render_search(panel, json.loads(data)["states"]))
+        if "root_outcomes" in search:
+            print()
+            print(render_search_roots(search))
+        return 0
     with open(args.run1) as f:
         r1 = json.load(f)
     with open(args.run2) as f:

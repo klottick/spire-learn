@@ -2,6 +2,7 @@
 """Extract Gym-validated Standard combat entries from public Slay the Spire run files.
 
     run_states.py extract --raw DIR [DIR...] --aliases PATH --output FILE --report FILE
+                          [--profile RUNTIME_JSON]   # the Gym revision to record; Gym 1.2.0 adds the entry-resource rules
     run_states.py stats --table FILE --output FILE
 
 Each fight of each run is rebuilt with ``spire_learn.neural.run_states``, mapped to a
@@ -28,8 +29,13 @@ if __package__ in (None, ''):
     _repo = Path(__file__).resolve().parents[2]
     sys.path[:0] = [str(_repo / 'src'), str(_repo)]
 
+from spire_learn.neural.entry_resources import (  # noqa: E402
+    DEFAULT_SNAPSHOT, EntryResources, gym_entry_resources, load_entry_resources,
+)
+from spire_learn.neural.gym_contracts import GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT  # noqa: E402
 from spire_learn.neural.run_states import (  # noqa: E402
-    Drop, FightState, as_int, fight_floors, run_history, state_at, CHARACTERS,
+    DEFAULTED_COUNTER_RELICS, RECORDED_COUNTER_RELICS, Drop, FightState, as_int, fight_floors, run_history, state_at,
+    CHARACTERS,
 )
 from spire_learn.neural.scenario_support import canonical_bytes  # noqa: E402
 from spire_learn.neural.standard_catalog import (  # noqa: E402
@@ -39,7 +45,8 @@ from spire_learn.neural.standard_names import NameAliases, load_aliases  # noqa:
 
 SCHEMA = 'spire-learn-run-states-v1'
 REPORT_SCHEMA = 'spire-learn-run-states-report-v1'
-GYM_REVISION = 'e3c13836bd1458be8a87b93160f5c350f78fcd80'
+GYM_REVISION = GYM_V1_1_1_CONTRACT.source_revision  # the default when no runtime profile is given
+DEFAULT_PROFILE = Path(__file__).resolve().parents[2] / 'configs/neural/gym-1.1.1/runtime.json'
 BURNING_KINDS = ('strength', 'max_hp', 'metallicize', 'regeneration')  # the Gym's order
 DROP_LIMIT = 0.10
 DEFAULT_ENCOUNTER_MAP = Path(__file__).resolve().parents[2] / 'configs/neural/standard/encounter-map.json'
@@ -78,9 +85,21 @@ def burning_kind(run_id: str, floor: int) -> str:
     return BURNING_KINDS[int.from_bytes(digest[:8], 'big') % len(BURNING_KINDS)]
 
 
-def to_standard_entry(state: FightState, encounter: str) -> dict:
-    """The ``standard-combat-v1`` catalog entry for a state fought at ``encounter``."""
-    slots = potion_slots(state.relics)
+def profile_revision(path: Path) -> str:
+    """The Gym revision a runtime profile pins; the table records this revision."""
+    revision = json.loads(Path(path).read_text())['gym_revision']
+    if revision not in (GYM_V1_1_1_CONTRACT.source_revision, GYM_V1_2_0_CONTRACT.source_revision):
+        raise ValueError(f'unsupported Gym revision in {path}: {revision!r}')
+    return revision
+
+
+def to_standard_entry(state: FightState, encounter: str, resources: EntryResources | None = None) -> dict:
+    """The ``standard-combat-v1`` catalog entry for a state fought at ``encounter``.
+
+    ``resources`` (Gym 1.2.0 descriptor) supplies the potion-slot rule; without it the Gym 1.1.1
+    rule of ``standard_catalog.potion_slots`` applies.
+    """
+    slots = potion_slots(state.relics) if resources is None else resources.potion_slots(state.relics, ASCENSION)
     if len(state.potions) > slots:
         raise ValueError(f'{len(state.potions)} potions for {slots} slots')
     entry = {
@@ -115,8 +134,15 @@ def _encounter_for(fight, encounter_map: dict, rows: dict) -> str | Drop:
 
 
 def build(runs: Sequence[dict], names: NameAliases, encounters: Sequence[dict], encounter_map: dict,
-          validate: Validate, *, gym_revision: str = GYM_REVISION) -> tuple[dict, dict]:
-    """The state table and its report for ``runs``; ``validate`` is the Gym's catalog check."""
+          validate: Validate, *, gym_revision: str = GYM_REVISION,
+          entry_resources: EntryResources | None = None) -> tuple[dict, dict]:
+    """The state table and its report for ``runs``; ``validate`` is the Gym's catalog check.
+
+    ``entry_resources`` is the Gym 1.2.0 descriptor: it supplies the potion-slot rule and the relics
+    tagged ``relic_counter_defaulted``. Without it the Gym 1.1.1 rules apply.
+    """
+    defaulted = (DEFAULTED_COUNTER_RELICS if entry_resources is None
+                 else entry_resources.defaulted_counter_relics(RECORDED_COUNTER_RELICS))
     rows = {row['id']: row for row in encounters}
     missing = sorted(set(encounter_map.values()) - set(rows))
     if missing:
@@ -145,7 +171,7 @@ def build(runs: Sequence[dict], names: NameAliases, encounters: Sequence[dict], 
             result: FightState | Drop = target
             if not isinstance(target, Drop):
                 try:
-                    result = state_at(run, fight, names, history)
+                    result = state_at(run, fight, names, history, defaulted)
                 except (ValueError, KeyError, TypeError) as error:
                     result = Drop('malformed_run', str(error)[:80])
             if isinstance(result, Drop):
@@ -157,7 +183,7 @@ def build(runs: Sequence[dict], names: NameAliases, encounters: Sequence[dict], 
             if state.burning:
                 tags.append('burning_kind_sampled')
             state = FightState(**{**state.__dict__, 'tags': tags})
-            candidates.append((state, to_standard_entry(state, target)))
+            candidates.append((state, to_standard_entry(state, target, entry_resources)))
     accepted, rejected = validate_entries([entry for _, entry in candidates], validate)
     reasons = {entry['id']: reason for entry, reason in rejected}
     kept: list[dict] = []
@@ -323,6 +349,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_argument('--raw', type=Path, nargs='+', required=True)
     sub.add_argument('--aliases', type=Path, required=True)
     sub.add_argument('--encounter-map', type=Path, default=DEFAULT_ENCOUNTER_MAP)
+    sub.add_argument('--profile', type=Path, default=DEFAULT_PROFILE,
+                     help='runtime profile naming the Gym revision the table records (default: Gym 1.1.1)')
+    sub.add_argument('--entry-resources', type=Path, default=DEFAULT_SNAPSHOT,
+                     help='descriptor snapshot, used when the profile pins Gym 1.2.0')
     sub.add_argument('--output', type=Path, required=True)
     sub.add_argument('--report', type=Path, required=True)
     stats = commands.add_parser('stats', help='aggregate the reconstructed table into per-stratum statistics')
@@ -342,13 +372,22 @@ def main(argv: list[str] | None = None) -> int:
 
     names = load_aliases(args.aliases)
     encounter_map = json.loads(args.encounter_map.read_text())['encounters']
+    revision = profile_revision(args.profile)
+    resources = None
+    if revision == GYM_V1_2_0_CONTRACT.source_revision:
+        resources = load_entry_resources(args.entry_resources)
+        if gym_entry_resources() != dict(resources.document):  # the committed snapshot must be the live descriptor
+            raise ValueError('the Gym entry-resource descriptor differs from the committed snapshot')
     validate, encounters = bind_gym()
-    document, report = build(collect_runs(args.raw), names, encounters, encounter_map, validate)
+    document, report = build(collect_runs(args.raw), names, encounters, encounter_map, validate,
+                             gym_revision=revision, entry_resources=resources)
     data = canonical_bytes(document)
     sha = hashlib.sha256(data).hexdigest()
     write_bytes(args.output, data)
     report = {**report, 'table_sha256': sha, 'states_kept': len(document['states']),
               'aliases_sha256': names.sha256, 'gym_revision': document['gym_revision']}
+    if resources is not None:
+        report['entry_resources_fingerprint'] = resources.fingerprint
     write_bytes(args.report, json.dumps(report, indent=1, sort_keys=True).encode() + b'\n')
     print(json.dumps({'sha256': sha, 'kept': len(document['states']),
                       'drop_rule': {c: v['drop_rule'] for c, v in report['characters'].items()}}))

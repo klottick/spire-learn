@@ -16,6 +16,8 @@ from pathlib import Path
 import re
 from typing import Any, Mapping
 
+from .entry_resources import EntryResources
+
 SCHEMA = "spire-learn-standard-name-aliases-v1"
 CHARACTERS = ("ironclad", "silent", "defect", "watcher")
 _STARTER_RELIC = {"ironclad": "burning_blood", "silent": "ring_of_the_snake",
@@ -116,9 +118,14 @@ def gym_card_metadata() -> dict[str, Any]:
     return card_metadata.load()
 
 
-def gym_rejections(aliases: NameAliases) -> list[list[str]]:
+def gym_rejections(aliases: NameAliases, resources: EntryResources | None = None) -> list[list[str]]:
     """[character, kind, id, reason] for every relic/potion target a one-entry
-    Standard combat catalog for that character rejects (needs the pinned runtime)."""
+    Standard combat catalog for that character rejects (needs the pinned runtime).
+
+    ``resources`` (the Gym entry-resource descriptor) supplies the required counters, the bottle
+    companions and the potion slots; without it the Gym 1.1.1 rules are assumed (Neow's Lament
+    counter 3, the three bottles, a Potion Belt adding two slots).
+    """
     from spire_lab.gymnasium import StandardCombatEnv
 
     def reason(character: str, relic: str | None, potion: str | None) -> str | None:
@@ -134,12 +141,19 @@ def gym_rejections(aliases: NameAliases) -> list[list[str]]:
             "id": "names", "character": character, "ascension": 0, "encounter": "cultist",
             "hp": 70, "max_hp": 80, "gold": 99, "deck": deck, "relics": relics, "relic_counters": {},
             "potions": ([potion] if potion else []) + [None] * 5}
-        entry["potions"] = entry["potions"][:5 if "potion_belt" in relics else 3]
-        if "neows_lament" in relics:
-            entry["relic_counters"] = {"neows_lament": 3}
-        bottles = {name: {"card": _DECK[character][index], "upgrades": 0, "misc": 0}
-                   for index, name in enumerate(("bottled_flame", "bottled_lightning", "bottled_tornado"))
-                   if name in relics}
+        if resources is None:
+            entry["potions"] = entry["potions"][:5 if "potion_belt" in relics else 3]
+            required = {"neows_lament": 3}
+            companions = {"bottled_flame": "attack", "bottled_lightning": "skill", "bottled_tornado": "power"}
+        else:
+            slots = resources.potion_slots(relics, 0)
+            entry["potions"] = ([potion] if potion else []) + [None] * (slots - (1 if potion else 0))
+            required = {name: resources.counters[name].first_value() for name in resources.counter_required_relics()}
+            companions = dict(resources.companions)
+        entry["relic_counters"] = {name: value for name, value in required.items() if name in relics}
+        card_of_type = dict(zip(("attack", "skill", "power"), _DECK[character]))
+        bottles = {name: {"card": card_of_type[companions[name]], "upgrades": 0, "misc": 0}
+                   for name in sorted(companions) if name in relics}
         if bottles:
             entry["bottled_cards"] = bottles
         catalog = {"catalog_schema_id": "spire-gym-standard-combat-catalog-v1",

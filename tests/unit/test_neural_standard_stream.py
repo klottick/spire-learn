@@ -11,7 +11,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from spire_learn.neural import run_states
 from spire_learn.neural import standard_stream as ss
+from spire_learn.neural.entry_resources import load_entry_resources
 from spire_learn.neural.cases import _parse_case
 from spire_learn.neural.scenario_support import canonical_bytes, content_sha256, json_value
 from spire_learn.neural.standard_catalog import CatalogRejected
@@ -20,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ALIASES = ROOT / "configs/neural/standard/name-aliases.json"
 ALIASES_SHA = hashlib.sha256(ALIASES.read_bytes()).hexdigest()
 SHIPPED = ROOT / "configs/neural/baalorlord-standard-v1/recipe.json"
+SHIPPED_1_2_0 = ROOT / "configs/neural/baalorlord-standard-gym-1.2.0/recipe.json"
 
 EXTRAS = ("inflame", "shrug_it_off", "pommel_strike", "anger", "regret", "searing_blow", "ritual_dagger")
 OTHER_RELICS = ("neows_lament", "vajra", "anchor", "lantern", "bag_of_marbles", "akabeko", "omamori", "potion_belt",
@@ -74,8 +77,12 @@ def synthetic_states(runs=400, seed=7):
     return states
 
 
-def write_table(directory: Path, states=None, *, aliases_sha=ALIASES_SHA) -> tuple[Path, str]:
-    document = {"aliases_sha256": aliases_sha, "gym_revision": "e3c13836bd1458be8a87b93160f5c350f78fcd80",
+GYM_1_1_1 = "e3c13836bd1458be8a87b93160f5c350f78fcd80"
+GYM_1_2_0 = "4d198064b3b568b6f0d08d6e3937d236fbc48e9b"
+
+
+def write_table(directory: Path, states=None, *, aliases_sha=ALIASES_SHA, revision=GYM_1_1_1) -> tuple[Path, str]:
+    document = {"aliases_sha256": aliases_sha, "gym_revision": revision,
                 "schema": "spire-learn-run-states-v1",
                 "states": synthetic_states() if states is None else states}
     data = canonical_bytes(document)
@@ -117,6 +124,72 @@ class _Fixture(unittest.TestCase):
 
     def fuzz(self, state, level, seed=0):
         return ss.fuzz(state, level, self.recipe.pools, random.Random(seed))
+
+
+class EntryResourceRulesTest(unittest.TestCase):
+    """Gym 1.2.0 tables take their per-relic rules from the descriptor; 1.1.1 tables keep the constants."""
+
+    def recipe_for(self, directory, revision):
+        _, sha = write_table(Path(directory), revision=revision)
+        path = Path(directory) / "recipe.json"
+        path.write_text(json.dumps(recipe_document(sha)))
+        return ss.load_standard_recipe(path)
+
+    def test_counter_required_relics_follow_descriptor(self):
+        resources = load_entry_resources()
+        self.assertEqual(resources.counter_required_relics(), ("neows_lament",))
+        with tempfile.TemporaryDirectory() as tmp:
+            recipe = self.recipe_for(tmp, GYM_1_2_0)
+        seen = {r for s in recipe.states if s["run_id"] and ss.run_split(s["run_id"]) == "train"
+                for r in s["entry"]["relics"]}
+        excluded = set(resources.counter_required_relics()) | set(resources.bottle_relics()) | set(
+            ss.STARTER_RELICS["ironclad"])
+        self.assertEqual(set(recipe.pools.relics), seen - excluded)
+        self.assertIn("neows_lament", seen)
+        self.assertEqual(recipe.pools.defaulted_counters, resources.defaulted_counter_relics(
+            run_states.RECORDED_COUNTER_RELICS))
+        self.assertEqual(recipe.pools.slots, (2, 4))
+
+    def test_descriptor_agrees_with_code_for_gym_1_1_1_rules(self):
+        resources = load_entry_resources()
+        self.assertEqual(set(ss.BOTTLES), set(resources.bottle_relics()))
+        self.assertEqual(set(ss.NO_DEFAULT_COUNTER), set(resources.counter_required_relics()))
+        self.assertEqual(set(resources.defaulted_counter_relics(run_states.RECORDED_COUNTER_RELICS))
+                         - set(ss.DEFAULTED_COUNTER_RELICS), {"circlet"})
+        self.assertEqual(set(ss.DEFAULTED_COUNTER_RELICS)
+                         - set(resources.defaulted_counter_relics(run_states.RECORDED_COUNTER_RELICS)), set())
+
+    def test_gym_1_1_1_tables_keep_the_constants(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            recipe = self.recipe_for(tmp, GYM_1_1_1)
+        self.assertEqual(recipe.pools.defaulted_counters, ss.DEFAULTED_COUNTER_RELICS)
+        self.assertNotIn("circlet", recipe.pools.defaulted_counters)
+
+    def test_defaulted_tag_for_gym_1_2_0_includes_circlet(self):
+        state = _state("1", 3, 1, "monster", "cultist", [_row("strike")] * 4, ["burning_blood", "circlet"])
+        self.assertEqual(ss._tags(state, state["entry"]), [])
+        self.assertEqual(ss._tags(state, state["entry"], ("circlet",)), ["relic_counter_defaulted"])
+
+    def test_unknown_table_revision_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "Gym revision"):
+                self.recipe_for(tmp, "0" * 40)
+
+    def test_gym_1_2_0_recipe_loads_and_pins_table(self):
+        document = json.loads(SHIPPED_1_2_0.read_text())
+        old = json.loads(SHIPPED.read_text())
+        self.assertEqual(document["generator_version"], "baalorlord-standard-v1")
+        self.assertEqual({k: v for k, v in document.items() if k != "states_table"},
+                         {k: v for k, v in old.items() if k != "states_table"})
+        self.assertEqual([s["from_shard"] for s in document["fuzz_schedule"]], [0, 99, 198, 297])
+        self.assertTrue(document["states_table"]["path"].endswith("run-states/run-states-gym-1.2.0.json"))
+        table = (SHIPPED_1_2_0.parent / document["states_table"]["path"]).resolve()
+        if not table.is_file():
+            self.skipTest("local Gym 1.2.0 run-states table is absent")
+        self.assertEqual(hashlib.sha256(table.read_bytes()).hexdigest(), document["states_table"]["sha256"])
+        recipe = ss.load_standard_recipe(SHIPPED_1_2_0)
+        self.assertEqual(recipe.table_sha256, document["states_table"]["sha256"])
+        self.assertEqual(json.loads(table.read_bytes())["gym_revision"], GYM_1_2_0)
 
 
 class SplitTest(unittest.TestCase):

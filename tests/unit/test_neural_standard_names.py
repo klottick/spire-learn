@@ -8,9 +8,11 @@ import os
 from pathlib import Path
 import unittest
 
+from spire_learn.neural.entry_resources import load_entry_resources
 from spire_learn.neural.standard_names import NameAliases, load_aliases
 
 ALIASES = Path(__file__).resolve().parents[2] / "configs/neural/standard/name-aliases.json"
+ENTRY_RESOURCES = Path(__file__).resolve().parents[2] / "configs/neural/standard/entry-resources-gym-1.2.0.json"
 _RUN_NATIVE = os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") == "1"
 
 
@@ -84,6 +86,33 @@ class StandardNamesTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_aliases(path)
 
+    def test_alias_targets_admitted_by_entry_resources(self):
+        resources = load_entry_resources(ENTRY_RESOURCES)
+        for character, pairs in self.aliases.relics_by_character.items():
+            for target in set(pairs.values()):
+                self.assertTrue(resources.admits_relic(character, target), (character, target))
+        for character, pairs in self.aliases.potions_by_character.items():
+            for target in set(pairs.values()):
+                self.assertTrue(resources.admits_potion(character, target), (character, target))
+        # Every card the descriptor admits has Gym metadata in the alias table.
+        self.assertLessEqual(resources.permanent_cards, self.aliases.card_ids)
+
+    def test_entry_resources_snapshot_is_authenticated(self):
+        import tempfile
+        resources = load_entry_resources(ENTRY_RESOURCES)
+        self.assertEqual(resources.fingerprint, "4eafca3b0089e15735fb6aef24d594a084030438daa9738a1ac8cf6eab75dc5a")
+        self.assertEqual(resources.counter_required_relics(), ("neows_lament",))
+        self.assertEqual(resources.bottle_relics(), ("bottled_flame", "bottled_lightning", "bottled_tornado"))
+        self.assertEqual([resources.potion_slots(r, 20) for r in ([], ["potion_belt"])], [2, 4])
+        self.assertEqual([resources.potion_slots(r, 10) for r in ([], ["potion_belt"])], [3, 5])
+        document = json.loads(ENTRY_RESOURCES.read_text())
+        document["relics"][0]["counter"] = {"default": None, "rule": "required", "values": [[1, 1]]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bad.json"
+            path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(ValueError, "fingerprint"):
+                load_entry_resources(path)
+
 
 @unittest.skipUnless(_RUN_NATIVE, "set SPIRE_LEARN_RUN_NATIVE_INTEGRATION=1 in the approved runtime")
 class StandardNamesGymTests(unittest.TestCase):
@@ -97,6 +126,13 @@ class StandardNamesGymTests(unittest.TestCase):
         self.assertEqual({row["id"]: row["type"] for row in metadata["cards"]}, document["gym_card_types"])
         self.assertEqual({row["id"]: row["max_upgrades"] for row in metadata["cards"]}, document["gym_card_max_upgrades"])
         self.assertEqual(gym_rejections(aliases), [])
+        self.assertEqual(gym_rejections(aliases, load_entry_resources(ENTRY_RESOURCES)), [])
+
+    def test_entry_resources_snapshot_matches_gym(self):
+        from spire_learn.neural.entry_resources import gym_entry_resources
+        live = gym_entry_resources()
+        self.assertEqual(live, json.loads(ENTRY_RESOURCES.read_text()))
+        self.assertEqual(load_entry_resources(ENTRY_RESOURCES).fingerprint, live["fingerprint"])
 
 
 if __name__ == "__main__":

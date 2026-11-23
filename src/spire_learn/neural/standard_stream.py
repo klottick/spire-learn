@@ -39,7 +39,7 @@ the extractor writes the table canonically and sorted, so the raw hash is alread
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 import hashlib
 import json
@@ -51,6 +51,9 @@ import threading
 from .cases import _freeze_json, _parse_case, environment_seed_for
 from .scenario_stream import ScenarioShard
 from .scenario_support import content_sha256, json_value, read_json
+from .entry_resources import DEFAULT_SNAPSHOT, EntryResources, load_entry_resources
+from .gym_contracts import GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT
+from .run_states import RECORDED_COUNTER_RELICS
 from .standard_catalog import Validate, potion_slots, validate_entries
 from .standard_names import NameAliases, load_aliases
 
@@ -72,6 +75,8 @@ MISC_DEFAULTS = {"genetic_algorithm": 1, "ritual_dagger": 15}  # Ruling A
 # (run_states._relic_counters); a state holding one is tagged ``relic_counter_defaulted``.
 DEFAULTED_COUNTER_RELICS = ("pen_nib", "nunchaku", "ink_bottle", "incense_burner", "happy_flower", "sundial",
                             "inserter", "wing_boots", "tiny_chest", "matryoshka")
+DEFAULT_ENTRY_RESOURCES = DEFAULT_SNAPSHOT
+_TABLE_REVISIONS = (GYM_V1_1_1_CONTRACT.source_revision, GYM_V1_2_0_CONTRACT.source_revision)
 PANEL_KINDS = ("monster", "elite", "boss")  # event fights are never panel strata
 PANEL_LEVELS = (0, 1, 2, 4)
 PANEL_PER_LEVEL = 64
@@ -125,12 +130,21 @@ class FuzzRecord:
 
 @dataclass(frozen=True)
 class FuzzPools:
-    """Replacement pools, sorted: cards and relics seen in train-split states of the character."""
+    """Replacement pools, sorted: cards and relics seen in train-split states of the character.
+
+    ``defaulted_counters`` and ``slots`` (potion slots without and with Potion Belt) are the table's
+    per-revision rules: the Gym 1.1.1 constants, or the Gym 1.2.0 entry-resource descriptor's.
+    """
 
     cards: tuple[str, ...]
     relics: tuple[str, ...]
     max_upgrades: Mapping[str, int | None]
     protected: tuple[str, ...]  # relics never replaced: the starters
+    defaulted_counters: tuple[str, ...] = DEFAULTED_COUNTER_RELICS
+    slots: tuple[int, int] = (potion_slots([]), potion_slots([POTION_BELT]))
+
+    def potion_slots(self, relics: Sequence[str]) -> int:
+        return self.slots[1] if POTION_BELT in relics else self.slots[0]
 
 
 @dataclass(frozen=True)
@@ -148,6 +162,7 @@ class StandardRecipe:
     fuzz_levels_max: int = 4
     split_fractions: tuple[float, ...] = SPLIT_FRACTIONS
     generator_version: str = GENERATOR
+    entry_resources: EntryResources | None = field(default=None, compare=False)  # set for Gym 1.2.0 tables
     _by_split: Mapping[str, tuple[Mapping[str, object], ...]] = field(default=None, repr=False, compare=False)
     _pools: FuzzPools = field(default=None, repr=False, compare=False)
 
@@ -204,7 +219,8 @@ class StandardRecipe:
             if stratum(state) not in excluded:
                 by_split[split].append(state)
         object.__setattr__(self, "_by_split", {k: tuple(v) for k, v in by_split.items()})
-        object.__setattr__(self, "_pools", _pools(train_all, self.aliases, self.character))
+        object.__setattr__(self, "_pools", _pools(train_all, self.aliases, self.character,
+                                                  self.entry_resources, self.ascension))
 
     @property
     def mode(self) -> str:
@@ -241,19 +257,26 @@ class StandardRecipe:
         return content_sha256(self.payload)
 
 
-def _pools(train_states: Sequence[Mapping[str, object]], aliases: NameAliases, character: str) -> FuzzPools:
+def _pools(train_states: Sequence[Mapping[str, object]], aliases: NameAliases, character: str,
+           resources: EntryResources | None = None, ascension: int = 20) -> FuzzPools:
     cards = sorted({row["card"] for s in train_states for row in s["entry"]["deck"]})
     unknown = [c for c in cards if c not in aliases.card_ids]
     if unknown:
         raise ValueError(f"cards without Gym metadata in the states table: {unknown[:5]}")
     protected = STARTER_RELICS[character]
-    relics = sorted({r for s in train_states for r in s["entry"]["relics"]}
-                    - set(BOTTLES) - set(protected) - set(NO_DEFAULT_COUNTER))
+    if resources is None:  # Gym 1.1.1 constants
+        unusable, rules = set(BOTTLES) | set(NO_DEFAULT_COUNTER), {}
+    else:  # a relic needing a companion or a counter the replacement cannot supply is never drawn
+        unusable = set(resources.bottle_relics()) | set(resources.counter_required_relics())
+        rules = {"defaulted_counters": resources.defaulted_counter_relics(RECORDED_COUNTER_RELICS),
+                 "slots": (resources.potion_slots([], ascension), resources.potion_slots([POTION_BELT], ascension))}
+    relics = sorted({r for s in train_states for r in s["entry"]["relics"]} - unusable - set(protected))
     return FuzzPools(tuple(cards), tuple(relics), _freeze_json({c: aliases.max_upgrades(c) for c in cards}),
-                     protected)
+                     protected, **rules)
 
 
-def load_standard_recipe(path: Path, *, aliases_path: Path = DEFAULT_ALIASES) -> StandardRecipe:
+def load_standard_recipe(path: Path, *, aliases_path: Path = DEFAULT_ALIASES,
+                         entry_resources_path: Path = DEFAULT_ENTRY_RESOURCES) -> StandardRecipe:
     """Load a recipe and its states table; a missing or changed table fails closed."""
     raw = read_json(path)
     keys = set(raw) - {"excluded_strata"}  # Ruling B: optional, default []
@@ -275,6 +298,12 @@ def load_standard_recipe(path: Path, *, aliases_path: Path = DEFAULT_ALIASES) ->
     aliases = load_aliases(aliases_path)
     if aliases.sha256 != table.get("aliases_sha256"):
         raise ValueError("the name alias table differs from the one the run-states table was built with")
+    # The table's Gym revision selects the per-relic rules: Gym 1.1.1 tables keep the constants above,
+    # Gym 1.2.0 tables follow the entry-resource descriptor.
+    revision = table.get("gym_revision")
+    if revision not in _TABLE_REVISIONS:
+        raise ValueError(f"run-states table has an unsupported Gym revision {revision!r}")
+    resources = load_entry_resources(entry_resources_path) if revision == GYM_V1_2_0_CONTRACT.source_revision else None
     schedule = raw["fuzz_schedule"]
     if (not isinstance(schedule, list)
             or any(not isinstance(s, dict) or set(s) != {"from_shard", "levels"} or not isinstance(s["levels"], list)
@@ -291,7 +320,8 @@ def load_standard_recipe(path: Path, *, aliases_path: Path = DEFAULT_ALIASES) ->
         table_sha256=spec["sha256"], aliases=aliases,
         states=tuple(s for s in table["states"] if s.get("character") == character),
         character=character, ascension=raw["ascension"], fuzz_levels_max=raw["fuzz_levels_max"],
-        split_fractions=tuple(fractions), generator_version=raw["generator_version"])
+        split_fractions=tuple(fractions), generator_version=raw["generator_version"],
+        entry_resources=resources)
 
 
 # ---------------------------------------------------------------- fuzzing
@@ -335,7 +365,7 @@ def fuzz(state: Mapping[str, object], level: int, pools: FuzzPools, rng: random.
     forced = [b for b in sorted(bottle_rows) if bottle_rows[b] in replaced_rows and b in relics]
     # Losing Potion Belt leaves 2 slots, so it stays when more than 2 potions are held.
     replaceable = [r for r in relics if r not in pools.protected
-                   and not (r == POTION_BELT and len(potions) > potion_slots([]))]
+                   and not (r == POTION_BELT and len(potions) > pools.potion_slots([]))]
     held = set(relics)
     count = min(level, len(replaceable), len([r for r in pools.relics if r not in held]))
     for bottle in forced[count:]:
@@ -353,20 +383,21 @@ def fuzz(state: Mapping[str, object], level: int, pools: FuzzPools, rng: random.
         bottled.pop(relic, None)   # a replaced bottle leaves its card unbottled
     if "bottled_cards" in entry and not bottled:
         del entry["bottled_cards"]
-    slots = potion_slots(relics)
+    slots = pools.potion_slots(relics)
     if slots != len(entry["potions"]):  # Potion Belt came or went; held potions are unchanged
         entry["potions"] = potions + [None] * (slots - len(potions))
     return entry, FuzzRecord(len(replaced_rows), len(chosen))
 
 
-def _tags(state: Mapping[str, object], entry: Mapping[str, object]) -> list[str]:
+def _tags(state: Mapping[str, object], entry: Mapping[str, object],
+          defaulted: Collection[str] = DEFAULTED_COUNTER_RELICS) -> list[str]:
     """The base state's tags, with the defaulting tags recomputed for the (fuzzed) entry:
     ``misc_defaulted`` iff a deck card takes a Ruling A misc default, and
     ``relic_counter_defaulted`` iff a held relic's counter is the Gym default."""
     tags = set(state["tags"]) - {"misc_defaulted", "relic_counter_defaulted"}
     if any(row["card"] in MISC_DEFAULTS for row in entry["deck"]):
         tags.add("misc_defaulted")
-    if any(relic in DEFAULTED_COUNTER_RELICS for relic in entry["relics"]):
+    if any(relic in defaulted for relic in entry["relics"]):
         tags.add("relic_counter_defaulted")
     return sorted(tags)
 
@@ -445,11 +476,11 @@ def panel_sha256(recipe: StandardRecipe) -> str:
     return content_sha256(panel_identity(recipe))
 
 
-def _annotation(draft: _Draft) -> dict[str, object]:
+def _annotation(draft: _Draft, pools: FuzzPools) -> dict[str, object]:
     state = draft.state
     return {"run_id": state["run_id"], "floor": state["floor"], "act": state["act"],
             "room_kind": state["room_kind"], "level": draft.level, "fuzz": draft.record.as_json(),
-            "tags": _tags(state, draft.entry)}
+            "tags": _tags(state, draft.entry, pools.defaulted_counters)}
 
 
 def _case(draft: _Draft, split: str, ordinal: int, lineage: str) -> dict[str, object]:
@@ -539,7 +570,7 @@ def _build_shard(recipe: StandardRecipe, split: str, shard_index: int, arm: str,
             continue  # skipped after the redraw bound; shard_size - len(cases) counts them
         lineage = f"baalorlord:{_base_id(draft.state)}:k{draft.level}:{shard_index}.{local}"
         cases.append(_case(draft, split, shard_index * 256 + local, lineage))
-        annotations[draft.entry["id"]] = _annotation(draft)
+        annotations[draft.entry["id"]] = _annotation(draft, recipe.pools)
     manifest = {"schema": "spire-learn-neural-cases-v1", "split": split, "partition": split, "cases": cases}
     return ScenarioShard(manifest, {"entries": [c["entry"] for c in cases]}, annotations, shard_index, arm,
                          content_sha256(manifest), distribution)
@@ -627,7 +658,7 @@ def build_standard_panel(recipe: StandardRecipe, split: str, *, validate: Valida
                 case = _case(draft, split, PANEL_SEED_OFFSET + len(cases),
                              f"baalorlord:{_base_id(draft.state)}:k{level}")
                 cases.append(case)
-                annotations[case["case_id"]] = _annotation(draft)
+                annotations[case["case_id"]] = _annotation(draft, recipe.pools)
     manifest = {"schema": "spire-learn-neural-cases-v1", "split": split, "partition": split, "cases": cases}
     return _freeze_json({
         "schema": PANEL_SCHEMA, "generator_version": GENERATOR, "panel_identity": identity,

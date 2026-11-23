@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -10,6 +11,7 @@ import unittest
 
 from scripts.neural import run_states as ex
 from spire_learn.neural import run_states as rs
+from spire_learn.neural.entry_resources import load_entry_resources
 from spire_learn.neural.standard_names import load_aliases
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -171,6 +173,58 @@ class ExtractTest(unittest.TestCase):
         self.assertEqual(reasons.get("encounter_mismatch:Cultist"), 2)  # floor 2 (monster) and floor 3 (event)
         _, report = _build([run])  # a monster row for the same event fight is not a mismatch
         self.assertNotIn("encounter_mismatch:Cultist", report["characters"]["ironclad"]["drop_reasons"])
+
+
+class EntryResourcesExtractTest(unittest.TestCase):
+    RESOURCES = load_entry_resources()
+
+    def _with_pen_nib(self):
+        run = _base()
+        run["relics"].append("Pen Nib")
+        run["relics_obtained"].append({"floor": 5, "key": "Pen Nib"})
+        return run
+
+    def test_extraction_tags_relic_counter_defaulted(self):
+        run = self._with_pen_nib()
+        for resources in (None, self.RESOURCES):
+            document, _ = ex.build([run], NAMES, ENCOUNTERS, MAP, lambda catalog: None, gym_revision="rev",
+                                   entry_resources=resources)
+            by_floor = {s["floor"]: s for s in document["states"]}
+            tagged = {f for f, s in by_floor.items() if "relic_counter_defaulted" in s["tags"]}
+            self.assertTrue(tagged and all(f > 5 for f in tagged), tagged)
+            self.assertTrue(all("pen_nib" in by_floor[f]["relics"] for f in tagged))
+            self.assertNotIn("pen_nib", by_floor[max(tagged)]["entry"]["relic_counters"])
+
+    def test_defaulted_relics_come_from_the_descriptor(self):
+        run = self._with_pen_nib()
+        counters = {r: rule for r, rule in self.RESOURCES.counters.items() if r != "pen_nib"}
+        resources = dataclasses.replace(self.RESOURCES, counters=counters)
+        document, _ = ex.build([run], NAMES, ENCOUNTERS, MAP, lambda catalog: None, gym_revision="rev",
+                               entry_resources=resources)
+        self.assertTrue(all("relic_counter_defaulted" not in s["tags"] for s in document["states"]))
+
+    def test_potion_slots_follow_the_descriptor(self):
+        run = _base()
+        run["relics"].append("Potion Belt")
+        run["relics_obtained"].append({"floor": 8, "key": "Potion Belt"})
+        document, _ = ex.build([run], NAMES, ENCOUNTERS, MAP, lambda catalog: None, gym_revision="rev",
+                               entry_resources=self.RESOURCES)
+        entry = {s["floor"]: s for s in document["states"]}[10]["entry"]
+        self.assertEqual(len(entry["potions"]), 4)
+        legacy, _ = _build([run])
+        self.assertEqual(document, {**legacy, "gym_revision": "rev"})  # same rules at A20 on this fixture
+
+    def test_revision_comes_from_the_runtime_profile(self):
+        self.assertEqual(ex.profile_revision(ROOT / "configs/neural/gym-1.1.1/runtime.json"),
+                         "e3c13836bd1458be8a87b93160f5c350f78fcd80")
+        self.assertEqual(ex.profile_revision(ROOT / "configs/neural/gym-1.2.0/runtime.json"),
+                         "4d198064b3b568b6f0d08d6e3937d236fbc48e9b")
+        self.assertEqual(ex.GYM_REVISION, "e3c13836bd1458be8a87b93160f5c350f78fcd80")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "profile.json"
+            path.write_text(json.dumps({"gym_revision": "0" * 40}))
+            with self.assertRaises(ValueError):
+                ex.profile_revision(path)
 
 
 class CollectRunsTest(unittest.TestCase):

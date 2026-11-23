@@ -328,6 +328,178 @@ class BossWinnabilityTests(unittest.TestCase):
         self.assertEqual(result["by_stratum_level"]["2:monster:0"], {"victory": 1, "death": 1})
 
 
+    def test_root_availability_records_class_kind_act_and_dome(self):
+        import tempfile
+        refusals = {1: "hidden intents are not modelled", 2: "draw knowledge exceeds the exact model"}
+
+        class Env:
+            """One fight of three decisions; the root outcome follows the decision index."""
+            def __init__(self, catalog):
+                self.catalog, self.decision, self.opened = catalog, 0, 0
+
+            def reset(self, seed=None, options=None):
+                self.decision = 0
+                self.entry = options["entry_id"]
+                return _observation(view, {0: "end_turn", 1: "play_card"}, [1, 1]), {}
+
+            def public_search(self, seed, *, limits):
+                self.opened += 1
+                reason = refusals.get(self.decision)
+                if reason is not None and self.entry != "clear":
+                    raise _Errors.Unsupported(reason)
+                return _Search({})
+
+            def step(self, action):
+                self.decision += 1
+                done = self.decision == 3
+                return _observation(view, {0: "end_turn", 1: "play_card"}, [1, 1]), 1.0 if done else 0.0, done, False, {}
+
+            def close(self):
+                pass
+
+        view = self.view
+
+        def state(run, floor, act, kind, relics, character="ironclad"):
+            return {"run_id": run, "floor": floor, "act": act, "room_kind": kind, "character": character,
+                    "entry": {"id": f"{run}-{floor}", "relics": relics}}
+
+        states = [state("a", 1, 1, "monster", ["burning_blood"]), state("a", 2, 2, "elite", ["runic_dome"]),
+                  state("a", 3, 3, "boss", ["burning_blood"]), state("a", 4, 1, "monster", ["x"], "silent")]
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(bw, "_table_states", return_value=("rev", states)), \
+             patch.object(bw, "_check_live_revision"), \
+             patch.object(bw, "_view_for", return_value=(view, DESCRIPTOR)), \
+             patch.object(bw, "_combat_env", side_effect=lambda catalog: Env(catalog)), \
+             patch.object(bw, "_is_train", return_value=True):
+            result = bw.root_availability(Path(directory), recipe=Path("recipe.json"), characters=("ironclad",),
+                                          seed=1, limit=None, max_steps=10)
+            written = json.loads((Path(directory) / "root_availability.json").read_text())
+        self.assertEqual(written, result)
+        ironclad = result["characters"]["ironclad"]
+        self.assertEqual((ironclad["fights"], ironclad["decisions"], ironclad["dome_fights"]), (3, 9, 1))
+        cells = ironclad["cells"]
+        refused = refusals[1], refusals[2]
+        self.assertEqual(cells["1:monster:no_dome"], {"root": 1, refused[0]: 1, refused[1]: 1})
+        self.assertEqual(cells["2:elite:dome"], {"root": 1, refused[0]: 1, refused[1]: 1})
+        self.assertEqual(cells["3:boss:no_dome"], {"root": 1, refused[0]: 1, refused[1]: 1})
+        self.assertNotIn("silent", result["characters"])  # only the requested characters
+
+    def test_search_stats_split_by_kind_and_act(self):
+        import tempfile
+        entry = {"id": "p", "character": "ironclad", "ascension": 20, "encounter": "cultist", "hp": 7,
+                 "max_hp": 9, "gold": 1, "deck": [], "relics": [], "relic_counters": {}, "potions": []}
+        cases = [{"case_id": f"p-{n}", "entry": dict(entry, id=f"p-{n}")} for n in range(3)]
+        notes = [(1, "monster"), (1, "monster"), (3, "boss")]
+        annotations = {f"p-{n}": {"run_id": "r", "floor": n, "act": act, "room_kind": kind, "level": 0,
+                                  "fuzz": {}, "tags": []} for n, (act, kind) in enumerate(notes)}
+        panel = {"manifest": {"cases": cases}, "annotations": annotations}
+
+        def fake_play(catalog, case, player, view, **kwargs):
+            roots = kwargs["roots"]
+            roots["searched"] += 2
+            if case["case_id"] == "p-2":
+                roots["hidden intents are not modelled"] += 1
+            return {"outcome": "victory", "steps": 3}
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(bw, "_build_standard_panel", return_value=panel), \
+             patch.object(bw, "_view_for", return_value=(self.view, DESCRIPTOR)), \
+             patch.object(bw, "play", side_effect=fake_play):
+            output = Path(directory)
+            result = bw.standard_panel_winnability(output, recipe=Path("recipe.json"), samples=2,
+                                                   playout_steps=3, max_steps=9, seed=1, limit=None)
+            rows = [json.loads(line) for line in (output / "standard_panel.jsonl").read_text().splitlines()]
+        self.assertEqual(result["root_outcomes"]["1:monster"], {"searched": 4})
+        self.assertEqual(result["root_outcomes"]["3:boss"], {"searched": 2, "hidden intents are not modelled": 1})
+        self.assertEqual(rows[2]["roots"], {"searched": 2, "hidden intents are not modelled": 1})
+
+    def test_search_choice_tallies_the_root_outcome_per_decision(self):
+        observation = _observation(self.view, {0: "end_turn", 1: "play_card"}, [1, 1])
+        roots = Counter()
+        bw.search_choice(_Env(_Search({(0, 0): -1.0, (1, 0): 1.0})), self.view, observation, samples=1,
+                         playout_steps=5, rng=random.Random(0), research_seed=1, stats=Counter(), roots=roots)
+        bw.search_choice(_Env(error=_Errors.Unsupported("hidden intents are not modelled")), self.view,
+                         observation, samples=1, playout_steps=5, rng=random.Random(0), research_seed=1,
+                         stats=Counter(), roots=roots)
+        only = _observation(self.view, {0: "end_turn", 1: "play_card"}, [1, 0])
+        bw.search_choice(_Env(), self.view, only, samples=1, playout_steps=5, rng=random.Random(0),
+                         research_seed=1, stats=Counter(), roots=roots)
+        self.assertEqual(roots, {"searched": 1, "hidden intents are not modelled": 1, "single_legal": 1})
+
+    def test_root_refusal_class_is_the_reason_text_only(self):
+        self.assertEqual(bw.refusal_class(_Errors.Unsupported("hidden intents are not modelled")),
+                         "hidden intents are not modelled")
+        self.assertEqual(bw.refusal_class(_Errors.State("x" * 200)), "state: " + "x" * 80)
+
+    def test_fight_roots_retains_each_decision_outcome(self):
+        view = self.view
+
+        class Env:
+            def reset(self, **kwargs):
+                self.n = 0
+                return _observation(view, {0: "end_turn"}, [1]), {}
+
+            def public_search(self, *args, **kwargs):
+                if self.n:
+                    raise _Errors.Unsupported("hidden intents are not modelled")
+                return _Search({})
+
+            def step(self, action):
+                self.n += 1
+                return _observation(view, {0: "end_turn"}, [1]), 1, self.n == 2, False, {}
+
+        records = []
+        bw._fight_roots(Env(), "entry", view, seed=1, max_steps=4, cells=Counter(), records=records)
+        self.assertEqual(records, [{"step": 0, "root_outcome": "root"},
+                                   {"step": 1, "root_outcome": "hidden intents are not modelled"}])
+
+    def test_live_revision_must_match_the_table(self):
+        bw._check_live_revision("abc", build_info=lambda: {"revision": "abc"})
+        with self.assertRaises(ValueError):
+            bw._check_live_revision("abc", build_info=lambda: {"revision": "def"})
+        with self.assertRaises(ValueError):
+            bw._check_live_revision("abc", build_info=lambda: {})
+
+    def test_panel_identities_build_both_panels_and_score_neither(self):
+        import tempfile
+        built = []
+
+        def fake_panel(recipe, split="selection"):
+            built.append(split)
+            return {"panel_sha256": split[0] * 64, "panel_identity": {"s": split}, "manifest_sha256": split[1] * 64,
+                    "manifest": {"cases": [{"case_id": "c"}]}, "available": {"1:monster": 3},
+                    "strata": {"0": {"1:monster": 1}}, "skipped": {"0": 0}}
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(bw, "_build_standard_panel", side_effect=fake_panel), \
+             patch.object(bw, "play", side_effect=AssertionError("panels are never played here")):
+            result = bw.panel_identities(Path(directory), recipe=Path("recipe.json"))
+            written = json.loads((Path(directory) / "panel_identities.json").read_text())
+        self.assertEqual(built, ["selection", "final"])
+        self.assertEqual(written, result)
+        self.assertEqual(result["panels"]["final"]["manifest_sha256"], "i" * 64)
+        self.assertFalse(result["panels"]["final"]["scored"])
+        self.assertEqual(result["panels"]["selection"]["cases"], 1)
+
+    def test_a_fight_terminal_at_reset_has_no_decisions_but_a_live_empty_mask_is_an_error(self):
+        view = self.view
+
+        class Env:
+            def __init__(self, info):
+                self.info = info
+
+            def reset(self, seed=None, options=None):
+                return _observation(view, {0: "end_turn"}, [0]), self.info
+
+            def public_search(self, seed, *, limits):
+                raise AssertionError("no decision, no root")
+
+        cells = Counter()
+        outcome = bw._fight_roots(Env({"phase": "terminal", "terminal_reason": "victory"}), "e", view, seed=1,
+                                  max_steps=5, cells=cells)
+        self.assertEqual((outcome, dict(cells)), ("terminal_at_reset:victory", {}))
+        with self.assertRaises(RuntimeError):
+            bw._fight_roots(Env({"phase": "combat"}), "e", view, seed=1, max_steps=5, cells=cells)
+
 
 class _NumpyRow(list):
     def __getitem__(self, index):

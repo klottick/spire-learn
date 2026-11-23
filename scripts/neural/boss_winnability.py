@@ -106,12 +106,28 @@ def _native_errors():
     return _native.RunUnsupportedBoundaryError, _native.RunStateError, _native.RunFaultError
 
 
+def refusal_class(error: Exception) -> str:
+    """The class of a root refusal: the Gym's reason text (it names a class of reason, never a value).
+
+    A refusal that is not an ``UnsupportedBoundary`` (a state error) is prefixed ``state: ``.
+    """
+    unsupported, _, _ = _native_errors()
+    text = str(error)[:80]
+    return text if isinstance(error, unsupported) else f'state: {text}'
+
+
 def search_choice(env, view: View, observation, *, samples: int, playout_steps: int,
-                  rng: random.Random, research_seed: int, stats: Counter) -> int:
-    """Pick the legal action with the best mean playout value over shared sampled worlds."""
+                  rng: random.Random, research_seed: int, stats: Counter, roots: Counter | None = None) -> int:
+    """Pick the legal action with the best mean playout value over shared sampled worlds.
+
+    ``roots``, when given, tallies the root outcome of every decision: ``searched``, ``single_legal``
+    (no root is taken) or the refusal class of an unavailable root.
+    """
     unsupported, state_error, fault = _native_errors()
     legal = view.legal(observation)
     if len(legal) == 1:
+        if roots is not None:
+            roots['single_legal'] += 1
         return legal[0]
     try:
         search = env.public_search(research_seed, limits={
@@ -120,7 +136,11 @@ def search_choice(env, view: View, observation, *, samples: int, playout_steps: 
     except (unsupported, state_error) as error:
         stats['root_unavailable'] += 1
         stats[f'root_unavailable:{type(error).__name__}:{str(error)[:80]}'] += 1
+        if roots is not None:
+            roots[refusal_class(error)] += 1
         return view.heuristic_choice(observation, rng)
+    if roots is not None:
+        roots['searched'] += 1
     try:
         values = {}
         for action in legal:
@@ -166,7 +186,8 @@ def _playout(branch, action: int, view: View, steps: int, rng: random.Random) ->
 # ---------------------------------------------------------------- driver
 
 def play(catalog: dict, case: dict, player: str, view: View, *, seed: int, samples: int,
-         playout_steps: int, max_steps: int, stats: Counter) -> dict:
+         playout_steps: int, max_steps: int, stats: Counter, roots: Counter | None = None,
+         records: list | None = None) -> dict:
     from spire_lab.gymnasium import StandardCombatEnv
     env = StandardCombatEnv(catalog)
     rng = random.Random(seed)
@@ -179,8 +200,13 @@ def play(catalog: dict, case: dict, player: str, view: View, *, seed: int, sampl
             elif player == 'heuristic':
                 action = view.heuristic_choice(observation, rng)
             else:
+                decision_roots = Counter() if records is not None else roots
                 action = search_choice(env, view, observation, samples=samples, playout_steps=playout_steps,
-                                       rng=rng, research_seed=seed * 1009 + step, stats=stats)
+                                       rng=rng, research_seed=seed * 1009 + step, stats=stats, roots=decision_roots)
+                if records is not None:
+                    if roots is not None:
+                        roots.update(decision_roots)
+                    records.append({'step': step, 'root_outcome': next(iter(decision_roots))})
             observation, reward, terminated, truncated, info = env.step(action)
             if terminated or truncated:
                 return {'outcome': info.get('outcome') or ('victory' if reward > 0 else 'death' if reward < 0 else 'escaped'),
@@ -312,15 +338,19 @@ def standard_panel_winnability(output: Path, *, recipe: Path, samples: int, play
     output.mkdir(parents=True, exist_ok=True)
     stats: Counter = Counter()
     by_cell: dict[str, Counter] = defaultdict(Counter)
+    by_root: dict[str, Counter] = defaultdict(Counter)
     path = output / 'standard_panel.jsonl'
     path.write_text('')
     for index, case in enumerate(cases):
         note = case['note']
+        roots: Counter = Counter()
+        records = []
         outcome = play(catalog, case, 'search', view, seed=seed + index, samples=samples,
-                       playout_steps=playout_steps, max_steps=max_steps, stats=stats)
+                       playout_steps=playout_steps, max_steps=max_steps, stats=stats, roots=roots, records=records)
         row = {'case_id': case['case_id'], 'run_id': note['run_id'], 'floor': note['floor'], 'act': note['act'],
-               'room_kind': note['room_kind'], 'level': note['level'], 'search': outcome}
+               'room_kind': note['room_kind'], 'level': note['level'], 'search': outcome, 'roots': dict(roots), 'root_decisions': records}
         by_cell[f"{note['act']}:{note['room_kind']}:{note['level']}"][outcome['outcome']] += 1
+        by_root[f"{note['act']}:{note['room_kind']}"].update(roots)
         with path.open('a') as stream:
             stream.write(json.dumps(row, sort_keys=True) + '\n')
     result = {'schema': SCHEMA, 'mode': 'standard-panel', 'cases': len(cases), 'samples': samples,
@@ -329,8 +359,151 @@ def standard_panel_winnability(output: Path, *, recipe: Path, samples: int, play
               'panel_identity_sha256': panel.get('panel_sha256'),
               'search_wins': sum(c.get('victory', 0) for c in by_cell.values()),
               'search_stats': dict(stats),
+              'root_outcomes': {key: dict(value) for key, value in sorted(by_root.items())},
               'by_stratum_level': {key: dict(value) for key, value in sorted(by_cell.items())}}
     (output / 'standard_panel.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+    return result
+
+
+def _check_live_revision(table_revision: str, build_info=None) -> None:
+    """The loaded Gym must be the revision the run-states table was built for (never the other Gym)."""
+    if build_info is None:
+        from spire_lab import _native
+        build_info = _native.build_info
+    live = build_info().get('revision')
+    if live != table_revision:
+        raise ValueError(f'the loaded Spire Gym is revision {live!r}, but the run-states table is for '
+                         f'Gym {table_revision!r}; run it in that Gym\'s runtime')
+
+
+def _table_states(recipe_path: Path) -> tuple[str, list[dict]]:
+    """(Gym revision, every state of all four characters) of the recipe's pinned, hash-checked table."""
+    import hashlib
+    recipe = json.loads(Path(recipe_path).read_text())
+    spec = recipe['states_table']
+    data = (Path(recipe_path).resolve().parent / spec['path']).read_bytes()
+    if hashlib.sha256(data).hexdigest() != spec['sha256']:
+        raise ValueError('run-states table SHA256 differs from the recipe pin')
+    table = json.loads(data)
+    return table['gym_revision'], table['states']
+
+
+def _is_train(run_id: str) -> bool:
+    from spire_learn.neural.standard_stream import run_split
+    return run_split(run_id) == 'train'
+
+
+def _combat_env(catalog: dict):
+    from spire_lab.gymnasium import StandardCombatEnv
+    return StandardCombatEnv(catalog)
+
+
+def root_outcome(env, research_seed: int) -> str:
+    """``root`` if a public root exists at the current decision, else its refusal class. No search is run."""
+    unsupported, state_error, _ = _native_errors()
+    try:
+        search = env.public_search(research_seed, limits={
+            'max_live_branches': 1, 'max_branches': 1, 'max_steps_per_branch': 1, 'max_total_steps': 1})
+    except (unsupported, state_error) as error:
+        return refusal_class(error)
+    search.close()
+    return 'root'
+
+
+def _fight_roots(env, entry_id: str, view: View, *, seed: int, max_steps: int, cells: Counter,
+                 records: list | None = None) -> str:
+    """One heuristic-played fight; every decision's root outcome is added to ``cells``. Returns the fight outcome."""
+    rng = random.Random(seed)
+    observation, info = env.reset(seed=seed, options={'entry_id': entry_id})
+    for step in range(max_steps):
+        if not view.legal(observation):
+            if step == 0 and info.get('phase') == 'terminal':
+                # The Gym reports the fight as already over at reset: no decision exists, so none is recorded.
+                return f"terminal_at_reset:{info.get('terminal_reason')}"
+            raise RuntimeError(f'entry {entry_id!r}: no legal action at decision {step} of a live fight')
+        outcome = root_outcome(env, seed * 1009 + step)
+        cells[outcome] += 1
+        if records is not None:
+            records.append({'step': step, 'root_outcome': outcome})
+        observation, reward, terminated, truncated, info = env.step(view.heuristic_choice(observation, rng))
+        if terminated or truncated:
+            return info.get('outcome') or ('victory' if reward > 0 else 'death' if reward < 0 else 'escaped')
+    return 'step_cap'
+
+
+def root_availability(output: Path, *, recipe: Path, characters: tuple[str, ...], seed: int,
+                      limit: int | None, max_steps: int = 1200, chunk: int = 128) -> dict:
+    """Heuristic play of train-split level-0 fights, recording the root outcome at every decision.
+
+    The corpus is every train-split state of each requested character in the recipe's table (one fight
+    per state, seed ``seed + index``), or ``limit`` evenly strided states of them. Cells are keyed
+    ``act:room_kind:dome|no_dome``; ``dome`` means the entry holds Runic Dome. No search is run.
+    """
+    if limit is not None and limit <= 0:
+        raise ValueError('limit must be positive')
+    revision, table = _table_states(recipe)
+    _check_live_revision(revision)
+    output.mkdir(parents=True, exist_ok=True)
+    result = {'schema': SCHEMA, 'mode': 'root-availability', 'gym_revision': revision, 'seed': seed,
+              'max_steps': max_steps, 'limit': limit, 'characters': {}}
+    decision_path = output / 'root_decisions.jsonl'
+    decision_path.write_text('')
+    for character in characters:
+        states = sorted((s for s in table if s['character'] == character and _is_train(s['run_id'])),
+                        key=lambda s: (s['run_id'], s['floor']))
+        corpus = len(states)
+        stride = max(1, corpus // limit) if limit is not None else 1
+        indices = list(range(0, corpus, stride))[:limit] if limit is not None else list(range(corpus))
+        cells: dict[str, Counter] = defaultdict(Counter)
+        fights: Counter = Counter()
+        dome_fights = decisions = 0
+        for start in range(0, len(indices), chunk):
+            batch = indices[start:start + chunk]
+            catalog = {'catalog_schema_id': 'spire-gym-standard-combat-catalog-v1', 'profile_id': 'standard-combat-v1',
+                       'entries': [states[i]['entry'] for i in batch]}
+            view, _ = _view_for(catalog)
+            env = _combat_env(catalog)
+            try:
+                for i in batch:
+                    state = states[i]
+                    dome = 'runic_dome' in state['entry']['relics']
+                    tally: Counter = Counter()
+                    records = []
+                    fights[_fight_roots(env, state['entry']['id'], view, seed=seed + i, max_steps=max_steps,
+                                        cells=tally, records=records)] += 1
+                    with decision_path.open('a') as stream:
+                        for record in records:
+                            stream.write(json.dumps({**record, 'character': character, 'state_index': i,
+                                                     'act': state['act'], 'room_kind': state['room_kind'],
+                                                     'runic_dome': dome}, sort_keys=True) + '\n')
+                    cells[f"{state['act']}:{state['room_kind']}:{'dome' if dome else 'no_dome'}"].update(tally)
+                    dome_fights += dome
+                    decisions += sum(tally.values())
+            finally:
+                env.close()
+            print(f'{character}: {start + len(batch)}/{len(indices)} fights', file=sys.stderr, flush=True)
+        result['characters'][character] = {
+            'corpus_states': corpus, 'fights': len(indices), 'decisions': decisions, 'dome_fights': dome_fights,
+            'fight_outcomes': dict(fights), 'cells': {key: dict(value) for key, value in sorted(cells.items())}}
+        (output / 'root_availability.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+    (output / 'root_availability.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+    return result
+
+
+def panel_identities(output: Path, *, recipe: Path) -> dict:
+    """Build the selection and final panels and record identity, hashes and composition. Nothing is played."""
+    from spire_learn.neural.scenario_support import content_sha256
+    output.mkdir(parents=True, exist_ok=True)
+    result = {'schema': SCHEMA, 'mode': 'panel-identities', 'panels': {}}
+    for split in ('selection', 'final'):
+        panel = _build_standard_panel(recipe, split)
+        result['panels'][split] = {
+            'panel_sha256': panel['panel_sha256'], 'panel_identity': panel['panel_identity'],
+            'manifest_sha256': panel['manifest_sha256'], 'document_sha256': content_sha256(panel),
+            'cases': len(panel['manifest']['cases']), 'available': panel['available'],
+            'strata': panel['strata'], 'skipped': panel['skipped'],
+            'scored': False}
+    (output / 'panel_identities.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
     return result
 
 
@@ -420,7 +593,17 @@ def main(argv=None) -> int:
                         help="play the recipe's 64-case development panel with the search player only")
     parser.add_argument('--standard-panel', type=Path, metavar='RECIPE',
                         help="play a Standard recipe's selection panel entries directly with the search player")
-    parser.add_argument('--limit', type=int, help='with --standard-panel: play only this many evenly strided cases')
+    parser.add_argument('--limit', type=int, help='with --standard-panel or --root-availability: play only this '
+                                                  'many evenly strided cases')
+    parser.add_argument('--root-availability', type=Path, metavar='RECIPE',
+                        help="play the recipe table's train-split fights with the heuristic and record the "
+                             "public-root outcome at every decision (no search)")
+    parser.add_argument('--characters', nargs='+', default=['ironclad'],
+                        choices=['ironclad', 'silent', 'defect', 'watcher'],
+                        help='with --root-availability: the characters to measure')
+    parser.add_argument('--build-panels', type=Path, metavar='RECIPE',
+                        help="build a Standard recipe's selection and final panels and record their identities; "
+                             "nothing is played")
     parser.add_argument('--trace-tier', help='also write trace.json for the first sampled case of this tier')
     arguments = parser.parse_args(argv)
     if not arguments.output.is_absolute():
@@ -431,6 +614,18 @@ def main(argv=None) -> int:
         print('output must match SPIRE_LEARN_RUNNER_OUTPUT', file=sys.stderr)
         return 2
     recipe = arguments.recipe if arguments.recipe.is_absolute() else _ROOT / arguments.recipe
+    if arguments.build_panels is not None:
+        built = arguments.build_panels if arguments.build_panels.is_absolute() else _ROOT / arguments.build_panels
+        print(json.dumps(panel_identities(arguments.output, recipe=built), sort_keys=True))
+        return 0
+    if arguments.root_availability is not None:
+        measured = (arguments.root_availability if arguments.root_availability.is_absolute()
+                    else _ROOT / arguments.root_availability)
+        result = root_availability(arguments.output, recipe=measured, characters=tuple(arguments.characters),
+                                   seed=arguments.seed, limit=arguments.limit)
+        print(json.dumps({name: {k: v for k, v in data.items() if k != 'cells'}
+                          for name, data in result['characters'].items()}, sort_keys=True))
+        return 0
     if arguments.standard_panel is not None:
         standard = arguments.standard_panel if arguments.standard_panel.is_absolute() else _ROOT / arguments.standard_panel
         result = standard_panel_winnability(arguments.output, recipe=standard, samples=arguments.samples,

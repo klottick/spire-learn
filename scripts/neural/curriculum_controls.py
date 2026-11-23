@@ -1554,7 +1554,9 @@ class CampaignBudget:
                  evaluation_cap=1800, final_panel_reserve=0):
         self.caps = _counts(caps)
         self.start, self.deadline = _number(start, 'start'), _number(deadline, 'deadline')
-        if not 0 < self.deadline - self.start <= profiles.current().whole_seconds:
+        # Compare with start+whole_seconds as the launcher builds it; subtracting
+        # (deadline-start) can round one ulp above whole_seconds and reject it.
+        if not self.start < self.deadline <= self.start + profiles.current().whole_seconds:
             raise ValueError('whole campaign deadline differs')
         if (type(evaluation_cap) is not int or evaluation_cap <= 0
                 or type(final_panel_reserve) is not int or final_panel_reserve < 0

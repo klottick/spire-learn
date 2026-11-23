@@ -207,7 +207,10 @@ def _validate_admission(policy: Any, rollout: Rollout, config: PPOConfig) -> tup
         contract = contract_for_revision(schema.gym_revision)
     except ValueError as error:
         raise ContractError("policy schema is not the authenticated common public view") from error
-    expected_mapping = contract.raw_mode_mappings[rollout.mode]
+    if schema.view.dense_view_id is None:
+        expected_mapping = contract.raw_mode_mappings[rollout.mode]
+    else:  # a compact layout has its own mapping (standard-standalone only)
+        expected_mapping = contract.raw_mode_mappings_for_view(schema.schema_fingerprint).get(rollout.mode)
     if accepted_mappings[rollout.mode] != expected_mapping:
         raise ContractError("rollout raw-mode mapping is not authenticated by the accepted config")
     version = getattr(policy, "_behavior_policy_version", None)
@@ -289,7 +292,7 @@ def ppo_update(
     """
     import torch
 
-    from spire_learn.neural.distribution import masked_categorical
+    from spire_learn.neural.distribution import masked_categorical, pad_to_dispatch_width
     from spire_learn.neural.features import encode_frames
 
     if not isinstance(policy, torch.nn.Module):
@@ -430,7 +433,11 @@ def ppo_update(
                     optimizer.zero_grad(set_to_none=True)
                     batch = source_batch.select_rows(selected_cpu)
                     output = policy(batch)
-                    distribution = masked_categorical(output.logits, batch.action_mask)
+                    # Same width as act(): a compact layout pads to the dense dispatch width
+                    # (dense: unchanged), so the ratio's log-probabilities match the behaviour's.
+                    logits, mask = pad_to_dispatch_width(
+                        output.logits, batch.action_mask, schema.view.dense_action_width)
+                    distribution = masked_categorical(logits, mask)
                     new_logp = distribution.log_prob(action_batch)
                     ratio = torch.exp(new_logp - old_logp_batch)
                     unclipped = ratio * advantage_batch

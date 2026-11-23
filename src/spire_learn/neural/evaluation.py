@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import random
-import struct
 from typing import Any
 
 from spire_learn.contracts import ContractError
-from spire_learn.neural.contracts import CombatFrame
+from spire_learn.neural.contracts import CombatFrame, buffer_value
 from spire_learn.neural.schema import CombatSchema
 
 
@@ -43,15 +42,14 @@ def _candidate_verbs(frame: CombatFrame, schema: CombatSchema) -> tuple[str, ...
     vocabulary = schema.vocabularies.get(verb_column.vocabulary)
     values = frame.tensors.get("actions")
     known = frame.tensors.get(spec.known_key) if spec.known_key is not None else None
-    if (vocabulary is None or values is None or values.dtype != "int64"
+    if (vocabulary is None or values is None or values.dtype != getattr(spec, "dtype", "int64")
             or values.shape != spec.shape or known is None or known.dtype != "int8"
             or known.shape != spec.shape):
         raise ContractError("public action candidate tensors do not match the descriptor")
     columns = spec.shape[1]
     result: list[str] = []
     for row in range(schema.action_space.n):
-        offset = (row * columns + verb_index) * 8
-        category = struct.unpack_from("=q", values.data, offset)[0]
+        category = buffer_value(values, row * columns + verb_index)
         is_known = known.data[row * columns + verb_index]
         if is_known not in (0, 1):
             raise ContractError("action candidate known bits must be binary")

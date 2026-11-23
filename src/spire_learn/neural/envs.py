@@ -37,7 +37,7 @@ from spire_learn.neural.schema import (
 from spire_learn.neural.snapshot import snapshot_common
 from spire_learn.neural.gym_contracts import contract_for_revision
 from spire_learn.neural.views import COMMON_V1
-from spire_learn.neural.views import STANDARD_COMBAT_V1
+from spire_learn.neural.views import STANDARD_COMBAT_COMPACT_V1, STANDARD_COMBAT_V1
 from spire_learn.neural.modes import NEURAL_MODES
 
 
@@ -1749,7 +1749,14 @@ def _validate_factory_inputs(config: NeuralConfig, cases: NeuralCases) -> None:
     ):
         raise ContractError("Run config does not pin the accepted v3 Run observation")
     if config.mode in {"standard-standalone", "standard-run"}:
-        if (contract.standard_combat_fingerprint is None
+        if config.standard_view_layout == "compact":
+            if (config.mode != "standard-standalone"
+                    or config.standard_view_preset not in contract.standard_compact_fingerprints
+                    or config.standard_view_fingerprint
+                    != contract.standard_compact_fingerprints[config.standard_view_preset]):
+                raise ContractError("Standard config does not pin an accepted compact Standard combat view")
+        elif (config.standard_view_layout != "dense" or config.standard_view_preset is not None
+                or contract.standard_combat_fingerprint is None
                 or config.standard_view_fingerprint != contract.standard_combat_fingerprint):
             raise ContractError("Standard config does not pin the accepted Standard combat view")
         if config.mode == "standard-run" and (
@@ -1759,9 +1766,11 @@ def _validate_factory_inputs(config: NeuralConfig, cases: NeuralCases) -> None:
             raise ContractError("Standard Run config does not pin the accepted Standard Run observation")
         if type(config.workers) is not int or not 1 <= config.workers <= 256:
             raise ContractError("Standard config workers must be an integer in [1, 256]")
+    accepted_mappings = (contract.raw_mode_mappings_for_view(config.standard_view_fingerprint)
+                         if config.standard_view_layout == "compact" else contract.raw_mode_mappings)
     if not config.accepted_identities or any(
         config.mode not in identity.accepted_raw_mode_mappings or any(
-            mapping != contract.raw_mode_mappings.get(mode)
+            mapping != accepted_mappings.get(mode)
             for mode, mapping in identity.accepted_raw_mode_mappings.items()
         ) for identity in config.accepted_identities
     ):
@@ -1840,6 +1849,11 @@ def make_driver(config: NeuralConfig, cases: NeuralCases) -> CombatDriver:
         standard_env = runtime.standard_combat_vector_env
         if standard_env is None:
             raise ContractError("installed Spire Gym lacks StandardCombatVectorEnv")
+        # Dense passes no layout keyword (as before Gym v1.2.0); compact selects its preset.
+        compact = config.standard_view_layout == "compact"
+        view = STANDARD_COMBAT_COMPACT_V1 if compact else STANDARD_COMBAT_V1
+        layout = ({"observation": "compact", "capacity_preset": config.standard_view_preset}
+                  if compact else {})
         env = standard_env(
             catalog,
             config.rollout_rows,
@@ -1847,12 +1861,13 @@ def make_driver(config: NeuralConfig, cases: NeuralCases) -> CombatDriver:
             workers=config.workers,
             autoreset_mode="disabled",
             fault_policy="freeze",
+            **layout,
         )
         try:
             schema = parse_combat_descriptor(
                 env.observation_spec(), revision=config.environment_revision
             )
-            if schema.view is not STANDARD_COMBAT_V1:
+            if schema.view is not view:
                 raise ContractError("Gym descriptor is not the accepted Standard combat view")
             if schema.schema_fingerprint != config.standard_view_fingerprint:
                 raise ContractError("Gym Standard descriptor fingerprint disagrees with config")
@@ -1861,8 +1876,8 @@ def make_driver(config: NeuralConfig, cases: NeuralCases) -> CombatDriver:
                 env.environment_spec(),
                 expected={
                     "profile_id": "standard-combat-v1",
-                    "schema_id": STANDARD_COMBAT_V1.view_id,
-                    "combat_view_id": STANDARD_COMBAT_V1.lifecycle_view_id,
+                    "schema_id": view.view_id,
+                    "combat_view_id": view.lifecycle_view_id,
                     "observation_fingerprint": config.standard_view_fingerprint,
                     "content_id": "spire-gym-standard-content-v1",
                     "rules_id": contract_for_revision(config.environment_revision).standard_rules_id,

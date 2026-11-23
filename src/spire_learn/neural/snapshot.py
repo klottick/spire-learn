@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from spire_learn.contracts import ContractError
-from spire_learn.neural.contracts import BufferArray, CombatFrame
+from spire_learn.neural.contracts import INTEGER_DTYPES, BufferArray, CombatFrame
 from spire_learn.neural.schema import CombatSchema, validate_frame
 
 
@@ -21,7 +21,7 @@ def _snapshot_array(value: object, *, key: str, dtype: str, shape: tuple[int, ..
     actual_dtype = getattr(value, "dtype", None)
     if actual_dtype is None or getattr(actual_dtype, "name", None) != dtype:
         raise ContractError(f"runtime tensor {key} has the wrong dtype")
-    expected_kind, expected_size = ("i", 1) if dtype == "int8" else ("i", 8)
+    expected_kind, expected_size = "i", INTEGER_DTYPES[dtype][1]
     if getattr(actual_dtype, "kind", None) != expected_kind or getattr(
         actual_dtype, "itemsize", None
     ) != expected_size:

@@ -166,6 +166,26 @@ class ProfileEntryTests(unittest.TestCase):
             self.assertIn('device = "cuda:0"', template)
             self.assertIn("spire-learn-combat-ff-standard-v1", template)
 
+    def test_gym_1_2_0_profile_plans_cover_dense_and_both_compact_presets(self):
+        from scripts.neural.baseline_entry import load_plan
+        from spire_learn.neural.config import load_neural_config
+        old = {rows: load_plan(ROOT / f"configs/neural/profile-standard-1.1.1/plan-{rows}.json") for rows in (16, 64)}
+        presets = {"dense": None, "compact": "standard-combat-compact-v1", "play": "standard-combat-compact-play-v1"}
+        for rows in (16, 64):
+            for variant, preset in presets.items():
+                with self.subTest(rows=rows, variant=variant):
+                    plan = load_plan(ROOT / f"configs/neural/profile-standard-1.2.0/plan-{rows}-{variant}.json")
+                    self.assertEqual(plan["gym_revision"], "4d198064b3b568b6f0d08d6e3937d236fbc48e9b")
+                    self.assertEqual(plan["recipe"], "configs/neural/baalorlord-standard-gym-1.2.0/recipe.json")
+                    own = {"baseline_id", "gym_revision", "template", "notes", "recipe"}
+                    self.assertEqual({k: v for k, v in plan.items() if k not in own},
+                                     {k: v for k, v in old[rows].items() if k not in own})
+                    config = load_neural_config(ROOT / plan["template"])
+                    self.assertEqual((config.rollout_rows, config.device), (rows, "cuda:0"))
+                    self.assertEqual(config.standard_view_layout, "dense" if preset is None else "compact")
+                    self.assertEqual(config.standard_view_preset, preset)
+                    self.assertEqual(config.accepted_identities[0].model_id, "spire-learn-combat-ff-standard-v1")
+
     def test_gpu_wait_polls_until_free_and_is_off_without_a_plan_entry_or_cuda(self):
         plan = {"gpu_wait": {"min_free_bytes": 10, "poll_seconds": 5, "max_total_seconds": 100}}
         cuda, cpu = SimpleNamespace(device="cuda:0"), SimpleNamespace(device="cpu")

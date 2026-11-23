@@ -183,6 +183,10 @@ class NeuralConfig:
     workers: int = 1
     # None is the win/loss objective; configs without [objective] keep it.
     objective: HpShapedObjective | None = None
+    # Standard combat observation layout: "dense" (the default and the only layout before
+    # Gym v1.2.0) or "compact" with a capacity preset (standard-standalone only).
+    standard_view_layout: str = "dense"
+    standard_view_preset: str | None = None
 
 
 def _stream_runtime_projection(config: NeuralConfig) -> dict[str, object]:
@@ -204,10 +208,16 @@ def _stream_runtime_projection(config: NeuralConfig) -> dict[str, object]:
     if config.objective is not None:
         # Only shaped configs gain this key; win/loss projections stay byte-identical.
         runtime['objective'] = {'kind': 'hp_shaped', 'coefficient': config.objective.coefficient}
+    if config.standard_view_layout != "dense":
+        # Likewise only compact configs gain the layout; dense projections stay byte-identical.
+        runtime['standard_view_layout'] = config.standard_view_layout
+        runtime['standard_view_preset'] = config.standard_view_preset
+        runtime['standard_view_fingerprint'] = config.standard_view_fingerprint
     return runtime
 
 
-def _identity(raw: object, *, model_hash: str, ppo_hash: str, contract: GymContract) -> NeuralIdentity:
+def _identity(raw: object, *, model_hash: str, ppo_hash: str, contract: GymContract,
+              standard_view_fingerprint: str | None = None) -> NeuralIdentity:
     required = {
         "model_id", "features_id", "action_id", "objective_id",
         "accepted_raw_mode_mappings", "config_hashes",
@@ -219,8 +229,13 @@ def _identity(raw: object, *, model_hash: str, ppo_hash: str, contract: GymContr
         raise ValueError("identity mappings and hashes must be tables")
     if set(mappings) - NEURAL_MODES:
         raise ValueError("identity declares an unsupported raw mode")
+    accepted_mappings = (contract.raw_mode_mappings if standard_view_fingerprint is None
+                         else contract.raw_mode_mappings_for_view(standard_view_fingerprint))
     for raw_mode, mapping_id in mappings.items():
-        expected_mapping = contract.raw_mode_mappings[raw_mode]
+        expected_mapping = accepted_mappings.get(raw_mode)
+        if expected_mapping is None:
+            raise ValueError(f"identity declares {raw_mode}, which the release does not map for this "
+                             "Standard combat layout (compact maps standard-standalone only)")
         if not isinstance(mapping_id, str) or mapping_id != expected_mapping:
             raise ValueError(f"identity {raw_mode} mapping does not match the accepted raw-mode contract")
     if set(hashes) != {"model", "ppo"}:
@@ -351,6 +366,10 @@ def load_neural_config(path: Path) -> NeuralConfig:
         expected_environment_keys -= {"common_view_id", "common_view_fingerprint"}
     if standard_mode:
         expected_environment_keys.add("standard_view_fingerprint")
+        if isinstance(environment, dict) and "standard_view_layout" in environment:
+            expected_environment_keys.add("standard_view_layout")
+            if environment["standard_view_layout"] == "compact":
+                expected_environment_keys.add("standard_view_preset")
         if mode == "standard-run":
             expected_environment_keys.add("standard_run_fingerprint")
         if isinstance(environment, dict) and "workers" in environment:
@@ -375,10 +394,28 @@ def load_neural_config(path: Path) -> NeuralConfig:
         common_view_fingerprint = environment["common_view_fingerprint"]
     standard_view_fingerprint: str | None = None
     standard_run_fingerprint: str | None = None
+    standard_view_layout = "dense"
+    standard_view_preset: str | None = None
     workers = 1
     if standard_mode:
         standard_view_fingerprint = environment["standard_view_fingerprint"]
-        if (contract.standard_combat_fingerprint is None
+        standard_view_layout = environment.get("standard_view_layout", "dense")
+        if standard_view_layout not in ("dense", "compact"):
+            raise ValueError('environment.standard_view_layout must be "dense" or "compact"')
+        if standard_view_layout == "compact":
+            presets = contract.standard_compact_fingerprints
+            if not presets:
+                raise ValueError("the compact Standard combat layout requires Gym v1.2.0; "
+                                 "earlier releases are dense only")
+            if mode != "standard-standalone":
+                raise ValueError("the compact Standard combat layout requires standard-standalone mode "
+                                 "(the Run's combat projection is dense only)")
+            standard_view_preset = environment["standard_view_preset"]
+            if not isinstance(standard_view_preset, str) or standard_view_preset not in presets:
+                raise ValueError("environment.standard_view_preset is not an accepted compact preset")
+            if standard_view_fingerprint != presets[standard_view_preset]:
+                raise ValueError("the compact Standard layout requires its preset's compact view fingerprint")
+        elif (contract.standard_combat_fingerprint is None
                 or standard_view_fingerprint != contract.standard_combat_fingerprint):
             raise ValueError("Standard mode requires the accepted standard combat view fingerprint")
         if "workers" in environment:
@@ -463,7 +500,9 @@ def load_neural_config(path: Path) -> NeuralConfig:
     identity_values = raw["accepted_identities"]
     if not isinstance(identity_values, list) or not identity_values:
         raise ValueError("accepted_identities must be a non-empty array of tables")
-    identities = tuple(_identity(item, model_hash=model_hash, ppo_hash=ppo_hash, contract=contract)
+    identities = tuple(_identity(item, model_hash=model_hash, ppo_hash=ppo_hash, contract=contract,
+                                 standard_view_fingerprint=(standard_view_fingerprint
+                                                            if standard_view_layout == "compact" else None))
                        for item in identity_values)
     if any(mode not in identity.accepted_raw_mode_mappings for identity in identities):
         raise ValueError("every accepted identity must declare the selected raw mode")
@@ -555,6 +594,8 @@ def load_neural_config(path: Path) -> NeuralConfig:
         scenario_stream=scenario_stream,
         workers=workers,
         objective=objective,
+        standard_view_layout=standard_view_layout,
+        standard_view_preset=standard_view_preset,
     )
     if scenario_stream is not None:
         # Bind only after this parser has accepted and normalized every setting.

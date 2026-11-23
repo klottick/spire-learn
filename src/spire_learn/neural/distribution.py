@@ -66,6 +66,24 @@ class MaskedCategorical:
         )
 
 
+def pad_to_dispatch_width(logits: Any, action_mask: Any, width: int | None) -> tuple[Any, Any]:
+    """Pad a compact layout's logits/mask with illegal columns up to the dense dispatch width.
+
+    A compact view (``ViewSpec.dense_action_width``) has fewer dispatch rows than its dense
+    view; its legal indices keep their dense meaning. Building the distribution at the dense
+    width makes sampling consume the generator, and the log-softmax/entropy reduce, exactly as
+    for the dense view. ``None`` or a width already reached returns the inputs unchanged.
+    """
+    import torch
+
+    if width is None or width <= logits.shape[1]:
+        return logits, action_mask
+    extra = width - logits.shape[1]
+    logits = torch.cat((logits, logits.new_zeros((logits.shape[0], extra))), dim=1)
+    action_mask = torch.cat((action_mask, action_mask.new_zeros((action_mask.shape[0], extra))), dim=1)
+    return logits, action_mask
+
+
 def masked_categorical(logits: Any, action_mask: Any) -> MaskedCategorical:
     """Validate a strict action mask and build stable legal-only statistics."""
     import torch
@@ -96,4 +114,4 @@ def masked_categorical(logits: Any, action_mask: Any) -> MaskedCategorical:
     return MaskedCategorical(logits, mask, torch)
 
 
-__all__ = ["MaskedCategorical", "masked_categorical"]
+__all__ = ["MaskedCategorical", "masked_categorical", "pad_to_dispatch_width"]

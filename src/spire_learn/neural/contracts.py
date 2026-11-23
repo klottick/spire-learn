@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 import math
 import re
+import struct
 from types import MappingProxyType
 
 from spire_learn.contracts import ContractError
@@ -55,25 +56,42 @@ def _frozen_mapping(value: Mapping[str, object], name: str) -> Mapping[str, obje
     return frozen
 
 
+# Accepted native-endian signed integer dtypes: struct code and item size. Dense views use
+# int8 masks and int64 values; the compact Standard view also uses int16 and int32 values.
+INTEGER_DTYPES = MappingProxyType({"int8": ("b", 1), "int16": ("h", 2), "int32": ("i", 4), "int64": ("q", 8)})
+
+
 @dataclass(frozen=True)
 class BufferArray:
-    """Owned native-endian int8/int64 tensor bytes with a checked shape."""
+    """Owned native-endian signed-integer tensor bytes with a checked shape."""
 
     dtype: str
     shape: tuple[int, ...]
     data: bytes
 
     def __post_init__(self) -> None:
-        if not isinstance(self.dtype, str) or self.dtype not in {"int8", "int64"}:
-            raise ContractError("BufferArray dtype must be native-endian int8 or int64")
+        if not isinstance(self.dtype, str) or self.dtype not in INTEGER_DTYPES:
+            raise ContractError("BufferArray dtype must be native-endian int8, int16, int32 or int64")
         if not isinstance(self.shape, tuple) or any(type(dim) is not int or dim < 0 for dim in self.shape):
             raise ContractError("BufferArray shape must contain non-negative integer dimensions")
         if type(self.data) is not bytes:
             raise ContractError("BufferArray data must be immutable bytes")
-        item_size = 1 if self.dtype == "int8" else 8
+        item_size = INTEGER_DTYPES[self.dtype][1]
         expected = math.prod(self.shape) * item_size
         if len(self.data) != expected:
             raise ContractError(f"BufferArray shape requires {expected} bytes, got {len(self.data)}")
+
+
+def buffer_values(buffer: BufferArray) -> tuple[int, ...]:
+    """Decode every element of a buffer as Python integers, whatever its accepted dtype."""
+    code, size = INTEGER_DTYPES[buffer.dtype]
+    return struct.unpack(f"={len(buffer.data) // size}{code}", buffer.data)
+
+
+def buffer_value(buffer: BufferArray, index: int) -> int:
+    """Decode one flat element of a buffer."""
+    code, size = INTEGER_DTYPES[buffer.dtype]
+    return struct.unpack_from(f"={code}", buffer.data, index * size)[0]
 
 
 @dataclass(frozen=True)

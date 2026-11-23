@@ -75,6 +75,11 @@ def bind_gym() -> tuple[Validate, list[dict]]:
         env.close()
 
     def validate(document: dict) -> None:
+        # Construction checks catalog admission only, on the dense layout, and never resets: an
+        # entry that overflows a compact capacity preset first shows at reset, in training or a
+        # panel, as a typed Gym Capacity fault (a DriverFault, never a loss). The bounds preset
+        # (standard-combat-compact-v1) is sized to the entry bounds; the play preset can overflow,
+        # so baseline plans refuse it (scripts/neural/baseline_entry.py).
         try:
             StandardCombatEnv(document).close()
         except _native.RunInputError as error:  # invalid catalog input: the one recognized rejection

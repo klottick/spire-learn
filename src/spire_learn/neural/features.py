@@ -156,6 +156,10 @@ def _torch_dtype(torch: Any, dtype: str) -> Any:
         return torch.int8
     if dtype == "int64":
         return torch.int64
+    if dtype == "int16":
+        return torch.int16
+    if dtype == "int32":
+        return torch.int32
     raise ContractError(f"unsupported descriptor tensor dtype {dtype!r}")
 
 
@@ -203,18 +207,30 @@ def encode_frames(
     known_tensors: dict[str, Any] = {}
     occupied_tensors: dict[str, Any] = {}
     coverage_tensors: dict[str, Any] = {}
+    # A compact layout keeps its narrow rows; only capacity-dependent inputs use the dense view's
+    # row counts, as the dense view would compute them (see views.STANDARD_COMBAT_COMPACT_V1).
+    dense_rows = schema.view.dense_rows
     for group, spec in schema.tensors.items():
         if not spec.columns:
             continue
         columns = len(spec.columns)
         rows = spec.shape[0] if len(spec.shape) == 2 else 1
         values = raw_by_key[group].reshape(len(selected), rows, columns)
+        if spec.dtype != "int64":
+            # Widened after the (narrow) transfer; every value fits the dense int64 column.
+            values = values.to(torch.int64)
         known = raw_by_key[spec.known_key].reshape(len(selected), rows, columns).to(torch.bool)
         value_tensors[group] = values
         known_tensors[group] = known
         if spec.occupied_key is not None:
             occupied_tensors[group] = raw_by_key[spec.occupied_key].to(torch.bool)
-            coverage_tensors[group] = known.to(torch.float32).mean(dim=1)
+            dense = dense_rows.get(group, rows)
+            if dense == rows:
+                coverage_tensors[group] = known.to(torch.float32).mean(dim=1)
+            else:
+                # The dense mean over its padding rows (known 0): an exact integer sum over the
+                # compact rows divided by the dense row count, as torch's CPU mean computes it.
+                coverage_tensors[group] = known.to(torch.float32).sum(dim=1).div_(dense)
         else:
             coverage_tensors[group] = known[:, 0, :].to(torch.float32)
 

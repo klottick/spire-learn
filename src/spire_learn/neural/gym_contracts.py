@@ -35,6 +35,11 @@ class GymContract:
     rules_epoch: str | None = None
     m10_rules_id: str = "spire-gym-native-m10-rules-v1"
     standard_rules_id: str | None = None
+    # Opt-in compact Standard combat view (schema
+    # ``spire-gym-standard-combat-view-compact-v1``), one fingerprint per capacity preset.
+    # Recorded for identity only; they do not enter the checkpoint mappings.
+    standard_compact_combat_fingerprint: str | None = None
+    standard_compact_combat_play_fingerprint: str | None = None
 
     @property
     def raw_mode_mappings(self) -> Mapping[str, str]:
@@ -142,8 +147,29 @@ GYM_V1_1_1_CONTRACT = GymContract(
     m10_rules_id="spire-gym-native-m10-rules-v3",
     standard_rules_id="spire-gym-native-standard-rules-v6",
 )
+GYM_V1_2_0_CONTRACT = GymContract(
+    "4d198064b3b568b6f0d08d6e3937d236fbc48e9b",
+    ("4d198064b3b568b6f0d08d6e3937d236fbc48e9b",),
+    "4c73f7de04d7b2875f473f8034c1cbacf984ea2d52d0a9428289c30cf1dff463",
+    "28d92d89c437eea7fdc260240585bca466dee1fd74b9b3eb38513d2b34b0be64",
+    "effbb810d345e906f6e20b47bd972e35d72ef48141378d54bd28b54afac5f406",
+    BuildIdentity(
+        "4d198064b3b568b6f0d08d6e3937d236fbc48e9b",
+        "4cd56ee7f22dd8303f7d5ff293d88fd65f6071088a00dab73e5c1b176dbe7508",
+        "888d789820040c3dc9a795850f75580eb5e31bfb6760c3e1809933ad966561bd",
+        "release",
+        ("spire-python/extension",),
+    ),
+    standard_combat_fingerprint="5d8147e13ded030c7faa501a8202eb2588915c2e1330b30cac5b06afc9f9916e",
+    standard_run_fingerprint="bf8e1d111bbf2171594231b99d8d6b701244249abfbb90a11e86c4b4a405f7ae",
+    rules_epoch="gym-1.2.0",
+    m10_rules_id="spire-gym-native-m10-rules-v4",
+    standard_rules_id="spire-gym-native-standard-rules-v7",
+    standard_compact_combat_fingerprint="49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8",
+    standard_compact_combat_play_fingerprint="fbfade07003bd64ad6071243ec3a52e23413c88c5758ca702a515945935439ae",
+)
 CONTRACTS = (LEGACY_CONTRACT, CURRENT_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT,
-             GYM_V1_1_0_CONTRACT, GYM_V1_1_1_CONTRACT)
+             GYM_V1_1_0_CONTRACT, GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT)
 RUNTIME_REVISIONS = frozenset(revision for item in CONTRACTS for revision in item.runtime_revisions)
 COMMON_FINGERPRINTS = frozenset(item.common_fingerprint for item in CONTRACTS)
 

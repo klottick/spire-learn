@@ -1,6 +1,6 @@
 # Spire Gym 1.0.0 and Standard adoption
 
-Updated **2026-11-16** (current release `v1.1.1`, build `e3c1383`; see the re-pin sections). Originally written 2026-11-12 for build `1929e18b`. Spire Learn now selects Gym by the configured revision
+Updated **2026-11-23** (current release `v1.2.0`, build `4d19806`; see the re-pin sections). Originally written 2026-11-12 for build `1929e18b`. Spire Learn now selects Gym by the configured revision
 and supports the Gym 1.0.0 common, Standard combat and Standard Run contracts.
 The native extension revision is
 `1929e18b9f44372e020877bd62f2a5c9dee3e64e` (tag `v1.0.0` is `fc3c0118`,
@@ -8,6 +8,50 @@ documentation/data only). The release build identity is `release`, clean, with
 feature `spire-python/extension`, source digest
 `d4b3121226cfbb030b89731ed7ea3773f5c2b44988c9ec01c2355d53f2dfa9b2` and file
 digest `dce682976f221f5686d16beda7ced03f0221624da0a9b83e8b5969f7300f60ce`.
+
+## Re-pin to release v1.2.0 (2026-11-23)
+
+Learn's current templates are `configs/neural/gym-1.2.0/`. They pin Gym release
+`v1.2.0`, revision `4d198064b3b568b6f0d08d6e3937d236fbc48e9b`. The `v1.1.1`
+contract and templates remain valid for that revision.
+
+| Item | Value |
+| --- | --- |
+| Wheel SHA-256 | `a9d8cdfb26f0e762baea690c9d88639e1dd172e714024a5029109d367978b297` |
+| `_native` SHA-256 | `1f590dcf95d538b88b9b639d71783289281741a37f7884e412be55babc12970b` |
+| `source_digest` / `file_digest` | `4cd56ee7f22dd8303f7d5ff293d88fd65f6071088a00dab73e5c1b176dbe7508` / `888d789820040c3dc9a795850f75580eb5e31bfb6760c3e1809933ad966561bd` |
+| Rules IDs | Standard `spire-gym-native-standard-rules-v7`; M10/Gym66 `spire-gym-native-m10-rules-v4` |
+| Dense fingerprints | Unchanged from `v1.1.1` (Standard combat `5d8147e1...`, Standard Run `bf8e1d11...`) |
+| Compact combat view | Schema `spire-gym-standard-combat-view-compact-v1`; `standard-combat-compact-v1` is `49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8`, `standard-combat-compact-play-v1` is `fbfade07003bd64ad6071243ec3a52e23413c88c5758ca702a515945935439ae` |
+| `rules_epoch` | `gym-1.2.0` |
+
+**Gym changes** (`docs/releases/v1.2.0.md`): the combat-entry resource
+descriptor, an opt-in compact standalone combat view, wider public search roots
+and a card-queue order fix that changes gameplay and so the rules IDs.
+
+**Learn changes.**
+- Added `GYM_V1_2_0_CONTRACT`, which records the two compact fingerprints. They
+  are identity only: Learn does not yet consume the compact view, and they do
+  not enter the checkpoint mappings.
+- Added the six `configs/neural/gym-1.2.0/` files (runtime profile and five
+  templates). The package overlay is the wheel extracted unchanged; the
+  dependency venv is `v1.1.1`'s.
+- Qualification, soak and `validation_profile.py` now default to the new profile.
+- Tests reject checkpoints across `v1.1.1` and `v1.2.0` in both directions.
+
+**Verification** (2026-11-23), all through `runtime_container.py` with exit
+status 0 and `learner_changed: false`; outputs under
+`artifacts/development/neural-combat/gym-1.2.0/`, which Git ignores.
+- **Release.** Wheel and `_native` hashes match; `build_info()` matches the
+  table, `dirty=false`.
+- **Descriptors.** Four of six files are byte-identical to `v1.1.1`'s. The two
+  Standard environment specs differ only in `rules_id` (v6 to v7).
+- **Qualification.** `qualified_one_reset_per_mode` in all four modes.
+- **Soak.** `soak_gym_v1.py --steps 3000 --characters` passed with no contract
+  fault; its result equals the `v1.1.1` soak's under the same seeds, so it shows
+  the adapters accept the build, not that the new rules are covered.
+- **Card metadata.** The Gym's fingerprint is `effbb810...`, equal to the
+  alias table's `gym_card_metadata_fingerprint`.
 
 ## Re-pin to release v1.1.1 (2026-11-16)
 

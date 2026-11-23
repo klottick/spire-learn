@@ -12,7 +12,7 @@ from spire_learn.neural.checkpoint import validate_checkpoint_metadata
 from spire_learn.neural.config import ACCEPTED_RUNTIME_GYM_REVISIONS, load_neural_config
 from spire_learn.neural.gym_contracts import (
     CURRENT_CONTRACT, LEGACY_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT,
-    GYM_V1_1_0_CONTRACT, GYM_V1_1_1_CONTRACT, contract_for_revision, contract_for_schema,
+    GYM_V1_1_0_CONTRACT, GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT, contract_for_revision, contract_for_schema,
     contracts_for_fingerprint,
 )
 from tests.unit import test_neural_envs_standard as standard_env_tests
@@ -197,7 +197,7 @@ class GymV111Tests(unittest.TestCase):
                             for value in contract.raw_mode_mappings.values()))
         self.assertEqual(contracts_for_fingerprint(COMMON),
                          (CURRENT_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT,
-                          GYM_V1_1_0_CONTRACT, contract))
+                          GYM_V1_1_0_CONTRACT, contract, GYM_V1_2_0_CONTRACT))
         self.assertIs(contract_for_schema(COMMON, REVISION), contract)
         self.assertIs(contract_for_schema(COMMON, GYM_8726D467_CONTRACT.source_revision),
                       GYM_8726D467_CONTRACT)
@@ -376,10 +376,10 @@ class GymV111Tests(unittest.TestCase):
         from scripts.neural import qualify_gym_v1, soak_gym_v1
         with patch.object(qualify_gym_v1, "run") as run:
             qualify_gym_v1.main(["--output", "out"])
-            self.assertEqual(run.call_args.kwargs["profile_dir"], Path("configs/neural/gym-1.1.1"))
+            self.assertEqual(run.call_args.kwargs["profile_dir"], Path("configs/neural/gym-1.2.0"))
         with patch.object(soak_gym_v1, "run") as run:
             soak_gym_v1.main(["--steps", "1", "--output", "out"])
-            self.assertEqual(run.call_args.kwargs["profile_dir"], Path("configs/neural/gym-1.1.1"))
+            self.assertEqual(run.call_args.kwargs["profile_dir"], Path("configs/neural/gym-1.2.0"))
 
 
 _real_import = __import__

@@ -12,7 +12,7 @@ from typing import Any
 
 
 _ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_PROFILE_DIR = Path("configs/neural/gym-1.1.1")
+_DEFAULT_PROFILE_DIR = Path("configs/neural/gym-1.2.0")
 _MODES = ("standalone", "run", "standard-standalone", "standard-run")
 
 

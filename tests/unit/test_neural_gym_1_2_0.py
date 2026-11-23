@@ -67,8 +67,10 @@ class GymV120Tests(unittest.TestCase):
             self.assertEqual(config.environment_revision, REVISION)
             if name in MODES:
                 self.assertEqual(config.mode, name)
-                self.assertEqual(config.accepted_identities[0].accepted_raw_mode_mappings[name],
-                                 GYM_V1_2_0_CONTRACT.raw_mode_mappings[name])
+                # The Standard standalone template reads the compact view (its own mapping).
+                expected = (GYM_V1_2_0_CONTRACT.raw_mode_mappings_for_view(COMPACT)
+                            if name == "standard-standalone" else GYM_V1_2_0_CONTRACT.raw_mode_mappings)
+                self.assertEqual(config.accepted_identities[0].accepted_raw_mode_mappings[name], expected[name])
         profile = json.loads((ROOT / "configs/neural/gym-1.2.0/runtime.json").read_text())
         self.assertEqual(profile["schema"], "spire-learn-gym-runtime-profile-v2")
         self.assertEqual(profile["gym_revision"], REVISION)

@@ -15,9 +15,9 @@ import weakref
 
 from spire_learn.contracts import ContractError
 from spire_learn.neural.config import COMMON_VIEW_FINGERPRINT
-from spire_learn.neural.contracts import BufferArray, CombatFrame, Lifecycle
+from spire_learn.neural.contracts import INTEGER_DTYPES, BufferArray, CombatFrame, Lifecycle
 from spire_learn.neural.gym_contracts import LEGACY_CONTRACT, contract_for_schema
-from spire_learn.neural.views import COMMON_V1, ViewSpec, view_for_id
+from spire_learn.neural.views import COMMON_V1, STANDARD_COMBAT_V1, ViewSpec, view_for_id
 
 
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}\Z")
@@ -32,7 +32,9 @@ def _schema_contract(fingerprint: str, revision: str | None = None, view: ViewSp
     # deployed descriptors must still match their complete native body hash.
     if view is COMMON_V1 and fingerprint == COMMON_VIEW_FINGERPRINT:
         return LEGACY_CONTRACT
-    field = "common_fingerprint" if view is COMMON_V1 else "standard_combat_fingerprint"
+    field = ("common_fingerprint" if view is COMMON_V1
+             else "standard_combat_fingerprint" if view is STANDARD_COMBAT_V1
+             else "standard_compact_fingerprints")
     try:
         return contract_for_schema(fingerprint, revision, field=field)
     except ValueError as error:
@@ -97,8 +99,8 @@ class TensorSpec:
 
     def __post_init__(self) -> None:
         _string(self.key, "tensor key")
-        if self.dtype not in {"int8", "int64"}:
-            raise ContractError("common tensors must use int8 or int64")
+        if self.dtype not in INTEGER_DTYPES:
+            raise ContractError("combat tensors must use int8, int16, int32 or int64")
         if not isinstance(self.shape, tuple) or not self.shape or any(
             type(dim) is not int or dim < 1 for dim in self.shape
         ):
@@ -109,8 +111,8 @@ class TensorSpec:
         ):
             raise ContractError("tensor columns must be ColumnSpec records")
         if self.columns:
-            if self.dtype != "int64" or len(self.shape) not in {1, 2}:
-                raise ContractError("value tensors must be int64 vectors or row matrices")
+            if self.dtype not in {"int16", "int32", "int64"} or len(self.shape) not in {1, 2}:
+                raise ContractError("value tensors must be int16/int32/int64 vectors or row matrices")
             if len(self.columns) != self.shape[-1]:
                 raise ContractError("value tensor columns must match its final dimension")
             if len({column.field for column in self.columns}) != len(self.columns):
@@ -358,7 +360,7 @@ def _descriptor_tensor(raw: Mapping[str, object], name: str) -> tuple[str, str, 
     dtype = _string(raw.get("dtype"), f"{name}.dtype")
     shape_raw = _required_list(raw.get("shape"), f"{name}.shape")
     shape = tuple(_integer(dim, f"{name}.shape dimension") for dim in shape_raw)
-    if dtype not in {"int8", "int64"} or not shape or any(dim < 1 for dim in shape):
+    if dtype not in INTEGER_DTYPES or not shape or any(dim < 1 for dim in shape):
         raise ContractError(f"{name} has unsupported dtype or shape")
     return key, dtype, shape
 
@@ -501,13 +503,17 @@ def parse_combat_descriptor(
         _, dtype, shape = _descriptor_tensor(item, f"descriptor.tensors.{key}")
         padding = _integer(item.get("padding"), f"descriptor.tensors.{key}.padding")
         if "columns" in item:
-            if dtype != "int64":
-                raise ContractError(f"value tensor {key} must use int64")
+            if dtype not in view.value_dtypes:
+                raise ContractError(f"value tensor {key} uses a dtype this view does not accept")
             if len(shape) == 2 and key in capacities and capacities[key] != shape[0]:
                 raise ContractError(f"row tensor {key} shape must match its named capacity")
             columns, references = _parse_descriptor_columns(
                 item, key, shape, vocabularies
             )
+            bits = 8 * INTEGER_DTYPES[dtype][1]
+            if dtype != "int64" and any(column.low < -(2 ** (bits - 1)) or column.high > 2 ** (bits - 1) - 1
+                                        for column in columns):
+                raise ContractError(f"value tensor {key} declares a domain outside its dtype")
             known_key = _string(item.get("known"), f"{key}.known")
             occupied_key = f"{key}_occupied" if len(shape) == 2 else None
             tensors[key] = TensorSpec(
@@ -543,6 +549,17 @@ def parse_combat_descriptor(
             if not group.columns:
                 raise ContractError(f"{key}.{column.field} fixed reference lacks value columns")
 
+    if view.dense_view_id is not None:
+        # A compact layout: same groups as its dense view, never more rows or dispatch rows.
+        semantics = _required_mapping(body.get("semantics"), "descriptor.semantics")
+        if semantics.get("dense_schema") != view.dense_view_id:
+            raise ContractError("compact descriptor does not name its accepted dense view")
+        if view.dense_action_width is None or action_space.n > view.dense_action_width:
+            raise ContractError("compact dispatch width exceeds the dense view")
+        for key, spec in tensors.items():
+            if spec.columns and len(spec.shape) == 2 and spec.shape[0] > view.dense_rows.get(key, 0):
+                raise ContractError(f"compact {key} rows exceed the dense view")
+
     if "action_mask" not in tensors:
         raise ContractError("descriptor must declare action_mask")
     mask = tensors["action_mask"]
@@ -568,7 +585,10 @@ def _unpack(buffer: BufferArray) -> tuple[int, ...]:
     # One bulk call; byte-identical to per-element "=b"/"=q" decoding (standard sizes, no padding).
     if buffer.dtype == "int8":
         return struct.unpack(f"={len(buffer.data)}b", buffer.data)
-    return struct.unpack(f"={len(buffer.data) // 8}q", buffer.data)
+    if buffer.dtype == "int64":
+        return struct.unpack(f"={len(buffer.data) // 8}q", buffer.data)
+    code, size = INTEGER_DTYPES[buffer.dtype]
+    return struct.unpack(f"={len(buffer.data) // size}{code}", buffer.data)
 
 
 def _row_capacity(spec: TensorSpec) -> int:
@@ -868,10 +888,10 @@ def _frame_is_valid_fast(frame: CombatFrame, schema: CombatSchema) -> bool:
         known_data = raw[spec.known_key]
         columns = len(spec.columns)
         rows = _row_capacity(spec)
-        item = 1 if spec.dtype == "int8" else 8
+        code, item = INTEGER_DTYPES[spec.dtype]
         if len(data) != rows * columns * item or len(known_data) != rows * columns:
             return False
-        values = memoryview(data).cast("b" if item == 1 else "q")
+        values = memoryview(data).cast(code)
         known = memoryview(known_data).cast("b")
         occupied = occupancy.get(spec.occupied_key) if spec.occupied_key is not None else None
         if occupied is not None and len(occupied) < rows:
@@ -881,7 +901,7 @@ def _frame_is_valid_fast(frame: CombatFrame, schema: CombatSchema) -> bool:
         elif key in view.optional_known_empty_groups:
             empty_values, empty_known = bytes(columns * item), None
         else:
-            empty_values = struct.pack("=b" if item == 1 else "=q", spec.padding) * columns
+            empty_values = struct.pack("=" + code, spec.padding) * columns
             empty_known = bytes(columns)
         row = 0
         while row < rows:

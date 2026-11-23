@@ -107,7 +107,7 @@ def hp_potential(frame: CombatFrame, schema: object) -> float:
         raise ContractError("hp shaping requires enemies hp and max_hp columns")
     hp_index, max_index = fields.index("hp"), fields.index("max_hp")
     rows, columns = spec.shape
-    values = _enemy_tensor(frame, "enemies", spec.shape, "int64")
+    values = _enemy_tensor(frame, "enemies", spec.shape, spec.dtype)
     known = _enemy_tensor(frame, spec.known_key, spec.shape, "int8")
     occupied = _enemy_tensor(frame, spec.occupied_key, (rows,), "int8")
     hp_total = 0

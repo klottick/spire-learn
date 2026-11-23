@@ -292,7 +292,7 @@ def build_policy(
     if (model_id, features_id) not in (LEARNER_IDENTITY_IDS[:2], STANDARD_LEARNER_IDENTITY_IDS[:2]):
         raise ContractError("policy model_id/features_id must be a supported learner identity pair")
     if ((model_id, features_id) == STANDARD_LEARNER_IDENTITY_IDS[:2]
-            and schema.view.view_id != "spire-gym-standard-combat-view-v1"):
+            and "spire-gym-standard-combat-view-v1" not in (schema.view.view_id, schema.view.dense_view_id)):
         raise ContractError("the Standard learner identity requires the Standard combat view")
     if type(seed) is not int:
         raise ContractError("policy seed must be a primitive integer")
@@ -595,7 +595,15 @@ def build_policy(
                 output = self.forward(batch)
                 if not torch.isfinite(output.values).all().item():
                     raise ContractError("critic values must be finite before action selection")
-                distribution = masked_categorical(output.logits, batch.action_mask)
+                logits, mask = output.logits, batch.action_mask
+                dense_width = self._schema.view.dense_action_width
+                if dense_width is not None and dense_width > logits.shape[1]:
+                    # A compact layout samples over the dense dispatch width (illegal padding), so
+                    # the generator is consumed exactly as for the dense view of the same state.
+                    extra = dense_width - logits.shape[1]
+                    logits = torch.cat((logits, logits.new_zeros((logits.shape[0], extra))), dim=1)
+                    mask = torch.cat((mask, mask.new_zeros((mask.shape[0], extra))), dim=1)
+                distribution = masked_categorical(logits, mask)
                 actions = distribution.mode() if deterministic else distribution.sample(generator=generator)
                 log_probs = distribution.log_prob(actions)
                 return tuple(

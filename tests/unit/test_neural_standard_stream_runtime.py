@@ -25,7 +25,9 @@ from spire_learn.neural.curriculum import CurriculumSampler
 from spire_learn.neural.scenario_stream import ScenarioRecipe, generate_scenario_shard, load_scenario_recipe
 from spire_learn.neural.scenario_support import canonical_bytes, content_sha256, json_value
 from spire_learn.neural.standard_catalog import CatalogRejected
-from tests.unit.test_neural_standard_stream import recipe_document, synthetic_states, write_table
+from tests.unit.test_neural_standard_stream import (
+    GYM_1_1_1, GYM_1_2_0, recipe_document, synthetic_states, write_table,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS = ROOT / "artifacts/development/neural-combat"
@@ -34,6 +36,7 @@ WORK = Path(os.environ.get("SPIRE_LEARN_RUNNER_OUTPUT") or ARTIFACTS)
 V1 = ROOT / "configs/neural/curriculum-v1/recipe.json"
 STANDARD_TEMPLATE = ROOT / "configs/neural/gym-1.1.1/standard-standalone.toml"
 STANDARD_STREAM_TEMPLATE = ROOT / "configs/neural/gym-1.1.1/standard-stream.toml"
+STANDARD_STREAM_TEMPLATE_1_2_0 = ROOT / "configs/neural/gym-1.2.0/standard-stream.toml"
 _RUN_NATIVE = os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") == "1"
 
 # The unmodified M10 pins (tests/unit/test_neural_scenario_stream_v2.py).
@@ -653,19 +656,47 @@ def smoke_states(runs: int = 160, seed: int = 11) -> list[dict]:
     return states
 
 
+def _live_gym_revision() -> str | None:
+    from spire_lab import _native
+    return _native.build_info().get("revision")
+
+
 @unittest.skipUnless(_RUN_NATIVE, "set SPIRE_LEARN_RUN_NATIVE_INTEGRATION=1 in the approved runtime")
 class StandardStreamSmokeTest(unittest.TestCase):
+    """One smoke per Gym release; each runs only in the runtime container of its own release."""
+
     def test_standard_stream_smoke(self):
         """Two PPO updates at 16 rows on a synthetic table: shard 0 (level 0), then resume on fuzzed shard 1."""
+        if _live_gym_revision() != GYM_1_1_1:
+            self.skipTest("the v1.1.1 smoke needs the Gym v1.1.1 runtime")
+        template_text = standard_template_text(rows=16, steps=8).replace(
+            "max_training_decisions = 256", "max_training_decisions = 4096").replace(
+            "max_environment_actions = 1024", "max_environment_actions = 4096").replace(
+            "max_wall_seconds = 120.0", "max_wall_seconds = 1200.0")
+        self._smoke(GYM_1_1_1, template_text)
+
+    def test_standard_stream_smoke_gym_1_2_0(self):
+        """The v1.2.0 smoke: a synthetic v1.2.0 table (pinned entry-resource descriptor), compact view."""
+        if _live_gym_revision() != GYM_1_2_0:
+            self.skipTest("the v1.2.0 smoke needs the Gym v1.2.0 runtime")
+        template_text = STANDARD_STREAM_TEMPLATE_1_2_0.read_text().replace(
+            "steps = 32", "steps = 8").replace("max_wall_seconds = 900.0", "max_wall_seconds = 1200.0")
+        self.assertIn('standard_view_layout = "compact"', template_text)
+        evidence = self._smoke(GYM_1_2_0, template_text)
+        self.assertEqual(evidence["standard_view"], {
+            "layout": "compact", "preset": "standard-combat-compact-v1",
+            "fingerprint": "49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8"})
+
+    def _smoke(self, revision: str, template_text: str) -> dict:
         from spire_learn.neural.runner import RuntimeOperationLimits
         from spire_learn.neural.standard_catalog import validate_entries
         from spire_learn.neural.stream_runner import prepare_stream, run_stream_segment
         previous = recipes.bind_validator(None)  # the real Gym, bound lazily in this process
         self.addCleanup(recipes.bind_validator, previous)
         ss.clear_shard_cache()
-        root = WORK / f"standard-stream-smoke-{os.getpid()}"
+        root = WORK / f"standard-stream-smoke-{revision[:7]}-{os.getpid()}"
         root.mkdir()
-        _, table_sha = write_table(root, smoke_states())
+        _, table_sha = write_table(root, smoke_states(), revision=revision)
         recipe_path = root / "recipe.json"
         recipe_path.write_text(json.dumps(recipe_document(
             table_sha, shard_size=32, redraw_bound=4,
@@ -676,16 +707,17 @@ class StandardStreamSmokeTest(unittest.TestCase):
                                        recipes.gym_validator())
         self.assertEqual(rejected, [])
         template = root / "template.toml"
-        template.write_text(standard_template_text(rows=16, steps=8).replace(
-            "max_training_decisions = 256", "max_training_decisions = 4096").replace(
-            "max_environment_actions = 1024", "max_environment_actions = 4096").replace(
-            "max_wall_seconds = 120.0", "max_wall_seconds = 1200.0"))
-        evidence = {"recipe_sha256": recipe.sha256, "table_sha256": table_sha, "segments": []}
+        template.write_text(template_text)
+        evidence = {"gym_revision": revision, "recipe_sha256": recipe.sha256, "table_sha256": table_sha,
+                    "segments": []}
         parent = None
         for index, purpose in ((0, "train"), (1, "resume")):
             prepared = prepare_stream(recipe_path, root / f"shard-{index}", arm="mixed", split="train",
                                       shard_index=index, template=template)
             config = load_neural_config(root / f"shard-{index}/config.toml")
+            evidence["standard_view"] = {"layout": config.standard_view_layout,
+                                         "preset": config.standard_view_preset,
+                                         "fingerprint": config.standard_view_fingerprint}
             started = time.monotonic()
             result = run_stream_segment(config, purpose=purpose, checkpoint=parent,
                                         operation_limits=RuntimeOperationLimits(
@@ -710,6 +742,7 @@ class StandardStreamSmokeTest(unittest.TestCase):
             parent = result["checkpoint"]
         self.assertGreater(evidence["segments"][1]["fuzzed_cases"], 0)
         (root / "smoke-evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+        return evidence
 
 
 if __name__ == "__main__":

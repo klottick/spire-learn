@@ -207,7 +207,10 @@ def _validate_admission(policy: Any, rollout: Rollout, config: PPOConfig) -> tup
         contract = contract_for_revision(schema.gym_revision)
     except ValueError as error:
         raise ContractError("policy schema is not the authenticated common public view") from error
-    expected_mapping = contract.raw_mode_mappings[rollout.mode]
+    if schema.view.dense_view_id is None:
+        expected_mapping = contract.raw_mode_mappings[rollout.mode]
+    else:  # a compact layout has its own mapping (standard-standalone only)
+        expected_mapping = contract.raw_mode_mappings_for_view(schema.schema_fingerprint).get(rollout.mode)
     if accepted_mappings[rollout.mode] != expected_mapping:
         raise ContractError("rollout raw-mode mapping is not authenticated by the accepted config")
     version = getattr(policy, "_behavior_policy_version", None)

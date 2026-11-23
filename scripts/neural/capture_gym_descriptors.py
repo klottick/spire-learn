@@ -17,6 +17,13 @@ DOMAINS = {
     "common": b"spire-gym/combat-policy-view/v1\0",
     "standard-combat": b"spire-gym/combat-view/standard/v1\0",
     "standard-run": b"spire-gym/run-schema/standard/v1\0",
+    # Gym v1.2.0 opt-in compact Standard combat view (standard-run-api.md, M39b).
+    "standard-combat-compact": b"spire-gym/combat-view/standard/compact/v1\0",
+}
+# Compact presets (file stem -> capacity preset); captured only with --compact.
+COMPACT_PRESETS = {
+    "standard-combat-compact": "standard-combat-compact-v1",
+    "standard-combat-compact-play": "standard-combat-compact-play-v1",
 }
 IRONCLAD_ENTRY = {
     "id": "capture-ironclad-a0", "character": "ironclad", "ascension": 0,
@@ -33,7 +40,8 @@ def canonical(value: object) -> bytes:
 
 def verify(name: str, descriptor: dict) -> dict:
     body = {key: value for key, value in descriptor.items() if key != "fingerprint"}
-    actual = hashlib.sha256(DOMAINS[name] + canonical(body)).hexdigest()
+    domain = DOMAINS["standard-combat-compact" if name in COMPACT_PRESETS else name]
+    actual = hashlib.sha256(domain + canonical(body)).hexdigest()
     if actual != descriptor["fingerprint"]:
         raise SystemExit(f"{name}: descriptor body does not match its fingerprint")
     return descriptor
@@ -43,7 +51,7 @@ def _refuse(*args, **kwargs):
     raise AssertionError("descriptor capture must not reset or step")
 
 
-def capture(output: Path, revision: str) -> dict:
+def capture(output: Path, revision: str, *, compact: bool = False) -> dict:
     from spire_lab import _native
     from spire_lab.gymnasium import (
         IroncladCombatVectorEnv, RunEnv, RunVectorEnv, StandardCombatVectorEnv,
@@ -68,6 +76,16 @@ def capture(output: Path, revision: str) -> dict:
             files["standard-combat-catalog"] = env.catalog_descriptor()
         finally:
             env.close()
+        for name, preset in (COMPACT_PRESETS.items() if compact else ()):
+            env = StandardCombatVectorEnv({
+                "catalog_schema_id": "spire-gym-standard-combat-catalog-v1",
+                "profile_id": "standard-combat-v1", "entries": [IRONCLAD_ENTRY],
+            }, 1, observation="compact", capacity_preset=preset)
+            try:
+                files[name] = verify(name, env.observation_spec())
+                files[f"{name}-environment"] = env.environment_spec()
+            finally:
+                env.close()
         env = RunVectorEnv([{"character": "ironclad", "ascension": 0}], profile="standard")
         try:
             files["standard-run"] = verify("standard-run", env.observation_spec())
@@ -98,17 +116,18 @@ def capture(output: Path, revision: str) -> dict:
     output.mkdir(parents=True, exist_ok=True)
     for name, value in files.items():
         (output / f"{name}-{short}.json").write_bytes(canonical(value) + b"\n")
-    return {"build_info": info,
-            "fingerprints": {name: files[name]["fingerprint"]
-                             for name in ("common", "standard-combat", "standard-run")}}
+    names = ("common", "standard-combat", "standard-run") + (tuple(COMPACT_PRESETS) if compact else ())
+    return {"build_info": info, "fingerprints": {name: files[name]["fingerprint"] for name in names}}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
     parser.add_argument("--revision", required=True)
+    parser.add_argument("--compact", action="store_true",
+                        help="also capture the compact Standard combat views (Gym v1.2.0+)")
     args = parser.parse_args()
-    print(json.dumps(capture(args.output, args.revision), sort_keys=True))
+    print(json.dumps(capture(args.output, args.revision, compact=args.compact), sort_keys=True))
 
 
 if __name__ == "__main__":

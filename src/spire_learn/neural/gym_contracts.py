@@ -9,6 +9,14 @@ from types import MappingProxyType
 from collections.abc import Mapping
 
 
+# Opt-in compact Standard combat view (Gym v1.2.0, standard-run-api.md "M39b"). Each capacity
+# preset has its own descriptor fingerprint; a compact layout is its own learner input identity.
+STANDARD_COMPACT_SCHEMA_ID = "spire-gym-standard-combat-view-compact-v1"
+STANDARD_COMPACT_PRESET = "standard-combat-compact-v1"
+STANDARD_COMPACT_PLAY_PRESET = "standard-combat-compact-play-v1"
+_STANDARD_COMPACT_MAPPING_ID = "spire-learn-standard-combat-compact-v1"
+
+
 @dataclass(frozen=True)
 class BuildIdentity:
     """Published ``build_info()`` values a release build must report exactly."""
@@ -37,9 +45,36 @@ class GymContract:
     standard_rules_id: str | None = None
     # Opt-in compact Standard combat view (schema
     # ``spire-gym-standard-combat-view-compact-v1``), one fingerprint per capacity preset.
-    # Recorded for identity only; they do not enter the checkpoint mappings.
+    # They never enter ``raw_mode_mappings`` (dense); a compact config's mapping comes from
+    # ``raw_mode_mappings_for_view``.
     standard_compact_combat_fingerprint: str | None = None
     standard_compact_combat_play_fingerprint: str | None = None
+
+    @property
+    def standard_compact_fingerprints(self) -> Mapping[str, str]:
+        """Compact capacity preset -> descriptor fingerprint; empty for dense-only releases."""
+        presets = {}
+        if self.standard_compact_combat_fingerprint is not None:
+            presets[STANDARD_COMPACT_PRESET] = self.standard_compact_combat_fingerprint
+        if self.standard_compact_combat_play_fingerprint is not None:
+            presets[STANDARD_COMPACT_PLAY_PRESET] = self.standard_compact_combat_play_fingerprint
+        return MappingProxyType(presets)
+
+    def raw_mode_mappings_for_view(self, standard_view_fingerprint: str | None) -> Mapping[str, str]:
+        """The accepted raw-mode mappings for a Standard combat view fingerprint.
+
+        The dense view (or no Standard view) keeps ``raw_mode_mappings`` unchanged. A compact
+        preset fingerprint maps ``standard-standalone`` only (the Run's combat projection is
+        dense only), under its own ID naming the compact schema and the preset's fingerprint,
+        so dense and compact checkpoints never load into each other.
+        """
+        if (standard_view_fingerprint is None
+                or standard_view_fingerprint not in self.standard_compact_fingerprints.values()):
+            return self.raw_mode_mappings
+        mapping = f"{_STANDARD_COMPACT_MAPPING_ID}@{standard_view_fingerprint}"
+        if self.rules_epoch is not None:
+            mapping = f"{mapping}+{self.rules_epoch}"
+        return MappingProxyType({"standard-standalone": mapping})
 
     @property
     def raw_mode_mappings(self) -> Mapping[str, str]:
@@ -195,19 +230,23 @@ def contract_for_schema(
     """Select by revision; without one, accept only an unambiguous fingerprint.
 
     ``field`` names the contract fingerprint the descriptor must equal:
-    ``common_fingerprint`` or ``standard_combat_fingerprint``.
+    ``common_fingerprint``, ``standard_combat_fingerprint`` or
+    ``standard_compact_fingerprints`` (any compact preset of the release).
     """
-    if field not in {"common_fingerprint", "standard_combat_fingerprint"}:
+    if field not in {"common_fingerprint", "standard_combat_fingerprint", "standard_compact_fingerprints"}:
         raise ValueError("unsupported combat view fingerprint field")
+
+    def accepts(contract: GymContract) -> bool:
+        if field == "standard_compact_fingerprints":
+            return type(fingerprint) is str and fingerprint in contract.standard_compact_fingerprints.values()
+        return type(fingerprint) is str and fingerprint == getattr(contract, field)
+
     if revision is not None:
         contract = contract_for_revision(revision)
-        if fingerprint != getattr(contract, field):
+        if not accepts(contract):
             raise ValueError("combat view fingerprint does not match the Gym revision")
         return contract
-    matches = tuple(
-        contract for contract in CONTRACTS
-        if type(fingerprint) is str and fingerprint == getattr(contract, field)
-    )
+    matches = tuple(contract for contract in CONTRACTS if accepts(contract))
     if not matches:
         raise ValueError("unsupported combat view fingerprint")
     if len(matches) > 1:

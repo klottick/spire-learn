@@ -38,6 +38,7 @@ from spire_learn.neural.contracts import (
     NeuralIdentity,
     Rollout,
     StepRecord,
+    buffer_value,
 )
 from spire_learn.neural.device import (
     RuntimeDevicePlan,
@@ -47,7 +48,7 @@ from spire_learn.neural.device import (
     validate_resume_device,
 )
 from spire_learn.neural.evaluation import REFERENCE_POLICIES, choose_reference
-from spire_learn.neural.gym_contracts import contract_for_revision
+from spire_learn.neural.gym_contracts import STANDARD_COMPACT_SCHEMA_ID, contract_for_revision
 from spire_learn.neural.ppo import UpdateFault, UpdateMetrics, ppo_update
 
 
@@ -408,6 +409,11 @@ def _manifest_projection(
         "run_observation_fingerprint": config.run_observation_fingerprint,
         "standard_view_fingerprint": config.standard_view_fingerprint,
         "standard_run_fingerprint": config.standard_run_fingerprint,
+        # Only compact configs gain these keys; dense records stay byte-identical.
+        **({"standard_view_layout": config.standard_view_layout,
+            "standard_view_preset": config.standard_view_preset,
+            "standard_view_schema_id": STANDARD_COMPACT_SCHEMA_ID}
+           if config.standard_view_layout == "compact" else {}),
         "schema_descriptor_digest": getattr(schema, "descriptor_digest", None),
         "learner_identity": identity_payload(_selected_identity(config)),
         "policy_kind": policy_kind,
@@ -805,7 +811,7 @@ def _case_accounting(
 def _public_scalar(frame: CombatFrame, schema: Any, group: str, names: tuple[str, ...]) -> int | None:
     spec = schema.tensors.get(group)
     values = frame.tensors.get(group)
-    if spec is None or values is None or len(spec.shape) != 1 or values.dtype != "int64":
+    if spec is None or values is None or len(spec.shape) != 1 or values.dtype != getattr(spec, "dtype", "int64"):
         return None
     for name in names:
         index = next((i for i, column in enumerate(spec.columns) if column.field == name), None)
@@ -815,7 +821,7 @@ def _public_scalar(frame: CombatFrame, schema: Any, group: str, names: tuple[str
             known = frame.tensors.get(spec.known_key)
             if known is None or known.data[index] != 1:
                 continue
-        return struct.unpack_from("=q", values.data, index * 8)[0]
+        return buffer_value(values, index)
     return None
 
 

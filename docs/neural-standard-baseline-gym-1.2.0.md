@@ -239,7 +239,7 @@ Ironclad supplies the Learn recipe and both panels. The local `root_availability
 
 ## Baselines
 
-Two replicates of the Standard foundation baseline ran on Gym v1.2.0 and were scored on the selection panel above (256 cases, deterministic argmax evaluation, 1,024 actions and 120 s per case, plus a 500-action cap on any one public turn). Every table in this section regenerates from the local run summaries with `scripts/neural/standard_results.py` (`--run1`, `--run2`, `--panel`, `--run-states` and `--recipe` pointing at the v1.2.0 recipe); the training diagnostics come from the segment event streams as described below. Only aggregates are published.
+Two replicates of the Standard foundation baseline ran on Gym v1.2.0 and were scored on the selection panel above (256 cases, deterministic argmax evaluation, 1,024 actions and 120 s per case, plus a 500-action cap on any one public turn). The learning-curve, censor-reason, level, act and room-kind stratum and paired-test tables regenerate from the local run summaries with `scripts/neural/standard_results.py` (`--run1`, `--run2`, `--panel`, `--run-states` and `--recipe` pointing at the v1.2.0 recipe). The room-kind-by-checkpoint table, the 25%-to-final and 75%-to-final tests, the tag table and the wall-time table come from one-off aggregation of the same summaries and `progress.jsonl`, and the per-eighth training diagnostics come from a one-off aggregation of the segment event streams, described below; neither is a repository script. Only aggregates are published.
 
 | | r1 | r2 |
 | --- | --- | --- |
@@ -409,21 +409,21 @@ Training-stream diagnostics per eighth of training (each eighth is 49 or 50 cons
 | 3 | 0.676 | 0.665 | 0.044 | 47.7 | 0.672 | 0.807 | 0.040 | 48.3 |
 | 4 | 0.693 | 0.680 | 0.052 | 46.8 | 0.690 | 0.699 | 0.046 | 47.8 |
 | 5 | 0.686 | 0.598 | 0.049 | 46.8 | 0.681 | 0.669 | 0.050 | 46.3 |
-| 6 | 0.683 | 0.634 | 0.054 | 46.4 | 0.665 | 0.622 | 0.054 | 45.9 |
+| 6 | 0.683 | 0.634 | 0.054 | 46.4 | 0.665 | 0.622 | 0.053 | 45.9 |
 | 7 | 0.656 | 0.577 | 0.049 | 46.5 | 0.671 | 0.587 | 0.052 | 45.7 |
-| 8 | 0.677 | 0.534 | 0.057 | 44.5 | 0.664 | 0.547 | 0.055 | 46.3 |
+| 8 | 0.677 | 0.534 | 0.057 | 44.5 | 0.664 | 0.547 | 0.054 | 46.3 |
 
-Each eighth holds 7,300 to 8,100 settled fights. The training win rate stays between 0.65 and 0.70 and does not fall with the evaluation wins. Entropy falls by 42 to 46% in both replicates and value loss rises by more than half (r1 0.037 to 0.057, r2 0.034 to 0.055), and mean HP on wins drifts down by 1 to 3 points. Training and evaluation differ: training samples actions while evaluation takes the argmax, and the training stream mixes more fuzz levels over time, so the training win rate is not an evaluation proxy.
+Each eighth holds 7,300 to 8,100 settled fights. The training win rate stays between 0.65 and 0.70 and does not fall with the evaluation wins. Entropy falls by 42 to 46% in both replicates and value loss rises by more than half (r1 0.037 to 0.057, r2 0.034 to 0.054), and mean HP on wins drifts down by 1 to 3 points. Training and evaluation differ: training samples actions while evaluation takes the argmax, and the training stream mixes more fuzz levels over time, so the training win rate is not an evaluation proxy.
 
 What the data support and weaken:
 
-- **Not classic overfitting to the training fights.** The training win rate is flat while the evaluation wins fall, and the decline spans every fuzz level. This does not exclude a train/evaluation mismatch.
-- **Turn-cap stalling is not supported by r2's training.** r2 never hit the turn cap in training. In evaluation the final checkpoints have 2 and 4 turn-cap censors, which is too few to account for 12 to 24 lost wins, and most lost cases are deaths (r1 86 and r2 82 losses at final against 64 and 67 at 25%).
-- **Final-quarter curriculum shift (level 4 joins).** Weakly supported at most. Half of r1's decline (12 of 24 wins, 190 to 178) predates level 4, and r2 is flat to 75% (183, 179, 181) before dropping 13 in the last quarter. The r2 drop does not concentrate at level 4: its level-4 wins are 35 at 75% and 37 at final, and the drops are at levels 0 and 2 (51 to 42 and 48 to 42). A shift in the training mixture is therefore consistent with r2's timing, but r1 and the level breakdown do not single it out.
-- **PPO drift while entropy falls and the critic worsens.** Consistent with both replicates: entropy falls and value loss rises over the whole run, in step with the slow decline in evaluation wins. These data only show that the quantities move together; they do not show cause.
+- **Classic overfitting to the training fights. Weakened.** The training win rate is flat while the evaluation wins fall, and the decline spans every fuzz level. This does not exclude a train/evaluation mismatch.
+- **Turn-cap stalling. Not supported.** r2 never hit the turn cap in training. In evaluation the final checkpoints have 2 and 4 turn-cap censors, which is too few to account for the 15 (r2) to 24 (r1) wins lost between the 25% and final checkpoints, and most lost cases are deaths (r1 86 and r2 82 losses at final against 64 and 67 at 25%).
+- **Final-quarter curriculum shift (level 4 joins). Weakly supported.** Half of r1's decline (12 of 24 wins, 190 to 178) predates level 4, and r2 is flat to 75% (183, 179, 181) before dropping 13 in the last quarter. The r2 drop does not concentrate at level 4: its level-4 wins are 35 at 75% and 37 at final, and the drops are at levels 0 and 2 (51 to 42 and 48 to 42). A shift in the training mixture is therefore consistent with r2's timing, but r1 and the level breakdown do not single it out.
+- **PPO drift while entropy falls and the critic worsens. Untested (consistent with the data).** Both replicates show it: entropy falls and value loss rises over the whole run, in step with the slow decline in evaluation wins. These data only show that the quantities move together; they do not show cause.
 
-Neither explanation is tested. The final checkpoint is the pre-registered comparison point; checkpoint selection is a later decision. The v1.1.1 baselines went the other way: r1 rose from 169 at 25% to 186 at the end and r2 stayed flat around 180. That series is separate, and its numbers are for orientation only.
+r1 trained without the cap, so stalling in r1's training cannot be measured from its records. Neither remaining explanation is tested. The final checkpoint is the pre-registered comparison point; checkpoint selection is a later decision. The v1.1.1 baselines went the other way: r1 rose from 169 at 25% to 186 at the end and r2 stayed flat around 180. That series is separate, and its numbers are for orientation only.
 
 ### Series separation
 
-The v1.2.0 and v1.1.1 series are separate and are not paired. The cases, panel, rules (Standard rules version and the turn cap differ, so differences between the series cannot be read as a Gym-release effect. For orientation only, the v1.1.1 finals were 186 (r1) and 181 (r2) wins of 256 on their own panel, against 166 and 168 here. Gym v1.2.1 now exists and changes the rules id, so adopting it would be a later re-pin with its own baselines.
+The v1.2.0 and v1.1.1 series are separate and are not paired. The cases, panel and rules differ (the Standard rules version and the turn cap), so differences between the series cannot be read as a Gym-release effect. For orientation only, the v1.1.1 finals were 186 (r1) and 181 (r2) wins of 256 on their own panel, against 166 and 168 here. Gym v1.2.1 now exists and changes the rules id, so adopting it would be a later re-pin with its own baselines.

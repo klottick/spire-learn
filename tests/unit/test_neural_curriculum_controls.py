@@ -23,6 +23,18 @@ from tests.unit.test_neural_study_cdi import cdi_facts
 from tests.unit.test_neural_curriculum_integration import blocked_optional
 
 
+def patch_artifact_aggregate(api):
+    scan = api.low.tree_bytes
+    artifacts = ROOT/'artifacts/development/neural-combat'
+
+    def measure(path, **kwargs):
+        if path == artifacts:
+            return 0
+        return scan(path, **kwargs)
+
+    return patch.object(api.low, 'tree_bytes', measure)
+
+
 class ControlContractTests(unittest.TestCase):
     def controls(self):
         return importlib.import_module('scripts.neural.curriculum_controls')
@@ -94,6 +106,33 @@ class ControlContractTests(unittest.TestCase):
                 with patch.object(api.low, 'tree_bytes', side_effect=[12*api.GIB, 20*api.GIB]):
                     with self.assertRaisesRegex(RuntimeError, 'storage admission'):
                         api.storage_admission(root, root/'runtime', deps, reservation=1, live=live)
+
+    def test_storage_admission_limits_include_reservation(self):
+        api = self.controls()
+        gib = api.GIB
+        reservation = gib
+        cases = (
+            ('under all limits', 11*gib-1, 39*gib-1, 31*gib+1, True),
+            ('at all limits', 11*gib, 39*gib, 31*gib, True),
+            ('aggregate ceiling', 11*gib, 45*gib, 31*gib, False),
+            ('aggregate ceiling with reservation', 11*gib, 39*gib+1, 31*gib, False),
+            ('job ceiling', 11*gib+1, 39*gib, 31*gib, False),
+            ('free-space floor', 11*gib, 39*gib, 31*gib-1, False),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for label, job, aggregate, free, admitted in cases:
+                deps = SimpleNamespace(disk_usage=lambda _: SimpleNamespace(free=free))
+                with self.subTest(label=label), patch.object(api.low, 'tree_bytes',
+                        side_effect=[job, aggregate]):
+                    if admitted:
+                        self.assertEqual(
+                            api.storage_admission(root, root/'runtime', deps, reservation=reservation),
+                            dict(new_bytes=job, aggregate_bytes=aggregate, free_bytes=free,
+                                 reservation_bytes=reservation))
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'storage admission ceiling/floor exhausted'):
+                            api.storage_admission(root, root/'runtime', deps, reservation=reservation)
 
     def test_help_and_import_do_not_resolve_optional_packages(self):
         with blocked_optional() as attempts:
@@ -626,6 +665,7 @@ class ProjectedHostTests(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.stack.enter_context(patch.object(self.api.low, '_guest_path', side_effect=mapped))
+        self.stack.enter_context(patch_artifact_aggregate(self.api))
         self.calls, self.specs, self.removed = [], {}, []
         self.active, self.finished, self.collision, self.ambiguous, self.bad_mount = None, False, False, False, False
         self.guest_mutation = None
@@ -812,14 +852,6 @@ class ProjectedHostTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.api.prepare_job(ROOT, self.h, self.verified, self.budget, kind='segment',
                 job_id='curriculum-first', parent=prepared['parent_host'], arm='fixed', index=0)
-
-    def test_storage_reservation_enforces_new_aggregate_and_free_floors(self):
-        with patch.object(self.api.low, 'tree_bytes', side_effect=[12*self.api.GIB-1, 20*self.api.GIB]):
-            with self.assertRaises(RuntimeError):
-                self.api.storage_admission(ROOT, self.h, self.deps, reservation=2)
-        with patch.object(self.api.low, 'tree_bytes', side_effect=[1, 40*self.api.GIB]):
-            with self.assertRaises(RuntimeError):
-                self.api.storage_admission(ROOT, self.h, self.deps, reservation=1)
 
     def test_saved_prefix_or_nested_cpu_fault_cannot_settle_reserved_attempt(self):
         first = self.prepare(arm='mixed', index=0, max_updates=1)
@@ -1151,10 +1183,6 @@ class ProjectedHostTests(unittest.TestCase):
         self.assertEqual(seal['qualification_seconds'], 1.)
         with self.assertRaises(FileExistsError):
             api._write(self.h/'campaign-claim.json', {})
-        self.deps = replace(self.deps, disk_usage=lambda p: SimpleNamespace(free=30*self.api.GIB))
-        with patch.object(self.api.low, 'tree_bytes', return_value=0):
-            with self.assertRaises(RuntimeError):
-                self.api.storage_admission(ROOT, self.h, self.deps, reservation=1)
 
     def test_actual_failed_panel_is_failed_in_sealed_availability_and_job_history(self):
         api = self.api

@@ -99,10 +99,14 @@ class EncodedBatch:
     known_coverage: Mapping[str, Any]
     _storage: tuple[Any, ...] = field(default=(), repr=False, compare=False)
 
+    _row_padding: tuple[tuple[str, int], ...] = field(default=(), repr=False, compare=False)
+    # Optional known-empty groups can publish a nonuniform mask in the omitted suffix.
+    _known_padding: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
     def __post_init__(self) -> None:
         if not isinstance(self.schema_fingerprint, str) or not self.schema_fingerprint:
             raise ContractError("EncodedBatch requires a schema fingerprint")
-        for name in ("values", "known", "occupied", "known_coverage"):
+        for name in ("values", "known", "occupied", "known_coverage", "_known_padding"):
             value = getattr(self, name)
             if not isinstance(value, Mapping):
                 raise ContractError(f"EncodedBatch {name} must be a mapping")
@@ -148,6 +152,8 @@ class EncodedBatch:
             occupied=select_mapping(self.occupied),
             action_mask=self.action_mask.index_select(0, device_indices),
             known_coverage=select_mapping(self.known_coverage),
+            _row_padding=self._row_padding,
+            _known_padding=select_mapping(self._known_padding),
         )
 
 
@@ -163,17 +169,33 @@ def _torch_dtype(torch: Any, dtype: str) -> Any:
     raise ContractError(f"unsupported descriptor tensor dtype {dtype!r}")
 
 
-def _pack_tensor(torch: Any, frames: Sequence[CombatFrame], key: str, device: str) -> Any:
+def _pack_tensor(
+    torch: Any, frames: Sequence[CombatFrame], key: str, device: str,
+    *, stop: int | None = None, start: int = 0,
+) -> Any:
     """Pack one public tensor key into fresh writable batch storage on CPU."""
     buffer = frames[0].tensors[key]
-    writable = bytearray().join(frame.tensors[key].data for frame in frames)
+    shape = buffer.shape
+    if stop is None:
+        writable = bytearray().join(frame.tensors[key].data for frame in frames)
+    else:
+        stride = len(buffer.data) // shape[0]
+        writable = bytearray().join(
+            memoryview(frame.tensors[key].data)[start * stride:stop * stride] for frame in frames
+        )
+        shape = (stop - start, *shape[1:])
     try:
         view = torch.frombuffer(writable, dtype=_torch_dtype(torch, buffer.dtype))
         # frombuffer retains its writable owner. CPU views keep that storage
         # alive; a synchronous device copy needs no retained host duplicate.
-        return view.reshape(len(frames), *buffer.shape).to(device=device)
+        return view.reshape(len(frames), *shape).to(device=device)
     except (TypeError, RuntimeError, ValueError) as error:
         raise ContractError(f"could not tensorize public frame buffer {key}") from error
+
+
+def _occupied_extent(frames: Sequence[CombatFrame], key: str) -> int:
+    # Authenticated occupancy is one binary int8 flag per row.
+    return max(frame.tensors[key].data.rfind(b"\x01") + 1 for frame in frames)
 
 
 @observed("features_transfer")
@@ -182,6 +204,7 @@ def encode_frames(
     schema: CombatSchema,
     *,
     device: str,
+    trim_padding: bool = False,
 ) -> EncodedBatch:
     """Copy and encode validated frames without exposing lifecycle metadata."""
     import torch
@@ -195,18 +218,28 @@ def encode_frames(
     selected = tuple(frames)
     if not selected:
         raise ContractError("encode_frames requires at least one frame")
-    raw_by_key: dict[str, Any] = {}
+    if type(trim_padding) is not bool:
+        raise ContractError("trim_padding must be a boolean")
     for frame in selected:
         if not isinstance(frame, CombatFrame):
             raise ContractError("frames must contain only CombatFrame values")
         validate_frame(frame, schema)
-    for key in schema.tensors:
-        raw_by_key[key] = _pack_tensor(torch, selected, key, device)
+
+    # The default path still transfers each public tensor in descriptor order.
+    raw_by_key = ({key: _pack_tensor(torch, selected, key, device) for key in schema.tensors}
+                  if not trim_padding else None)
+
+    def pack(key: str, *, stop: int | None = None) -> Any:
+        if raw_by_key is not None:
+            return raw_by_key[key]
+        return _pack_tensor(torch, selected, key, device, stop=stop)
 
     value_tensors: dict[str, Any] = {}
     known_tensors: dict[str, Any] = {}
     occupied_tensors: dict[str, Any] = {}
     coverage_tensors: dict[str, Any] = {}
+    row_padding: list[tuple[str, int]] = []
+    known_padding: dict[str, Any] = {}
     # A compact layout keeps its narrow rows; only capacity-dependent inputs use the dense view's
     # row counts, as the dense view would compute them (see views.STANDARD_COMBAT_COMPACT_V1).
     dense_rows = schema.view.dense_rows
@@ -214,27 +247,46 @@ def encode_frames(
         if not spec.columns:
             continue
         columns = len(spec.columns)
-        rows = spec.shape[0] if len(spec.shape) == 2 else 1
-        values = raw_by_key[group].reshape(len(selected), rows, columns)
+        capacity = spec.shape[0] if len(spec.shape) == 2 else 1
+        rows = capacity
+        if trim_padding and spec.occupied_key is not None:
+            # References are physical row indices. Keep holes and remove only the unused suffix.
+            rows = max(1, _occupied_extent(selected, spec.occupied_key))
+        stop = rows if rows < capacity else None
+        if stop is not None:
+            row_padding.append((group, capacity - rows))
+        values = pack(group, stop=stop)
+        values = values.reshape(len(selected), rows, columns)
         if spec.dtype != "int64":
-            # Widened after the (narrow) transfer; every value fits the dense int64 column.
+            # Widen after transferring the narrow source values.
             values = values.to(torch.int64)
-        known = raw_by_key[spec.known_key].reshape(len(selected), rows, columns).to(torch.bool)
+        known = pack(spec.known_key, stop=stop)
+        known = known.reshape(len(selected), rows, columns).to(torch.bool)
         value_tensors[group] = values
         known_tensors[group] = known
         if spec.occupied_key is not None:
-            occupied_tensors[group] = raw_by_key[spec.occupied_key].to(torch.bool)
-            dense = dense_rows.get(group, rows)
-            if dense == rows:
-                coverage_tensors[group] = known.to(torch.float32).mean(dim=1)
+            occupied_tensors[group] = pack(spec.occupied_key, stop=stop).to(torch.bool)
+            dense = dense_rows.get(group, capacity)
+            coverage_known = known
+            if stop is not None and group in schema.view.optional_known_empty_groups:
+                tail = _pack_tensor(torch, selected, spec.known_key, device,
+                                    start=rows, stop=capacity).to(torch.bool)
+                known_padding[group] = tail
+                coverage_known = torch.cat((known, tail), dim=1)
+            elif stop is not None and (dense == capacity or group in schema.view.required_known_empty_groups):
+                coverage_known = torch.nn.functional.pad(
+                    known, (0, 0, 0, capacity - rows),
+                    value=group in schema.view.required_known_empty_groups,
+                )
+            if dense == capacity:
+                coverage_tensors[group] = coverage_known.to(torch.float32).mean(dim=1)
             else:
-                # The dense mean over its padding rows (known 0): an exact integer sum over the
-                # compact rows divided by the dense row count, as torch's CPU mean computes it.
-                coverage_tensors[group] = known.to(torch.float32).sum(dim=1).div_(dense)
+                coverage_tensors[group] = coverage_known.to(torch.float32).sum(dim=1).div_(dense)
         else:
             coverage_tensors[group] = known[:, 0, :].to(torch.float32)
 
-    action_mask = raw_by_key["action_mask"].to(torch.bool)
+    # Keep the separate dispatch mask at its public width for inference and PPO.
+    action_mask = pack("action_mask").to(torch.bool)
     return EncodedBatch(
         schema_fingerprint=schema.schema_fingerprint,
         values=value_tensors,
@@ -242,6 +294,8 @@ def encode_frames(
         occupied=occupied_tensors,
         action_mask=action_mask,
         known_coverage=coverage_tensors,
+        _row_padding=tuple(row_padding),
+        _known_padding=known_padding,
     )
 
 

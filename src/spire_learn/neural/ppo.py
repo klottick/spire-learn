@@ -382,7 +382,8 @@ def ppo_update(
             # original legal dispatch index before any optimizer call.
         phase = "validate-behavior-data"
         with span("ppo_validate_behavior"), torch.no_grad():
-            source_batch = encode_frames(frames, schema, device=str(policy_device))
+            encoding_options = {"trim_padding": True} if getattr(policy, "_trim_padding", False) else {}
+            source_batch = encode_frames(frames, schema, device=str(policy_device), **encoding_options)
             actions_device = action_values.to(device=policy_device)
             old_actions_legal = source_batch.action_mask.gather(
                 1, actions_device.unsqueeze(1)

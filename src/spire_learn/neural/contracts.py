@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import re
 import struct
@@ -100,6 +100,11 @@ class CombatFrame:
 
     tensors: Mapping[str, BufferArray]
     schema_fingerprint: str
+    # Exact driver schema object and whether this observation was sampled.
+    # Construction and dataclasses.replace intentionally clear this evidence.
+    _driver_validation: tuple[object, bool] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.tensors, Mapping):
@@ -264,12 +269,15 @@ class StepRecord:
     choice: PolicyChoice
     actor_training_mask: bool
     next_value: float | None
+    learner_truncated: bool = False
 
     def __post_init__(self) -> None:
         for name in ("stream_id", "task_id", "decision_id"):
             _identifier(getattr(self, name), f"StepRecord {name}")
         if not isinstance(self.source, CombatFrame) or not isinstance(self.successor, CombatFrame):
             raise ContractError("StepRecord source and successor must be CombatFrame records")
+        if type(self.learner_truncated) is not bool or (self.learner_truncated and not self.truncated):
+            raise ContractError("learner_truncated requires a truncated transition")
         if self.source.schema_fingerprint != self.successor.schema_fingerprint:
             raise ContractError("StepRecord frames must use the same schema fingerprint")
         object.__setattr__(self, "native_reward", _finite_number(self.native_reward, "native_reward"))
@@ -424,17 +432,18 @@ class CumulativeCounters:
     task_terminals: int
     environment_terminations: int
     environment_truncations: int
+    learner_truncations: int = 0
 
     def __post_init__(self) -> None:
         values = (self.rows, self.actor_rows, self.fixed_rows, self.task_terminals,
-                  self.environment_terminations, self.environment_truncations)
+                  self.environment_terminations, self.environment_truncations, self.learner_truncations)
         if any(type(value) is not int or value < 0 for value in values):
             raise ContractError("cumulative counters must be non-negative integers")
         if self.actor_rows + self.fixed_rows != self.rows:
             raise ContractError("cumulative actor/fixed rows must sum to rows")
         if self.task_terminals > self.rows or self.environment_terminations > self.rows:
             raise ContractError("cumulative event counters cannot exceed rows")
-        if self.environment_truncations > self.rows:
+        if self.environment_truncations + self.learner_truncations > self.rows:
             raise ContractError("cumulative truncation counter cannot exceed rows")
 
 
@@ -586,6 +595,7 @@ class CollectionDiagnostics:
     undispatched_fixed_decisions: int = 0
     elapsed_seconds_is_fallback: bool = False
     turn_action_budget_hits: int = 0
+    learner_truncations: int = 0
 
     def __post_init__(self) -> None:
         integer_names = (
@@ -599,6 +609,7 @@ class CollectionDiagnostics:
             "deaths", "escaped", "faults", "incomplete_decisions",
             "incomplete_environment_slots", "next_seed_ordinal",
             "undispatched_actor_decisions", "undispatched_fixed_decisions", "turn_action_budget_hits",
+            "learner_truncations",
         )
         for name in integer_names:
             value = getattr(self, name)
@@ -681,7 +692,10 @@ class Rollout:
             raise ContractError("cumulative task terminal count cannot be smaller than this rollout")
         if self.counters.environment_terminations < sum(row.terminated for row in self.records):
             raise ContractError("cumulative termination count cannot be smaller than this rollout")
-        if self.counters.environment_truncations < sum(row.truncated for row in self.records):
+        learner_truncations = sum(row.learner_truncated for row in self.records)
+        if (self.counters.learner_truncations < learner_truncations
+                or self.counters.environment_truncations
+                < sum(row.truncated for row in self.records) - learner_truncations):
             raise ContractError("cumulative truncation count cannot be smaller than this rollout")
         if self.mode not in self.identity.accepted_raw_mode_mappings:
             raise ContractError("rollout identity does not accept its raw mode")

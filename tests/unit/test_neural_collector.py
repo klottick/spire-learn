@@ -345,6 +345,13 @@ class NeuralCollectorTests(unittest.TestCase):
         self.assertTrue(capped_again.truncated)
         self.assertEqual(driver.reset_calls[1][2], (True, False))
         self.assertEqual(second.collection.turn_action_budget_hits, 2)
+        self.assertEqual(second.counters.environment_truncations, 0)
+        self.assertEqual(second.counters.learner_truncations, 2)
+        self.assertEqual(second.collection.learner_truncations, 2)
+        self.assertEqual({item.task_id for item in second.collection.incomplete_tasks}, {other.task_id})
+        from spire_learn.neural.runner import _diagnostic_projection
+        self.assertNotIn("learner_truncations", _diagnostic_projection(first.collection))
+        self.assertEqual(_diagnostic_projection(second.collection)["learner_truncations"], 2)
         self.assertEqual(second.collection.tasks_completed, 0)
 
     def test_absent_turn_budget_does_not_require_schema_or_stop_a_long_turn(self):

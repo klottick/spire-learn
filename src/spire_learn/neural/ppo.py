@@ -225,10 +225,11 @@ def _validate_admission(policy: Any, rollout: Rollout, config: PPOConfig) -> tup
             raise ContractError("actor rows require frozen log-probability and value statistics")
         if choice.behavior_policy_version != version:
             raise ContractError("rollout behavior policy version is stale")
-    from spire_learn.neural.schema import validate_frame
+    from spire_learn.neural.schema import _needs_frame_validation, validate_frame
 
     for record in actor_records:
-        validate_frame(record.source, schema)
+        if _needs_frame_validation(record.source, schema):
+            validate_frame(record.source, schema)
         action_index = record.choice.original_action_index
         action_count = schema.action_space.n
         if action_index >= action_count:

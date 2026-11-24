@@ -141,12 +141,15 @@ class NeuralBudget:
     max_environment_actions: int
     max_wall_seconds: float
     max_turn_actions: int | None = None
+    validation_stride: int | None = None
 
     def __post_init__(self) -> None:
         for name in ("max_optimizer_steps", "max_training_decisions", "max_environment_actions"):
             _positive_int(getattr(self, name), f"budget {name}")
         if self.max_turn_actions is not None:
             _positive_int(self.max_turn_actions, "budget max_turn_actions")
+        if self.validation_stride is not None:
+            _positive_int(self.validation_stride, "budget validation_stride")
         object.__setattr__(self, "max_wall_seconds",
                            _finite_positive(self.max_wall_seconds, "budget max_wall_seconds"))
 
@@ -193,6 +196,12 @@ class NeuralConfig:
     # None records omission; the effective setting is false.
     trim_padding: bool | None = None
 
+    @property
+    def effective_validation_stride(self) -> int:
+        if self.operation == "train" and self.budgets.validation_stride is not None:
+            return self.budgets.validation_stride
+        return 1
+
 
 def _stream_runtime_projection(config: NeuralConfig) -> dict[str, object]:
     """Project accepted normalized settings for loader binding and stream admission."""
@@ -208,6 +217,8 @@ def _stream_runtime_projection(config: NeuralConfig) -> dict[str, object]:
         runtime['model']['trim_padding'] = config.trim_padding
     if config.budgets.max_turn_actions is None:
         del runtime['budgets']['max_turn_actions']
+    if config.budgets.validation_stride is None:
+        del runtime['budgets']['validation_stride']
     runtime['accepted_identities'] = [{
         'model_id': identity.model_id, 'features_id': identity.features_id,
         'action_id': identity.action_id, 'objective_id': identity.objective_id,
@@ -480,8 +491,8 @@ def load_neural_config(path: Path) -> NeuralConfig:
     rollout_rows = _positive_int(rollout_raw["rows"], "rollout.rows")
     rollout_steps = _positive_int(rollout_raw["steps"], "rollout.steps")
     budget_fields = {"max_optimizer_steps", "max_training_decisions", "max_environment_actions", "max_wall_seconds"}
-    if isinstance(raw["budgets"], dict) and "max_turn_actions" in raw["budgets"]:
-        budget_fields.add("max_turn_actions")
+    if isinstance(raw["budgets"], dict):
+        budget_fields.update(raw["budgets"].keys() & {"max_turn_actions", "validation_stride"})
     budget_raw = _exact_keys(raw["budgets"], budget_fields, "budgets")
     budgets = NeuralBudget(**budget_raw)
     if mode in {"run", "standard-run"} and rollout_rows != 1:

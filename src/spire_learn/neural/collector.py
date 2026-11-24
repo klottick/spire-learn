@@ -98,6 +98,10 @@ class Collector:
         if (mode != mode_family(config.mode) or type(batch_size) is not int
                 or batch_size != config.rollout_rows):
             raise ContractError("driver mode and batch width must match the neural config")
+        begin_rollout = getattr(driver, "begin_rollout", None)
+        self._begin_driver_rollout = begin_rollout if callable(begin_rollout) else None
+        if config.effective_validation_stride > 1 and self._begin_driver_rollout is None:
+            raise ContractError("sampled validation requires a rollout-aware driver")
         # A non-training cap stops collection for its single fixed case.
         if config.budgets.max_turn_actions is not None and config.operation != "train" and batch_size > 1:
             raise ContractError("max_turn_actions requires one rollout row outside training")
@@ -232,6 +236,7 @@ class Collector:
             "task_terminals": 0,
             "environment_terminations": 0,
             "environment_truncations": 0,
+            "learner_truncations": 0,
             "attempted_environment_slots": 0,
             "forwarded_environment_slots": 0,
             "known_accepted_environment_slots": 0,
@@ -794,6 +799,7 @@ class Collector:
                 choice=choice,
                 actor_training_mask=learned,
                 next_value=next_value,
+                learner_truncated=learner_truncated,
             ))
 
         for record, (slot, result, _choice, signal, task_id, _decision_id, learned, hit_turn_budget, _) in zip(
@@ -807,9 +813,10 @@ class Collector:
             self._counts["fixed_decisions"] += int(not learned)
             self._counts["task_terminals"] += int(signal.task_terminal)
             self._counts["environment_terminations"] += int(result.terminated)
-            self._counts["environment_truncations"] += int(record.truncated)
+            self._counts["environment_truncations"] += int(result.truncated)
+            self._counts["learner_truncations"] += int(record.learner_truncated)
             task_key = (record.stream_id, task_id)
-            if signal.task_terminal:
+            if signal.task_terminal or record.learner_truncated:
                 self._open_task_decisions.pop(task_key, None)
             else:
                 self._open_task_decisions[task_key] = self._open_task_decisions.get(task_key, 0) + 1
@@ -932,6 +939,7 @@ class Collector:
             escaped=self._counts["escaped"],
             faults=self._counts["faults"],
             turn_action_budget_hits=self._counts["turn_action_budget_hits"],
+            learner_truncations=self._counts["learner_truncations"],
             elapsed_seconds=elapsed,
             wall_overshoot_seconds=overshoot,
             incomplete_decisions=incomplete_decisions,
@@ -955,6 +963,7 @@ class Collector:
             self._counts["task_terminals"],
             self._counts["environment_terminations"],
             self._counts["environment_truncations"],
+            self._counts["learner_truncations"],
         )
         return Rollout(
             mode=self._config_mode,
@@ -1002,7 +1011,7 @@ class Collector:
         call_records: list[StepRecord] = []
         self._stop_reason = None
         try:
-            for _ in range(self.config.rollout_steps):
+            for step in range(self.config.rollout_steps):
                 if self._wall_remaining() <= 0:
                     self._stop_reason = "wall_budget"
                     break
@@ -1019,6 +1028,11 @@ class Collector:
                     self._needs_reset[slot] or self._rows[slot] is None
                     for slot in range(self._batch_size)
                 )
+                if step == 0 and self._begin_driver_rollout is not None:
+                    self._phase = "rollout-validation"
+                    self._begin_driver_rollout(self.config.effective_validation_stride, reset_mask)
+                    self._rows = self.driver.rows
+                    self._phase = "ready"
                 if any(reset_mask):
                     if not self._seed_domain_available(reset_mask):
                         self._stop_reason = "seed_domain_exhausted"

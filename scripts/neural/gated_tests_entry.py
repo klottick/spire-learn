@@ -181,6 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     native_suites = {
         "--standard-turncap": "tests.integration.test_standard_turncap",
         "--padding-trim": "tests.integration.test_padding_trim_native",
+        "--sampled-validation": "tests.integration.test_sampled_validation_native",
     }
     if len(argv) == 1 and argv[0] in native_suites:
         if os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") != "1":
@@ -191,7 +192,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result.testsRun and result.wasSuccessful() and not result.skipped else 1
 
     parser = argparse.ArgumentParser(
-        description=__doc__, epilog="Use --standard-turncap or --padding-trim alone for the associated Standard native checks.")
+        description=__doc__,
+        epilog="Use one of --standard-turncap, --padding-trim, or --sampled-validation alone for a native check.")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--ledger", required=True, type=Path)
     parser.add_argument("--evidence", required=True, type=Path,

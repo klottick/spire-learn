@@ -182,6 +182,18 @@ qualifications. Runtime provenance records the learner checkout state; the
 environment dirty state remains `unobserved` when no Gym source checkout is
 mounted, while the loaded extension must match the configured accepted revision.
 
+In `spire-learn-neural-run-v1`, optional `[budgets] validation_stride` is a
+positive integer and defaults to 1. In training, each slot samples observation
+0 of each rollout and every stride thereafter. A selected reset adds a new
+observation to that slot's sequence. Evaluation and calibration validate every
+observation. In training records, `accepted_action.source_public_sha256`,
+`accepted_action.successor_public_sha256` and settlement
+`public_frame_sha256` are JSON `null` for unsampled observations. These fields
+are SHA-256 strings when present in evaluation and calibration records.
+Resume uses checkpoint recovery metadata and does not read the event log.
+Collection diagnostics include a nonzero `learner_truncations` count for
+training turn caps. Native truncations have their own counter.
+
 Run directories and checkpoints are generated artifacts under
 `artifacts/development/neural-combat/` and remain out of Git by default. See the
 [Task 7 report](../artifacts/development/neural-combat/task-7/task-7-report.md)

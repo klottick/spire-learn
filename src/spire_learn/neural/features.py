@@ -11,7 +11,7 @@ from typing import Any
 
 from spire_learn.contracts import ContractError
 from spire_learn.neural.contracts import CombatFrame
-from spire_learn.neural.schema import CombatSchema, validate_frame
+from spire_learn.neural.schema import CombatSchema, _needs_frame_validation, validate_frame
 
 
 FEATURES_ID = "spire-learn-combat-features-v1"
@@ -223,7 +223,8 @@ def encode_frames(
     for frame in selected:
         if not isinstance(frame, CombatFrame):
             raise ContractError("frames must contain only CombatFrame values")
-        validate_frame(frame, schema)
+        if _needs_frame_validation(frame, schema):
+            validate_frame(frame, schema)
 
     # The default path still transfers each public tensor in descriptor order.
     raw_by_key = ({key: _pack_tensor(torch, selected, key, device) for key in schema.tensors}

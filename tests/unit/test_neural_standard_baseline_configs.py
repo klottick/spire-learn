@@ -109,6 +109,7 @@ class StandardBaselineConfigTests(unittest.TestCase):
                     baseline_id=expected_plan["baseline_id"].replace(old_name, new_name),
                     gym_revision=GYM_120_REVISION,
                     recipe=GYM_120_RECIPE,
+                    max_turn_actions=500,
                     template=f"configs/neural/{new_name}/template.toml",
                 )
                 self.assertEqual(load_plan(new_dir / "plan.json"), expected_plan)

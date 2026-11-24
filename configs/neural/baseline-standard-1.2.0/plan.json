@@ -13,6 +13,7 @@
   },
   "gym_revision": "4d198064b3b568b6f0d08d6e3937d236fbc48e9b",
   "max_new_output_bytes": 51539607552,
+  "max_turn_actions": 500,
   "notes": [
     "runner_timeout_seconds exceeds wall_seconds.total plus the maximum GPU wait, one poll and 1200 s of slack so the entry can publish summary.json",
     "target 1622016 is 4 x 405504; the 16-row profile produced 4096 learned decisions per shard, so this target spans 396 shards and quarter thresholds are 99, 198 and 297",

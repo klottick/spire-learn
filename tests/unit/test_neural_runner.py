@@ -1117,6 +1117,24 @@ class NeuralRunnerTests(unittest.TestCase):
         self.assertEqual({item["status"] for item in report["cases"]},
                          {"incomplete", "not_started"})
 
+    def test_turn_action_budget_keeps_its_reason_in_a_clean_censored_report(self):
+        from spire_learn.neural import runner
+        from spire_learn.neural.stream_runner import is_censored_case_report
+
+        config = self.selection_config
+        records = (_record(config, slot=0, decision=0, version=0,
+                           terminal=False, task_id="task-0-0"),)
+        rollout = _rollout(config, records, allocations=(_allocation(config, 0, 0),),
+                           stop_reason="turn_action_budget")
+        collector = FakeCollector(config, (rollout,))
+        runtime = FakeRuntime(config, collector)
+        with patch.object(runner, "_writer_start",
+                          return_value=(FakeWriter(), Path("/tmp/neural-eval-turn-budget"))):
+            report = runner.evaluate_policy(config, runtime=runtime, clock=lambda: 0.0)
+        self.assertEqual(report.summary["stop_reason"], "turn_action_budget")
+        self.assertTrue(is_censored_case_report(report))
+        self.assertEqual(len(collector.collect_calls), 1)
+
     def test_evaluation_empty_collection_stops_as_incomplete(self):
         from spire_learn.neural.runner import evaluate_policy
 

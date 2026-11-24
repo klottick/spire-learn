@@ -403,7 +403,7 @@ def is_censored_case_report(report: object) -> bool:
     fight = (summary.get('fights') or {}).get('standalone_fights') \
         if isinstance(summary.get('fights'), Mapping) else None
     return (summary.get('status') == 'incomplete'
-            and summary.get('stop_reason') == CENSORED_STOP_REASON
+            and summary.get('stop_reason') in (CENSORED_STOP_REASON, 'turn_action_budget')
             and summary.get('fault') is None and summary.get('fatal_error') is None
             and 'lifecycle_receipt_error' not in summary
             and isinstance(lifecycle, Mapping) and lifecycle.get('status') == 'incomplete'

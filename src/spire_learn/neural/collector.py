@@ -22,6 +22,7 @@ from spire_learn.neural.contracts import (
     Rollout,
     SeedAllocation,
     StepRecord,
+    buffer_value,
 )
 from spire_learn.neural.envs import DriverFault, DriverRow, DriverTransition
 from spire_learn.neural.returns import shaped_reward, task_signal
@@ -208,7 +209,20 @@ class Collector:
         self._last_rollout: Rollout | None = None
         self._fault_incomplete_decisions = 0
         self._incomplete_environment_slots = 0
+        self._turn_actions = [0] * batch_size
+        self._max_turn_actions = config.budgets.max_turn_actions
+        if self._max_turn_actions is not None:
+            schema = getattr(driver, "schema", None)
+            player = schema.tensors.get("player") if schema is not None else None
+            if player is None or len(player.shape) != 1:
+                raise ContractError("max_turn_actions requires the public player row")
+            fields = tuple(column.field for column in player.columns)
+            if "turn" not in fields:
+                raise ContractError("max_turn_actions requires the public player turn column")
+            self._turn_spec = player
+            self._turn_column = fields.index("turn")
         self._counts = {
+            "turn_action_budget_hits": 0,
             "rows": 0,
             "actor_rows": 0,
             "fixed_rows": 0,
@@ -514,6 +528,7 @@ class Collector:
                 continue
             self._rows = tuple(result)
             self._needs_reset[slot] = False
+            self._turn_actions[slot] = 0
             allocation = next(item for item in allocations if item.slot == slot)
             case = next(item for item in self._cases if item.case_id == allocation.case_id)
             self._slot_cases[slot] = case
@@ -648,7 +663,36 @@ class Collector:
         elif entered_delta or settled_delta:
             raise ContractError("inactive lifecycle changed visit counters without a combat boundary")
 
+    def _public_turn(self, row: DriverRow) -> int:
+        tensors = row.frame.tensors
+        index = self._turn_column
+        values = tensors.get("player")
+        if (values is None or values.shape != self._turn_spec.shape
+                or values.dtype != self._turn_spec.dtype):
+            raise ContractError("max_turn_actions requires the public player row")
+        if self._turn_spec.known_key is not None:
+            known = tensors.get(self._turn_spec.known_key)
+            if known is None or buffer_value(known, index) != 1:
+                raise ContractError("max_turn_actions requires a known public combat turn")
+        return buffer_value(values, index)
+
+    def _reaches_turn_budget(self, slot: int, result: DriverTransition, source_turn: int | None) -> bool:
+        previous, current = result.source.lifecycle, result.successor.lifecycle
+        if (source_turn is None or not current.active or result.terminated or result.truncated
+                or current.active_visit != previous.active_visit
+                or current.combats_settled != previous.combats_settled
+                or self._public_turn(result.successor) != source_turn):
+            self._turn_actions[slot] = 0
+            return False
+        self._turn_actions[slot] += 1
+        # The accepted cap-th action leaves the fight on the same turn. Close
+        # this boundary now, before another policy action can be dispatched.
+        return self._turn_actions[slot] == self._max_turn_actions
+
     def _step_batch(self, rows: tuple[DriverRow, ...], policy_version: str | int):
+        source_turns = None
+        if self._max_turn_actions is not None:
+            source_turns = tuple(self._public_turn(row) if row.lifecycle.active else None for row in rows)
         actions, choices, policy_slots = self._actions(rows, policy_version)
         if self._wall_remaining() <= 0:
             self._counts["undispatched_actor_decisions"] += self._sampled_actor_this_batch
@@ -694,11 +738,15 @@ class Collector:
             if result.source != source:
                 raise ContractError("driver transition source differs from its accepted input snapshot")
             self._validate_lifecycle_jump(source.lifecycle, result.successor.lifecycle, result)
+            hit_turn_budget = source_turns is not None and self._reaches_turn_budget(
+                slot, result, source_turns[slot])
+            learner_truncated = hit_turn_budget and self.config.operation == "train"
             signal = task_signal(
                 source.lifecycle,
                 result.successor.lifecycle,
                 terminated=result.terminated,
-                truncated=result.truncated,
+                truncated=result.truncated or learner_truncated,
+                supports_truncation=learner_truncated,
             )
             if self._objective is not None and source.lifecycle.active:
                 # Shape only steps taken from an active combat row: never at combat
@@ -713,7 +761,8 @@ class Collector:
             learned = self._learned_combat_policy and slot in policy_slots
             if learned and not signal.task_terminal:
                 bootstrap_frames.append((slot, result.successor.frame))
-            prepared.append((slot, result, choice, signal, task_id, decision_id, learned))
+            prepared.append((slot, result, choice, signal, task_id, decision_id, learned,
+                             hit_turn_budget, learner_truncated))
 
         next_values: dict[int, float] = {}
         if bootstrap_frames:
@@ -727,7 +776,7 @@ class Collector:
                 next_values[slot] = float(value)
 
         records: list[StepRecord] = []
-        for slot, result, choice, signal, task_id, decision_id, learned in prepared:
+        for slot, result, choice, signal, task_id, decision_id, learned, _, learner_truncated in prepared:
             next_value = 0.0 if learned and signal.task_terminal else next_values.get(slot)
             records.append(StepRecord(
                 stream_id=self._stream_id(slot),
@@ -737,14 +786,14 @@ class Collector:
                 successor=result.successor.frame,
                 native_reward=result.native_reward,
                 terminated=result.terminated,
-                truncated=result.truncated,
+                truncated=result.truncated or learner_truncated,
                 task_signal=signal,
                 choice=choice,
                 actor_training_mask=learned,
                 next_value=next_value,
             ))
 
-        for record, (slot, result, _choice, signal, task_id, _decision_id, learned) in zip(
+        for record, (slot, result, _choice, signal, task_id, _decision_id, learned, hit_turn_budget, _) in zip(
             records, prepared, strict=True
         ):
             self._decision_ordinals[slot] += 1
@@ -755,12 +804,18 @@ class Collector:
             self._counts["fixed_decisions"] += int(not learned)
             self._counts["task_terminals"] += int(signal.task_terminal)
             self._counts["environment_terminations"] += int(result.terminated)
-            self._counts["environment_truncations"] += int(result.truncated)
+            self._counts["environment_truncations"] += int(record.truncated)
             task_key = (record.stream_id, task_id)
             if signal.task_terminal:
                 self._open_task_decisions.pop(task_key, None)
             else:
                 self._open_task_decisions[task_key] = self._open_task_decisions.get(task_key, 0) + 1
+            if hit_turn_budget:
+                self._counts["turn_action_budget_hits"] += 1
+                if record.truncated:
+                    self._needs_reset[slot] = True
+                else:
+                    self._stop_reason = "turn_action_budget"
 
             previous = result.source.lifecycle
             current = result.successor.lifecycle
@@ -873,6 +928,7 @@ class Collector:
             deaths=self._counts["deaths"],
             escaped=self._counts["escaped"],
             faults=self._counts["faults"],
+            turn_action_budget_hits=self._counts["turn_action_budget_hits"],
             elapsed_seconds=elapsed,
             wall_overshoot_seconds=overshoot,
             incomplete_decisions=incomplete_decisions,
@@ -947,6 +1003,9 @@ class Collector:
                 if self._wall_remaining() <= 0:
                     self._stop_reason = "wall_budget"
                     break
+                if self.config.operation != "train" and self._counts["turn_action_budget_hits"]:
+                    self._stop_reason = "turn_action_budget"
+                    break
                 if self._inactive_reset_boundary:
                     self._stop_reason = "inactive_reset_boundary"
                     break
@@ -998,6 +1057,8 @@ class Collector:
                 # fallible observer. Its failure is a controller fault, with no
                 # uncertain native effect and no opportunity to retry dispatch.
                 self._observe_settlements(batch_records)
+                if self._stop_reason == "turn_action_budget":
+                    break
                 if self._wall_remaining() <= 0:
                     self._stop_reason = "wall_budget"
                     break

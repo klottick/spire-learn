@@ -164,15 +164,16 @@ def _run(fakes, *, clock=None, plan_path=PLAN, dependencies=None):
 GIB = 2**30
 
 
-def _budget_exhausted():
+def _budget_exhausted(*, turn=False):
     """A clean fixed-case budget exhaustion, shaped like the gym-1.1.1 cv2 fresh-initial report."""
     return SimpleNamespace(exit_code=1, run_dir=None, summary={
-        "status": "incomplete", "stop_reason": "fixed_case_budget_incomplete", "fault": None,
+        "status": "incomplete", "fault": None,
+        "stop_reason": "turn_action_budget" if turn else "fixed_case_budget_incomplete",
         "exit_code": 1, "mode": "standalone",
         "case_accounting": {"cases": [{"case_id": "dev-x", "status": "incomplete"}],
                             "complete": 0, "incomplete": 1},
         "collection": {"fault": None, "faults": 0, "uncertain_environment_slots": 0,
-                       "stop_reason": "environment_action_budget"},
+                       "stop_reason": "turn_action_budget" if turn else "environment_action_budget"},
         "fights": {"standalone_fights": {"reached_combat_denominator": 1, "completed": 0,
                                          "victories": 0, "deaths": 0, "escaped": 0, "fights": []}},
         "lifecycle": {"schema_id": "spire-learn-neural-lifecycle-v1", "status": "incomplete",
@@ -789,25 +790,28 @@ class BaselineEntryTests(unittest.TestCase):
         self.assertEqual(paired["final_only_win"], 2)
 
     def test_clean_case_budget_exhaustion_is_censored_and_evaluation_continues(self):
-        fakes = _Fakes(decisions_per_segment=4096, panel_cases=3)
-        original = fakes.evaluate
+        for turn, reason in ((False, "environment_action_budget"), (True, "turn_action_budget")):
+            with self.subTest(reason=reason):
+                fakes = _Fakes(decisions_per_segment=4096, panel_cases=3)
+                original = fakes.evaluate
 
-        def censor_fresh_second_case(config, **kwargs):
-            report = original(config, **kwargs)
-            # Final runs cases 1-3; fresh-initial runs 4-6; its second case exhausts the case budget.
-            return _budget_exhausted() if len(fakes.evaluated) == 5 else report
+                def censor_fresh_second_case(config, **kwargs):
+                    report = original(config, **kwargs)
+                    # Final runs cases 1-3; fresh-initial runs 4-6; its second case exhausts the case budget.
+                    return _budget_exhausted(turn=turn) if len(fakes.evaluated) == 5 else report
 
-        fakes.evaluate = censor_fresh_second_case
-        summary, events, _ = _run(fakes)
-        fresh = summary["evaluations"]["fresh-initial"]
-        self.assertEqual(fresh["status"], "complete")
-        self.assertEqual(fresh["cases_evaluated"], 3)
-        self.assertEqual(fresh["cases"]["dev-1"]["outcome"], "incomplete")
-        self.assertEqual(len(fakes.evaluated), 12)  # every label still evaluated every case
-        paired = summary["paired_fresh_vs_final"]
-        self.assertEqual((paired["paired_cases"], paired["excluded_censored"],
-                          paired["excluded_failed_invalid_or_missing"]), (2, 1, 0))
-        self.assertEqual(summary["result"], "complete")
+                fakes.evaluate = censor_fresh_second_case
+                summary, events, _ = _run(fakes)
+                fresh = summary["evaluations"]["fresh-initial"]
+                self.assertEqual(fresh["status"], "complete")
+                self.assertEqual(fresh["cases_evaluated"], 3)
+                self.assertEqual(fresh["cases"]["dev-1"]["outcome"], "incomplete")
+                self.assertEqual(fresh["cases"]["dev-1"]["censor_reason"], reason)
+                self.assertEqual(len(fakes.evaluated), 12)  # every label still evaluated every case
+                paired = summary["paired_fresh_vs_final"]
+                self.assertEqual((paired["paired_cases"], paired["excluded_censored"],
+                                  paired["excluded_failed_invalid_or_missing"]), (2, 1, 0))
+                self.assertEqual(summary["result"], "complete")
 
     def test_unclean_incomplete_reports_still_fail(self):
         variants = {
@@ -957,6 +961,29 @@ class ReevaluateTests(unittest.TestCase):
         self.assertEqual(summary["reevaluated_from_summary_sha256"], digest)
         self.assertEqual(summary["evaluations"]["final"]["status"], "complete")
         self.assertEqual(summary["result"], "incomplete")  # training_wall never completes, as in a normal run
+
+    def test_reevaluate_allows_only_adding_cap_to_target_reached_prior(self):
+        import tomllib
+
+        fakes = _Fakes(panel_cases=2)
+        plan = baseline_entry.load_plan(ROOT / PLAN)
+        with tempfile.TemporaryDirectory() as directory:
+            prior, previous = _prior_output(directory, plan=plan)
+            updated = {**plan, "max_turn_actions": 500}
+            new_plan = Path(directory) / "plan.json"
+            new_plan.write_text(json.dumps(updated))
+            summary, output = self._reevaluate(fakes, prior, directory, plan_path=new_plan)
+            self.assertEqual(fakes.segments, [])
+            self.assertEqual(summary["result"], "complete")
+            self.assertEqual(set(summary["evaluations"]), {row["label"] for row in previous["checkpoints"]})
+            for path in (output / "prepared/template.toml", output / "panel/config-0.toml"):
+                self.assertEqual(tomllib.loads(path.read_text())["budgets"]["max_turn_actions"], 500)
+
+            for changed in ({**updated, "target_learned_decisions": 123}, plan):
+                previous["plan"] = {**plan, "max_turn_actions": 499} if changed == plan else plan
+                (prior / "summary.json").write_text(json.dumps(previous))
+                with self.assertRaisesRegex(ValueError, "different plan"):
+                    baseline_entry.load_prior(prior, changed, output)
 
     def test_reevaluate_rejects_plan_mismatch(self):
         plan = json.loads((ROOT / PLAN).read_text())

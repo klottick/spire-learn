@@ -339,6 +339,7 @@ def _config_projection(config: NeuralConfig) -> dict[str, object]:
             "embedding_width": config.model.embedding_width,
             "hidden_width": config.model.hidden_width,
             "max_parameters": config.model.max_parameters,
+            **({"trim_padding": config.trim_padding} if config.trim_padding is not None else {}),
         },
         "ppo": {
             "learning_rate": config.ppo.learning_rate,
@@ -416,6 +417,7 @@ def _manifest_projection(
             "standard_view_preset": config.standard_view_preset,
             "standard_view_schema_id": STANDARD_COMPACT_SCHEMA_ID}
            if config.standard_view_layout == "compact" else {}),
+        **({"trim_padding": config.trim_padding} if config.trim_padding is not None else {}),
         "schema_descriptor_digest": getattr(schema, "descriptor_digest", None),
         "learner_identity": identity_payload(_selected_identity(config)),
         "policy_kind": policy_kind,
@@ -2226,6 +2228,8 @@ def create_runtime(
             if (selected_identity.model_id, selected_identity.features_id) == STANDARD_LEARNER_IDENTITY_IDS[:2]:
                 objective_kwargs.update(model_id=selected_identity.model_id,
                                         features_id=selected_identity.features_id)
+            if config.trim_padding is not None:
+                objective_kwargs["trim_padding"] = config.trim_padding
             policy = build_policy(
                 driver.schema, config.model, seed=config.seed_streams.policy,
                 device=device_plan.device, **objective_kwargs,

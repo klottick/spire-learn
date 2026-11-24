@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the gated tensor suite or the opt-in Standard native turn-cap checks."""
+"""Run the gated tensor suite or the opt-in Standard native checks."""
 
 from __future__ import annotations
 
@@ -178,16 +178,20 @@ def _claim_evidence_directory(evidence_dir: Path, run_id: str) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv == ["--standard-turncap"]:
+    native_suites = {
+        "--standard-turncap": "tests.integration.test_standard_turncap",
+        "--padding-trim": "tests.integration.test_padding_trim_native",
+    }
+    if len(argv) == 1 and argv[0] in native_suites:
         if os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") != "1":
-            print("--standard-turncap requires SPIRE_LEARN_RUN_NATIVE_INTEGRATION=1", file=sys.stderr)
+            print(f"{argv[0]} requires SPIRE_LEARN_RUN_NATIVE_INTEGRATION=1", file=sys.stderr)
             return 2
-        suite = unittest.defaultTestLoader.loadTestsFromName("tests.integration.test_standard_turncap")
+        suite = unittest.defaultTestLoader.loadTestsFromName(native_suites[argv[0]])
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         return 0 if result.testsRun and result.wasSuccessful() and not result.skipped else 1
 
     parser = argparse.ArgumentParser(
-        description=__doc__, epilog="Use --standard-turncap alone for the Standard native checks.")
+        description=__doc__, epilog="Use --standard-turncap or --padding-trim alone for the associated Standard native checks.")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--ledger", required=True, type=Path)
     parser.add_argument("--evidence", required=True, type=Path,

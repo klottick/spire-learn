@@ -307,7 +307,7 @@ class NeuralModelTensorTests(unittest.TestCase):
             policy = _small_model(api, schema, torch)
             self.assertEqual(
                 tuple(inspect.signature(api.features.encode_frames).parameters),
-                ("frames", "schema", "device"),
+                ("frames", "schema", "device", "trim_padding"),
             )
             self.assertEqual(tuple(inspect.signature(policy.forward).parameters), ("batch",))
             self.assertEqual(

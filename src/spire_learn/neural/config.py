@@ -190,6 +190,8 @@ class NeuralConfig:
     # Gym v1.2.0) or "compact" with a capacity preset (standard-standalone only).
     standard_view_layout: str = "dense"
     standard_view_preset: str | None = None
+    # None records omission; the effective setting is false.
+    trim_padding: bool | None = None
 
 
 def _stream_runtime_projection(config: NeuralConfig) -> dict[str, object]:
@@ -202,6 +204,8 @@ def _stream_runtime_projection(config: NeuralConfig) -> dict[str, object]:
         'runtime_gpu_uuid')}
     runtime.update({name: asdict(getattr(config, name)) for name in (
         'seed_streams', 'model', 'ppo', 'budgets')})
+    if config.trim_padding is not None:
+        runtime['model']['trim_padding'] = config.trim_padding
     if config.budgets.max_turn_actions is None:
         del runtime['budgets']['max_turn_actions']
     runtime['accepted_identities'] = [{
@@ -454,9 +458,13 @@ def load_neural_config(path: Path) -> NeuralConfig:
     seed_values = _exact_keys(raw["seeds"], {"policy", "optimizer", "curriculum", "noncombat"}, "seeds")
     seeds = SeedStreams(**seed_values)
 
-    model_raw = _exact_keys(
-        raw["model"], {"embedding_width", "hidden_width", "max_parameters"}, "model"
-    )
+    model_fields = {"embedding_width", "hidden_width", "max_parameters"}
+    if isinstance(raw["model"], dict) and "trim_padding" in raw["model"]:
+        model_fields.add("trim_padding")
+    model_raw = dict(_exact_keys(raw["model"], model_fields, "model"))
+    trim_padding = model_raw.pop("trim_padding", None)
+    if trim_padding is not None and type(trim_padding) is not bool:
+        raise ValueError("model.trim_padding must be a boolean")
     model = ModelConfig(**model_raw)
 
     ppo_required = {
@@ -598,6 +606,7 @@ def load_neural_config(path: Path) -> NeuralConfig:
         scenario_stream=scenario_stream,
         workers=workers,
         objective=objective,
+        trim_padding=trim_padding,
         standard_view_layout=standard_view_layout,
         standard_view_preset=standard_view_preset,
     )

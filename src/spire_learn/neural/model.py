@@ -277,6 +277,7 @@ def build_policy(
     objective_id: str = _OBJECTIVE_ID,
     model_id: str = MODEL_ID,
     features_id: str | None = None,
+    trim_padding: bool = False,
 ) -> Any:
     """Compile a capped shared candidate actor and public-state critic lazily.
 
@@ -300,12 +301,15 @@ def build_policy(
         raise ContractError("policy objective_id must be a supported combat objective")
     if not isinstance(device, str) or not device:
         raise ContractError("policy device must be a non-empty string")
+    if type(trim_padding) is not bool:
+        raise ContractError("trim_padding must be a boolean")
     import torch
 
     class CombatPolicy(torch.nn.Module):
         def __init__(self) -> None:
             super().__init__()
             self._schema = plan.schema
+            self._trim_padding = trim_padding
             self._feature_contract = plan.feature_contract
             self._group_names = plan.group_names
             self._group_indices = dict(plan.group_indices)
@@ -541,11 +545,37 @@ def build_policy(
                 target_known,
             )
 
+        def _restore_row_capacity(self, batch: EncodedBatch) -> EncodedBatch:
+            # Keep GEMM and floating reduction shapes identical, including backward.
+            values, known, occupied = dict(batch.values), dict(batch.known), dict(batch.occupied)
+            for group, tail_rows in batch._row_padding:
+                spec = self._schema.tensors[group]
+                padding = (0, 0, 0, tail_rows)
+                required_known = group in self._schema.view.required_known_empty_groups
+                optional_known = group in self._schema.view.optional_known_empty_groups
+                padding_value = 0 if required_known or optional_known else spec.padding
+                values[group] = torch.nn.functional.pad(values[group], padding, value=padding_value)
+                tail = batch._known_padding.get(group)
+                if tail is None:
+                    known[group] = torch.nn.functional.pad(
+                        known[group], padding,
+                        value=required_known,
+                    )
+                else:
+                    known[group] = torch.cat((known[group], tail), dim=1)
+                occupied[group] = torch.nn.functional.pad(occupied[group], (0, tail_rows))
+            return EncodedBatch(
+                batch.schema_fingerprint, values, known, occupied,
+                batch.action_mask, batch.known_coverage,
+            )
+
         def forward(self, batch: EncodedBatch) -> PolicyOutput:
             if not isinstance(batch, EncodedBatch):
                 raise ContractError("CombatPolicy.forward requires an EncodedBatch")
             if batch.schema_fingerprint != self._schema.schema_fingerprint:
                 raise ContractError("EncodedBatch schema fingerprint does not match this policy")
+            if batch._row_padding:
+                batch = self._restore_row_capacity(batch)
             base = self._base_group_embeddings(batch)
             relational = self._reference_enrichment(batch, base)
             entity_rows = self._power_owner_enrichment(batch, relational)
@@ -591,7 +621,10 @@ def build_policy(
             from spire_learn.neural.contracts import PolicyChoice
 
             with torch.no_grad():
-                batch = encode_frames(frames, self._schema, device=str(next(self.parameters()).device))
+                batch = encode_frames(
+                    frames, self._schema, device=str(next(self.parameters()).device),
+                    trim_padding=self._trim_padding,
+                )
                 output = self.forward(batch)
                 if not torch.isfinite(output.values).all().item():
                     raise ContractError("critic values must be finite before action selection")
@@ -614,7 +647,10 @@ def build_policy(
 
         def values(self, frames: Sequence[CombatFrame]) -> tuple[float, ...]:
             with torch.no_grad():
-                batch = encode_frames(frames, self._schema, device=str(next(self.parameters()).device))
+                batch = encode_frames(
+                    frames, self._schema, device=str(next(self.parameters()).device),
+                    trim_padding=self._trim_padding,
+                )
                 output = self.forward(batch)
                 return tuple(float(value.item()) for value in output.values)
 

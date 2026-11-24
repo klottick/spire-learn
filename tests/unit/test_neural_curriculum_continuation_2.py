@@ -12,6 +12,7 @@ from unittest.mock import patch
 from scripts.neural import curriculum_controls as controls
 from scripts.neural import curriculum_package as package
 from scripts.neural import curriculum_profiles as profiles
+from tests.unit.test_neural_curriculum_controls import patch_artifact_aggregate
 from tests.unit.test_neural_curriculum_package import ROOT
 
 
@@ -132,7 +133,7 @@ class CorrectedContinuationBootstrapTests(unittest.TestCase):
 
             def projected_run(argv, *, env, check, timeout):
                 self.assertEqual(argv[-2:], ['--profile', PROFILE])
-                with patch.dict(os.environ, env), \
+                with patch_artifact_aggregate(controls), patch.dict(os.environ, env), \
                         patch.object(controls, '_verify_supervision', return_value=supervision), \
                         patch.object(controls, 'storage_admission', side_effect=storage), \
                         patch.object(controls, '_write', side_effect=write), \

@@ -19,7 +19,7 @@
 - Gym v1.2.0: revision `4d198064b3b568b6f0d08d6e3937d236fbc48e9b`, runtime profile `configs/neural/gym-1.2.0/runtime.json`, rules epoch `gym-1.2.0`, Standard rules, Ironclad, ascension 20. The training layout is the compact view, preset `standard-combat-compact-v1`.
 - The search uses only the Gym's `PublicSearch` roots and branches (`env.public_search(...)`, `search.branch(k)`, `branch.step`, `branch.fork`, `search.step_many`). It never uses exact checkpoints, forks of the live session, seeds, records or any other privileged surface. Research seeds and search statistics are labels and provenance, never network inputs.
 - Networks receive only public observations and legal-action masks.
-- Gym faults (`RunFaultError`, `BatchFaultError`, and typed capacity or `bound` faults) are errors. They are never scored as losses and never silently retried. A branch refusal inside a simulation counts against that simulation and is reported.
+- Gym faults (`RunFaultError`, `BatchFaultError`, and typed capacity faults) are errors. The fault contract is v1.2.0's: v1.2.2's typed `bound` faults are not adopted and become relevant only at the re-pin checkpoint (adjustment 3 from the Task 1 audit note). Faults are never scored as losses and never silently retried. A branch refusal inside a simulation counts against that simulation and is reported.
 - Fights cap at 1,024 decisions with no per-case wall-clock cap; a capped fight is censored. The per-turn action budget is `max_turn_actions = 500`: censored in evaluation, truncated in training.
 - Selection-split and final-split states are never labelled for training. The final panel stays unscored.
 - Search constants (the upper-confidence constant, depth limit, progressive widening and world count) are tuned on training-split fights only.
@@ -148,11 +148,17 @@
   - It uses common random numbers: sample `k` is `search.branch(k)`, and its playout RNG is `random.Random(research_seed * 1_000_003 + k)`, exactly as today.
   - It steps all `samples × len(legal)` playouts together through `search.step_many`, one lock-step heuristic move per call.
 - Produces: `boss_winnability.search_choice` now calls `one_move_values`. Its choice and statistics are unchanged.
+- Produces: `step_branches(search, branches, actions, *, view: str, workers: int) -> list[StepOutcome]`, the shared wrapper over `search.step_many` that Task 6 also uses (adjustment 1 from the Task 1 audit note).
+  - If the whole call is refused for an unsupported boundary, the Gym names no entry. The wrapper then re-issues each entry with `branch.step` to find which entries are refused. Each refused entry is a per-branch refusal, scored −1 for its simulation and reported.
+  - Any other whole-call preflight error (`RunInputError`, `RunStateError` or `RunBudgetError`) is a Learn defect and raises.
+  - A per-entry fault in the results raises after every handle is closed. Its zero-filled row is never read as an observation.
 
 - [ ] **Step 1: Write the failing tests:**
   - `test_batched_values_equal_sequential_values`. With a fake `PublicSearch` with deterministic scripted worlds, assert `one_move_values` equals the current sequential per-action means exactly, for both `workers=1` and `workers=4`.
   - `test_branch_refusal_counts_minus_one_and_is_reported`.
   - `test_fault_in_one_branch_raises_and_closes_all_handles`. The fake records `close()` calls; assert that every branch and the search are closed.
+  - `test_whole_call_unsupported_refusal_is_attributed_per_entry`. The fake `step_many` refuses the whole call; assert the wrapper re-steps entries one by one, scores only the refusing entry −1, and reports one refusal.
+  - `test_whole_call_input_state_or_budget_error_raises`.
   - `test_search_choice_unchanged_after_refactor`. On recorded fake decisions, assert `boss_winnability.search_choice` returns the same actions and the same `stats` as before the move.
 - [ ] **Step 2: Run them to verify they fail,** then implement, then run them to verify they pass.
 - [ ] **Step 3: Add the gated parity test.** `test_one_move_batched_matches_sequential_on_real_roots`, on 200 real v1.2.0 training-split roots. It checks dense branch observations, and compact `standard-combat-compact-v1` branch observations against dense, giving identical values.

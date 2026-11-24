@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run and account for the explicit Gym 8726d467 gated tensor-test suite."""
+"""Run the gated tensor suite or the opt-in Standard native turn-cap checks."""
 
 from __future__ import annotations
 
@@ -177,7 +177,17 @@ def _claim_evidence_directory(evidence_dir: Path, run_id: str) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv == ["--standard-turncap"]:
+        if os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") != "1":
+            print("--standard-turncap requires SPIRE_LEARN_RUN_NATIVE_INTEGRATION=1", file=sys.stderr)
+            return 2
+        suite = unittest.defaultTestLoader.loadTestsFromName("tests.integration.test_standard_turncap")
+        result = unittest.TextTestRunner(verbosity=2).run(suite)
+        return 0 if result.testsRun and result.wasSuccessful() and not result.skipped else 1
+
+    parser = argparse.ArgumentParser(
+        description=__doc__, epilog="Use --standard-turncap alone for the Standard native checks.")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--ledger", required=True, type=Path)
     parser.add_argument("--evidence", required=True, type=Path,

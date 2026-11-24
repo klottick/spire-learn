@@ -979,11 +979,25 @@ class ReevaluateTests(unittest.TestCase):
             for path in (output / "prepared/template.toml", output / "panel/config-0.toml"):
                 self.assertEqual(tomllib.loads(path.read_text())["budgets"]["max_turn_actions"], 500)
 
-            for changed in ({**updated, "target_learned_decisions": 123}, plan):
-                previous["plan"] = {**plan, "max_turn_actions": 499} if changed == plan else plan
-                (prior / "summary.json").write_text(json.dumps(previous))
-                with self.assertRaisesRegex(ValueError, "different plan"):
-                    baseline_entry.load_prior(prior, changed, output)
+    def test_reevaluate_rejects_ineligible_turn_cap_migrations(self):
+        plan = baseline_entry.load_plan(ROOT / PLAN)
+        capped = {**plan, "max_turn_actions": 500}
+        with tempfile.TemporaryDirectory() as directory:
+            prior, previous = _prior_output(directory, plan=plan)
+            output = Path(directory) / "new"
+            missing_label = [row for row in previous["checkpoints"] if row["label"] != "final"]
+            for name, changes, requested, error in (
+                ("training wall", {"stop_reason": "training_wall"}, capped, "different plan"),
+                ("training fault", {"fault": {"type": "X"}}, capped, "different plan"),
+                ("missing label", {"checkpoints": missing_label}, capped, "every scheduled checkpoint"),
+                ("different cap", {"plan": {**plan, "max_turn_actions": 499}}, capped, "different plan"),
+                ("removed cap", {"plan": capped}, plan, "different plan"),
+                ("other plan change", {}, {**capped, "target_learned_decisions": 123}, "different plan"),
+            ):
+                with self.subTest(name=name):
+                    (prior / "summary.json").write_text(json.dumps({**previous, **changes}))
+                    with self.assertRaisesRegex(ValueError, error):
+                        baseline_entry.load_prior(prior, requested, output)
 
     def test_reevaluate_rejects_plan_mismatch(self):
         plan = json.loads((ROOT / PLAN).read_text())

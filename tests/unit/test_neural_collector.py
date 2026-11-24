@@ -276,6 +276,37 @@ class NeuralCollectorTests(unittest.TestCase):
         )})
         return driver
 
+    def test_capped_evaluation_rejects_multiple_slots_at_construction(self):
+        from spire_learn.contracts import ContractError
+
+        config = replace(self.selection_config,
+                         budgets=replace(self.selection_config.budgets, max_turn_actions=2))
+        with self.assertRaisesRegex(ContractError, "max_turn_actions.*one rollout row"):
+            self.collector(self.turn_driver([], width=2), config)
+
+    def test_turn_count_resets_between_run_fights_without_driver_reset(self):
+        def fight(entered, settled):
+            return row(1, active=True, entered=entered, settled=settled, visit=entered - 1,
+                       exit_value=exit_data() if settled else None)
+
+        first, second = fight(1, 0), fight(2, 1)
+        settled = row(1, active=False, entered=1, settled=1, exit_value=exit_data())
+        driver = self.turn_driver([])
+        driver.mode = "run"
+        driver._reset_rows = lambda *args: first
+        driver._steps = [(transition(source, successor),) for source, successor in (
+            (first, first), (first, settled), (settled, second), (second, second), (second, second),
+        )]
+        driver.schema.tensors["player"].known_key = None
+        config = replace(self.run_config, rollout_steps=5,
+                         budgets=replace(self.run_config.budgets, max_turn_actions=2))
+        rollout = self.collector(driver, config).collect(
+            max_learned_decisions=5, max_env_actions=5, policy_version=0)
+        self.assertEqual([r.truncated for r in rollout.records], [False, False, False, False, True])
+        self.assertEqual(rollout.collection.turn_action_budget_hits, 1)
+        self.assertEqual(rollout.collection.tasks_completed, 1)
+        self.assertEqual(len(driver.reset_calls), 1)
+
     def test_evaluation_accepts_500_actions_and_never_dispatches_501(self):
         driver = self.turn_driver([(1,)] * 500)
         config = replace(self.selection_config, rollout_rows=1, rollout_steps=32,

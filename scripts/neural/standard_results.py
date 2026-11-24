@@ -151,6 +151,28 @@ def render(r1: dict, r2: dict, panel: list[dict], states: list[dict]) -> str:
         out.append(_row([label, a["win"], a["escaped"], a["incomplete"],
                          b["win"], b["escaped"], b["incomplete"]]))
     out.append("")
+    reasons = ("turn_action_budget", "environment_action_budget", "unspecified")
+    censored = {}
+    has_reason = False
+    for label in LABELS:
+        counts = []
+        for summary in (r1, r2):
+            totals = dict.fromkeys(reasons, 0)
+            for case in summary["evaluations"][label]["cases"].values():
+                if case["outcome"] == "incomplete":
+                    reason = case.get("censor_reason")
+                    has_reason |= reason is not None
+                    totals[reason if reason in reasons else "unspecified"] += 1
+            counts.extend(totals.values())
+        censored[label] = counts
+    if has_reason:
+        out.append("Censored cases by reason:")
+        out.append(_row(["Checkpoint", *(f"{run} {reason}" for run in ("r1", "r2") for reason in reasons)]))
+        out.append(_row(["---"] * 7))
+        for label, counts in censored.items():
+            out.append(_row([label, *counts]))
+        out.append("")
+
     levels = {c["case_id"]: c["level"] for c in panel}
     out.append("Wins by fuzz level per checkpoint (L0 / L1 / L2 / L4):")
     out.append(_row(["Checkpoint", "r1", "r2"]))

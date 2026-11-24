@@ -406,5 +406,25 @@ class GatedTestsEntryTests(unittest.TestCase):
         )
 
 
+class StandardTurnCapGateTests(unittest.TestCase):
+    def test_selects_only_the_native_turn_cap_module(self):
+        from scripts.neural import gated_tests_entry as entry
+
+        suite = _Suite(2)
+        with patch.dict(os.environ, {"SPIRE_LEARN_RUN_NATIVE_INTEGRATION": "1"}), \
+             patch.object(unittest.defaultTestLoader, "loadTestsFromName", return_value=suite) as load:
+            self.assertEqual(entry.main(["--standard-turncap"]), 0)
+        load.assert_called_once_with("tests.integration.test_standard_turncap")
+
+    def test_native_route_requires_opt_in(self):
+        from scripts.neural import gated_tests_entry as entry
+
+        with patch.dict(os.environ, {"SPIRE_LEARN_RUN_NATIVE_INTEGRATION": "0"}), \
+             patch.object(unittest.defaultTestLoader, "loadTestsFromName") as load, \
+             redirect_stderr(io.StringIO()):
+            self.assertEqual(entry.main(["--standard-turncap"]), 2)
+        load.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

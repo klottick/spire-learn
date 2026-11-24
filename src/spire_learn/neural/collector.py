@@ -98,6 +98,9 @@ class Collector:
         if (mode != mode_family(config.mode) or type(batch_size) is not int
                 or batch_size != config.rollout_rows):
             raise ContractError("driver mode and batch width must match the neural config")
+        # A non-training cap stops collection for its single fixed case.
+        if config.budgets.max_turn_actions is not None and config.operation != "train" and batch_size > 1:
+            raise ContractError("max_turn_actions requires one rollout row outside training")
         rows = getattr(driver, "rows", None)
         if not isinstance(rows, tuple) or len(rows) != batch_size:
             raise ContractError("driver must expose one current row boundary per native slot")

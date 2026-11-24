@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 import random
 import sys
+from types import SimpleNamespace
 import unittest
 
 from spire_learn.experiments.budget import Budget
@@ -250,6 +251,111 @@ class NeuralCollectorTests(unittest.TestCase):
             policy_generator=self.generator,
             **kwargs,
         )
+
+    @staticmethod
+    def turn_driver(turns, width=1):
+        def boundary(turn):
+            source = row(turn, active=True, entered=1, visit=0)
+            return replace(source, frame=CombatFrame({
+                "player": source.frame.tensors["player"],
+                "player_known": BufferArray("int8", (1,), b"\x01"),
+            }, FINGERPRINT))
+
+        def step(turns_after):
+            return lambda before, actions: tuple(
+                transition(source, boundary(turn))
+                for source, turn in zip(before, turns_after, strict=True)
+            )
+
+        driver = ScriptedDriver("standalone", width,
+                                reset_rows=lambda *args: boundary(1),
+                                steps=[step(turns_after) for turns_after in turns])
+        driver.schema = SimpleNamespace(tensors={"player": SimpleNamespace(
+            columns=(SimpleNamespace(field="turn"),), shape=(1,), dtype="int8",
+            known_key="player_known",
+        )})
+        return driver
+
+    def test_capped_evaluation_rejects_multiple_slots_at_construction(self):
+        from spire_learn.contracts import ContractError
+
+        config = replace(self.selection_config,
+                         budgets=replace(self.selection_config.budgets, max_turn_actions=2))
+        with self.assertRaisesRegex(ContractError, "max_turn_actions.*one rollout row"):
+            self.collector(self.turn_driver([], width=2), config)
+
+    def test_turn_count_resets_between_run_fights_without_driver_reset(self):
+        def fight(entered, settled):
+            return row(1, active=True, entered=entered, settled=settled, visit=entered - 1,
+                       exit_value=exit_data() if settled else None)
+
+        first, second = fight(1, 0), fight(2, 1)
+        settled = row(1, active=False, entered=1, settled=1, exit_value=exit_data())
+        driver = self.turn_driver([])
+        driver.mode = "run"
+        driver._reset_rows = lambda *args: first
+        driver._steps = [(transition(source, successor),) for source, successor in (
+            (first, first), (first, settled), (settled, second), (second, second), (second, second),
+        )]
+        driver.schema.tensors["player"].known_key = None
+        config = replace(self.run_config, rollout_steps=5,
+                         budgets=replace(self.run_config.budgets, max_turn_actions=2))
+        rollout = self.collector(driver, config).collect(
+            max_learned_decisions=5, max_env_actions=5, policy_version=0)
+        self.assertEqual([r.truncated for r in rollout.records], [False, False, False, False, True])
+        self.assertEqual(rollout.collection.turn_action_budget_hits, 1)
+        self.assertEqual(rollout.collection.tasks_completed, 1)
+        self.assertEqual(len(driver.reset_calls), 1)
+
+    def test_evaluation_accepts_500_actions_and_never_dispatches_501(self):
+        driver = self.turn_driver([(1,)] * 500)
+        config = replace(self.selection_config, rollout_rows=1, rollout_steps=32,
+                         budgets=replace(self.selection_config.budgets, max_turn_actions=500))
+        collector = self.collector(driver, config)
+        for _ in range(16):
+            rollout = collector.collect(max_learned_decisions=510, max_env_actions=510, policy_version=0)
+        self.assertEqual(rollout.collection.stop_reason, "turn_action_budget")
+        self.assertEqual(rollout.collection.turn_action_budget_hits, 1)
+        self.assertEqual(rollout.collection.tasks_completed, 0)
+        self.assertEqual(rollout.collection.faults, 0)
+        self.assertFalse(rollout.records[-1].terminated)
+        collector.collect(max_learned_decisions=510, max_env_actions=510, policy_version=0)
+        self.assertEqual(len(driver.step_calls), 500)
+        self.assertEqual(len(driver.reset_calls), 1)
+
+    def test_training_truncates_only_capped_slot_and_bootstraps_before_reset(self):
+        # Slot 0 changes turn on its second action. Slot 1 changes turn while
+        # slot 0 later caps, leaving slot 1 active for the masked reset.
+        driver = self.turn_driver([(1, 2), (2, 3), (2, 4), (2, 5), (1, 6), (1, 7)], width=2)
+        config = replace(self.standalone_config, rollout_steps=3,
+                         budgets=replace(self.standalone_config.budgets, max_turn_actions=2))
+        collector = self.collector(driver, config)
+        first = collector.collect(max_learned_decisions=12, max_env_actions=12, policy_version=0)
+        self.assertFalse(any(record.truncated for record in first.records))
+        second = collector.collect(max_learned_decisions=12, max_env_actions=12, policy_version=0)
+        capped, other, restarted, _, capped_again, _ = second.records
+        self.assertTrue(capped.truncated)
+        self.assertFalse(capped.terminated or capped.task_signal.task_terminal)
+        self.assertEqual(capped.task_signal.reward, 0.0)
+        self.assertTrue(capped.task_signal.bootstrap)
+        self.assertFalse(capped.task_signal.continuation)
+        self.assertAlmostEqual(capped.next_value, 0.2)
+        self.assertFalse(other.truncated or restarted.truncated)
+        self.assertNotEqual(restarted.task_id, capped.task_id)
+        self.assertTrue(capped_again.truncated)
+        self.assertEqual(driver.reset_calls[1][2], (True, False))
+        self.assertEqual(second.collection.turn_action_budget_hits, 2)
+        self.assertEqual(second.collection.tasks_completed, 0)
+
+    def test_absent_turn_budget_does_not_require_schema_or_stop_a_long_turn(self):
+        driver = self.turn_driver([(1,)] * 501)
+        del driver.schema
+        config = replace(self.selection_config, rollout_rows=1, rollout_steps=501)
+        rollout = self.collector(driver, config).collect(
+            max_learned_decisions=501, max_env_actions=501, policy_version=0)
+        self.assertEqual(len(driver.step_calls), 501)
+        self.assertEqual(rollout.collection.stop_reason, "horizon")
+        self.assertEqual(rollout.collection.turn_action_budget_hits, 0)
 
     def test_mixed_row_finals_reset_only_finished_rows_and_preserve_successors(self):
         initial_a = row(1, active=True, entered=1, visit=0)

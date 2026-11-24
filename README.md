@@ -136,6 +136,11 @@ the Standard-view baseline (two replicates, a new series not comparable with the
 M10 results) on a panel of reconstructed public-run fight states, beside a search
 reference and the player's recorded outcomes.
 
+The [Gym v1.2.0 Standard baselines](docs/neural-standard-baseline-gym-1.2.0.md) rerun
+the two replicates on the v1.2.0 pin with a 500-action per-turn cap, beside the
+panels, the search reference and the training-fight root availability. They are a
+separate series from the v1.1.1 baselines and are not paired with them.
+
 The separately approved fresh-weight campaign on this release has now completed
 its development comparisons. Across 438,272 learned decisions, the final mixed
 combat policy improved from **18/64 to 41/64 development wins**. All eight panels

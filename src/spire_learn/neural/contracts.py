@@ -274,7 +274,7 @@ class StepRecord:
             raise ContractError("StepRecord frames must use the same schema fingerprint")
         object.__setattr__(self, "native_reward", _finite_number(self.native_reward, "native_reward"))
         if type(self.terminated) is not bool or type(self.truncated) is not bool:
-            raise ContractError("StepRecord native end flags must be booleans")
+            raise ContractError("StepRecord end flags must be booleans")
         if self.terminated and self.truncated:
             raise ContractError("a StepRecord cannot be both terminated and truncated")
         if not isinstance(self.task_signal, TaskSignal) or not isinstance(self.choice, PolicyChoice):
@@ -287,7 +287,7 @@ class StepRecord:
             raise ContractError("native termination requires a terminal signal with no bootstrap or continuation")
         if self.truncated:
             if self.task_signal.continuation:
-                raise ContractError("native truncation cannot continue GAE recursion")
+                raise ContractError("truncation cannot continue GAE recursion")
             if self.task_signal.bootstrap and self.task_signal.task_terminal:
                 raise ContractError("only a nonterminal supported truncation may bootstrap")
         if type(self.actor_training_mask) is not bool:
@@ -585,6 +585,7 @@ class CollectionDiagnostics:
     undispatched_actor_decisions: int = 0
     undispatched_fixed_decisions: int = 0
     elapsed_seconds_is_fallback: bool = False
+    turn_action_budget_hits: int = 0
 
     def __post_init__(self) -> None:
         integer_names = (
@@ -597,7 +598,7 @@ class CollectionDiagnostics:
             "tasks_started", "task_terminals", "tasks_completed", "victories",
             "deaths", "escaped", "faults", "incomplete_decisions",
             "incomplete_environment_slots", "next_seed_ordinal",
-            "undispatched_actor_decisions", "undispatched_fixed_decisions",
+            "undispatched_actor_decisions", "undispatched_fixed_decisions", "turn_action_budget_hits",
         )
         for name in integer_names:
             value = getattr(self, name)

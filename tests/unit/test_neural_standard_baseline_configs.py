@@ -1,6 +1,7 @@
 """Standard baseline plans and templates remain bound to the Standard learner contract."""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -13,6 +14,11 @@ from spire_learn.neural.config import load_neural_config
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIGS = ROOT / "configs/neural"
+GYM_120_REVISION = "4d198064b3b568b6f0d08d6e3937d236fbc48e9b"
+GYM_120_RECIPE = "configs/neural/baalorlord-standard-gym-1.2.0/recipe.json"
+GYM_120_RECIPE_SHA = "b06000c9c53679d4eb32014f5307d3636ecffdb26a6791202a40ad62c153d690"
+COMPACT_PRESET = "standard-combat-compact-v1"
+COMPACT_FINGERPRINT = "49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8"
 TARGET = 1_622_016
 RETAINED = [405_504, 811_008, 1_216_512]
 SEEDS = {
@@ -31,13 +37,8 @@ class StandardBaselineConfigTests(unittest.TestCase):
             'manifest_path = "../../cases/neural/standard-standalone-train.json"',
             f'manifest_path = "{manifest}"',
         )
-        text = text.replace(
-            'output_root = "../../../artifacts/development/neural-combat/runs/gym-1.1.1/standard-baseline"',
-            f'output_root = "{output}"',
-        ).replace(
-            'output_root = "../../../artifacts/development/neural-combat/runs/gym-1.1.1/standard-baseline-r2"',
-            f'output_root = "{output}"',
-        )
+        template_output = tomllib.loads(text)["output_root"]
+        text = text.replace(f'output_root = "{template_output}"', f'output_root = "{output}"')
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "template.toml"
             path.write_text(text)
@@ -91,6 +92,50 @@ class StandardBaselineConfigTests(unittest.TestCase):
         cv2_r2_seeds = tomllib.loads((CONFIGS / "baseline-gym-1.1.1-cv2-r2/template.toml").read_text())["seeds"]
         self.assertEqual(tuple(first.seed_streams.__dict__.values()), tuple(cv2_seeds.values()))
         self.assertEqual(tuple(second.seed_streams.__dict__.values()), tuple(cv2_r2_seeds.values()))
+
+    def test_gym_120_baselines_change_only_the_pin_layout_and_versioned_paths(self):
+        recipe_bytes = (ROOT / GYM_120_RECIPE).read_bytes()
+        self.assertEqual(hashlib.sha256(recipe_bytes).hexdigest(), GYM_120_RECIPE_SHA)
+        runtime = json.loads((CONFIGS / "gym-1.2.0/runtime.json").read_text())
+        self.assertEqual(runtime["gym_revision"], GYM_120_REVISION)
+        self.assertEqual(runtime["standard_fingerprints"]["combat_compact"], COMPACT_FINGERPRINT)
+
+        for old_name, seeds in SEEDS.items():
+            new_name = old_name.replace("1.1.1", "1.2.0")
+            with self.subTest(config=new_name):
+                old_dir, new_dir = CONFIGS / old_name, CONFIGS / new_name
+                expected_plan = load_plan(old_dir / "plan.json")
+                expected_plan.update(
+                    baseline_id=expected_plan["baseline_id"].replace(old_name, new_name),
+                    gym_revision=GYM_120_REVISION,
+                    recipe=GYM_120_RECIPE,
+                    max_turn_actions=500,
+                    template=f"configs/neural/{new_name}/template.toml",
+                )
+                self.assertEqual(load_plan(new_dir / "plan.json"), expected_plan)
+
+                expected_template = tomllib.loads((old_dir / "template.toml").read_text())
+                expected_template["output_root"] = expected_template["output_root"].replace(
+                    "/gym-1.1.1/", "/gym-1.2.0/")
+                expected_template["environment"].update(
+                    gym_revision=GYM_120_REVISION,
+                    standard_view_layout="compact",
+                    standard_view_preset=COMPACT_PRESET,
+                    standard_view_fingerprint=COMPACT_FINGERPRINT,
+                )
+                mappings = expected_template["accepted_identities"][0]["accepted_raw_mode_mappings"]
+                mappings["standard-standalone"] = (
+                    f"spire-learn-standard-combat-compact-v1@{COMPACT_FINGERPRINT}+gym-1.2.0"
+                )
+                del mappings["standard-run"]
+                template = ROOT / expected_plan["template"]
+                self.assertEqual(tomllib.loads(template.read_text()), expected_template)
+
+                config = self._load_template(template)
+                self.assertEqual(config.environment_revision, GYM_120_REVISION)
+                self.assertEqual(config.standard_view_layout, "compact")
+                self.assertEqual(config.standard_view_preset, COMPACT_PRESET)
+                self.assertEqual(tuple(config.seed_streams.__dict__.values()), seeds)
 
     def test_recipe_schedule_uses_training_quartiles_in_shard_units(self):
         recipe_path = CONFIGS / "baalorlord-standard-v1/recipe.json"

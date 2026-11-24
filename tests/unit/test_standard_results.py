@@ -44,6 +44,19 @@ class StandardResultsTest(unittest.TestCase):
         self.assertEqual((row["n"], row["r1"], row["search"], row["his_n"], row["his"]),
                          (2, 1, 1, 1, 0))
 
+    def test_render_reports_censor_reasons_and_keeps_legacy_totals(self) -> None:
+        legacy = _summary({"a": "incomplete"}, {})
+        self.assertIn("| final | 0 | 0 | 1 | 0 | 0 | 1 |", sr.render(legacy, legacy, [], []))
+        self.assertNotIn("Censored cases by reason", sr.render(legacy, legacy, [], []))
+        capped = _summary({"a": "incomplete", "b": "incomplete", "c": "win"}, {})
+        cases = capped["evaluations"]["final"]["cases"]
+        cases["a"]["censor_reason"] = "turn_action_budget"
+        cases["b"]["censor_reason"] = "environment_action_budget"
+        cases["c"]["censor_reason"] = "turn_action_budget"
+        text = sr.render(capped, legacy, [], [])
+        self.assertIn("Censored cases by reason", text)
+        self.assertIn("| final | 1 | 1 | 0 | 0 | 0 | 1 |", text)
+
     def test_render_has_no_case_or_run_ids(self) -> None:
         panel = [{"case_id": "zz-secret", "act": 2, "room_kind": "monster", "level": 0,
                   "run_id": "424242", "floor": 3, "search": {"outcome": "victory"}}]

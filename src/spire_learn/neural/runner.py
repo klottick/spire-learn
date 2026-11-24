@@ -357,6 +357,8 @@ def _config_projection(config: NeuralConfig) -> dict[str, object]:
             "max_optimizer_steps": config.budgets.max_optimizer_steps,
             "max_training_decisions": config.budgets.max_training_decisions,
             "max_environment_actions": config.budgets.max_environment_actions,
+            **({"max_turn_actions": config.budgets.max_turn_actions}
+               if config.budgets.max_turn_actions is not None else {}),
             "max_wall_seconds": config.budgets.max_wall_seconds,
             "workers": config.workers,
         },
@@ -482,6 +484,8 @@ def _diagnostic_projection(diagnostics: CollectionDiagnostics | None) -> dict[st
             "fault": None,
         }
     result = {name: getattr(diagnostics, name) for name in _DIAGNOSTIC_INTEGER_FIELDS}
+    if diagnostics.turn_action_budget_hits:
+        result["turn_action_budget_hits"] = diagnostics.turn_action_budget_hits
     result.update({
         "elapsed_seconds": diagnostics.elapsed_seconds,
         "wall_overshoot_seconds": diagnostics.wall_overshoot_seconds,
@@ -1620,6 +1624,10 @@ def evaluate_policy(
                 break
             if mode_family(config.mode) == "run" and any(record.terminated for record in rollout.records):
                 stop_reason = "full_run_terminal"
+                break
+            if rollout.collection is not None and rollout.collection.stop_reason == "turn_action_budget":
+                status = "incomplete"
+                stop_reason = "turn_action_budget"
                 break
             if rollout.collection is not None and rollout.collection.stop_reason in {
                 "environment_action_budget", "learned_decision_budget", "seed_domain_exhausted", "wall_budget",

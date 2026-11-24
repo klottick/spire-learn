@@ -140,10 +140,13 @@ class NeuralBudget:
     max_training_decisions: int
     max_environment_actions: int
     max_wall_seconds: float
+    max_turn_actions: int | None = None
 
     def __post_init__(self) -> None:
         for name in ("max_optimizer_steps", "max_training_decisions", "max_environment_actions"):
             _positive_int(getattr(self, name), f"budget {name}")
+        if self.max_turn_actions is not None:
+            _positive_int(self.max_turn_actions, "budget max_turn_actions")
         object.__setattr__(self, "max_wall_seconds",
                            _finite_positive(self.max_wall_seconds, "budget max_wall_seconds"))
 
@@ -199,6 +202,8 @@ def _stream_runtime_projection(config: NeuralConfig) -> dict[str, object]:
         'runtime_gpu_uuid')}
     runtime.update({name: asdict(getattr(config, name)) for name in (
         'seed_streams', 'model', 'ppo', 'budgets')})
+    if config.budgets.max_turn_actions is None:
+        del runtime['budgets']['max_turn_actions']
     runtime['accepted_identities'] = [{
         'model_id': identity.model_id, 'features_id': identity.features_id,
         'action_id': identity.action_id, 'objective_id': identity.objective_id,
@@ -466,11 +471,10 @@ def load_neural_config(path: Path) -> NeuralConfig:
     rollout_raw = _exact_keys(raw["rollout"], {"rows", "steps"}, "rollout")
     rollout_rows = _positive_int(rollout_raw["rows"], "rollout.rows")
     rollout_steps = _positive_int(rollout_raw["steps"], "rollout.steps")
-    budget_raw = _exact_keys(
-        raw["budgets"],
-        {"max_optimizer_steps", "max_training_decisions", "max_environment_actions", "max_wall_seconds"},
-        "budgets",
-    )
+    budget_fields = {"max_optimizer_steps", "max_training_decisions", "max_environment_actions", "max_wall_seconds"}
+    if isinstance(raw["budgets"], dict) and "max_turn_actions" in raw["budgets"]:
+        budget_fields.add("max_turn_actions")
+    budget_raw = _exact_keys(raw["budgets"], budget_fields, "budgets")
     budgets = NeuralBudget(**budget_raw)
     if mode in {"run", "standard-run"} and rollout_rows != 1:
         raise ValueError("Run mode requires exactly one native rollout slot")

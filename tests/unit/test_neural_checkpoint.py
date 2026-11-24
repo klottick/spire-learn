@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -102,6 +103,35 @@ class NeuralCheckpointMetadataTests(unittest.TestCase):
                     result = preflight_checkpoint(checkpoint, identity, purpose="evaluate")
                     self.assertEqual(result.metadata["identity"]["accepted_raw_mode_mappings"],
                                      identity_payload(identity)["accepted_raw_mode_mappings"])
+
+    def test_uncapped_compact_checkpoint_preflights_with_turn_budget(self):
+        root = Path(__file__).resolve().parents[2]
+        from spire_learn.neural.stream_runner import _toml
+
+        template = root / "configs/neural/baseline-standard-1.2.0/template.toml"
+        config = load_neural_config(template)
+        document = tomllib.loads(template.read_text())
+        document.update(manifest_path=str(config.manifest_path), output_root=str(config.output_root))
+        metadata = _metadata(identity=_selected_identity(config))
+        metadata["run_metadata"]["mode"] = "standard-standalone"
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "capped.toml"
+            document["budgets"]["max_turn_actions"] = 500
+            config_path.write_text(_toml(document))
+            capped = load_neural_config(config_path)
+            self.assertEqual(capped.budgets.max_turn_actions, 500)
+            self.assertIsNone(config.budgets.max_turn_actions)
+            checkpoint = Path(directory) / "checkpoint"
+            checkpoint.mkdir()
+            model_path = checkpoint / "model.pt"
+            _write_archive(model_path)
+            payload = model_path.read_bytes()
+            metadata["payload_inventory"]["model.pt"] = {
+                "size_bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+            (checkpoint / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+            result = preflight_checkpoint(checkpoint, _selected_identity(capped), purpose="evaluate")
+        self.assertEqual(result.metadata["identity"], identity_payload(_selected_identity(config)))
 
     def test_historical_mapping_is_rejected_for_standard_mode(self):
         root = Path(__file__).resolve().parents[2]

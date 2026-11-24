@@ -90,6 +90,9 @@ def load_plan(path: Path) -> dict:
     target = plan.get('target_learned_decisions')
     if type(target) is not int or target < 1:
         raise ValueError('baseline plan needs a positive learned-decision target')
+    cap = plan.get('max_turn_actions')
+    if cap is not None and (type(cap) is not int or cap < 1):
+        raise ValueError('max_turn_actions must be a positive integer or null')
     additional_panels = plan.get('additional_panels')
     if additional_panels is not None:
         if not isinstance(additional_panels, list):
@@ -192,6 +195,8 @@ def _panel_configs(panel: Mapping, template: Path, directory: Path, plan: Mappin
         document['budgets'] = dict(max_training_decisions=evaluation['case_actions'],
                                    max_environment_actions=evaluation['case_actions'],
                                    max_optimizer_steps=1, max_wall_seconds=float(evaluation['case_seconds']))
+        if plan.get('max_turn_actions') is not None:
+            document['budgets']['max_turn_actions'] = plan['max_turn_actions']
         manifest = {**panel['manifest'], 'cases': [case]}
         with (directory / f'case-{ordinal}.json').open('x') as stream:
             stream.write(json.dumps(manifest, sort_keys=True) + '\n')
@@ -322,8 +327,8 @@ def load_prior(prior: Path, plan: Mapping, output: Path) -> tuple[dict, str]:
     """Validate a prior baseline output for evaluate-only reuse; returns (summary, sha256).
 
     Reads only. The new output must lie outside the prior output, the prior summary
-    must come from the same plan contents, training must have stopped evaluably and
-    every recorded checkpoint path must exist. Anything else fails closed.
+    must come from the same plan or a target-reached run predating only the turn cap.
+    Training must have stopped evaluably and all recorded checkpoint paths must exist.
     """
     prior, output = Path(prior), Path(output)
     if not prior.is_absolute():
@@ -336,8 +341,14 @@ def load_prior(prior: Path, plan: Mapping, output: Path) -> tuple[dict, str]:
     previous = json.loads(data)
     if not isinstance(previous, dict) or previous.get('schema') != SUMMARY_SCHEMA:
         raise ValueError('prior summary has an unsupported schema')
-    if previous.get('plan') != _json(plan):
-        raise ValueError('prior summary was produced by a different plan')
+    expected_plan = _json(plan)
+    cap_added = previous.get('plan') != expected_plan
+    if cap_added:
+        uncapped_plan = dict(expected_plan)
+        cap = uncapped_plan.pop('max_turn_actions', None)
+        if (type(cap) is not int or cap < 1 or previous.get('plan') != uncapped_plan
+                or previous.get('stop_reason') != 'target_reached' or previous.get('fault') is not None):
+            raise ValueError('prior summary was produced by a different plan')
     if previous.get('stop_reason') not in _EVALUABLE_STOPS:
         raise ValueError(f'prior training stop {previous.get("stop_reason")!r} is not evaluable')
     checkpoints = previous.get('checkpoints')
@@ -347,6 +358,8 @@ def load_prior(prior: Path, plan: Mapping, output: Path) -> tuple[dict, str]:
             or len({row['label'] for row in checkpoints}) != len(checkpoints)
             or 'fresh-initial' not in {row['label'] for row in checkpoints}):
         raise ValueError('prior summary needs uniquely labelled checkpoints including fresh-initial')
+    if cap_added and not set(_evaluation_order(plan)) <= {row['label'] for row in checkpoints}:
+        raise ValueError('prior summary needs every scheduled checkpoint when adding max_turn_actions')
     for row in checkpoints:
         path = Path(row['path'])
         if not path.is_absolute() or not path.exists():
@@ -391,10 +404,12 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
         summary['reevaluated_from'] = str(reevaluate)
         summary['reevaluated_from_summary_sha256'] = previous_sha256
 
+    training_template = template
+
     def prepare(name: str, *, split: str, shard_index: int):
         destination = prepared / name
         deps['prepare_stream'](recipe_path, destination, arm=plan['arm'], split=split,
-                               shard_index=shard_index, template=template)
+                               shard_index=shard_index, template=training_template)
         return deps['load_config'](destination / 'config.toml')
 
     def storage_stop() -> str | None:
@@ -406,6 +421,14 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
 
     try:
         prepared.mkdir()
+        if plan.get('max_turn_actions') is not None:
+            import tomllib
+            from spire_learn.neural.stream_runner import _toml
+            document = tomllib.loads(template.read_text())
+            document['budgets']['max_turn_actions'] = plan['max_turn_actions']
+            training_template = prepared / 'template.toml'
+            with training_template.open('x') as stream:
+                stream.write(_toml(document))
         if previous is None:
             fresh_path = _train_and_label(summary, deps, plan, prepare, storage_stop, budget, gate,
                                           clock, journal, output)
@@ -604,7 +627,11 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, c
                'shard_index': shard_index, 'segment': summary['segments']}
         recorded.append(row)
         summary['learned_decisions'] = decisions
-        journal.write('segment_complete', **row, prefix=prefix)
+        progress = {}
+        if plan.get('max_turn_actions') is not None:
+            collection = result['report'].summary.get('collection', {})
+            progress['turn_action_budget_hits'] = collection.get('turn_action_budget_hits', 0)
+        journal.write('segment_complete', **row, prefix=prefix, **progress)
         if decisions <= previous:
             raise _Stop('training_wall' if clock() >= budget.training else 'segment_without_progress')
         parent, purpose = result['checkpoint'], 'resume'
@@ -737,6 +764,12 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, 
             cases[row['case_id']] = {
                 'outcome': outcome, 'config_sha256': getattr(config, 'config_sha256', None),
                 'run_dir': str(getattr(report, 'run_dir', None))}
+            if outcome == 'incomplete':
+                report_summary = report.summary
+                collection_stop = (report_summary.get('collection') or {}).get('stop_reason')
+                cases[row['case_id']]['censor_reason'] = collection_stop if collection_stop in {
+                    'environment_action_budget', 'turn_action_budget',
+                } else report_summary.get('stop_reason')
             if outcome in ('failed', 'invalid'):
                 status = 'operational_failure' if outcome == 'failed' else 'invalid_report'
                 break

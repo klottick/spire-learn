@@ -825,6 +825,12 @@ def validate_frame(frame: CombatFrame, schema: CombatSchema) -> None:
     _remember_validation_success(frame, schema)
 
 
+def _needs_frame_validation(frame: CombatFrame, schema: CombatSchema) -> bool:
+    """Recognize a driver decision for this exact immutable observation and schema."""
+    marker = frame._driver_validation
+    return marker is None or marker[0] is not schema
+
+
 def _validate_frame_contents(frame: CombatFrame, schema: CombatSchema) -> None:
     """Accept on the fast path only when it proves validity; otherwise the reference decides.
 
@@ -1062,6 +1068,10 @@ def _candidate_reference(
 def candidates(frame: CombatFrame, schema: CombatSchema) -> tuple[CombatCandidate, ...]:
     """Decode legal rows without changing their original native dispatch indices."""
     validate_frame(frame, schema)
+    return _decode_candidates(frame, schema)
+
+
+def _decode_candidates(frame: CombatFrame, schema: CombatSchema) -> tuple[CombatCandidate, ...]:
     mask = _unpack(frame.tensors["action_mask"])
     indexes = tuple(index for index, legal in enumerate(mask) if legal == 1)
     if not indexes:

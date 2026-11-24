@@ -360,6 +360,8 @@ def _config_projection(config: NeuralConfig) -> dict[str, object]:
             "max_environment_actions": config.budgets.max_environment_actions,
             **({"max_turn_actions": config.budgets.max_turn_actions}
                if config.budgets.max_turn_actions is not None else {}),
+            **({"validation_stride": config.budgets.validation_stride}
+               if config.budgets.validation_stride is not None else {}),
             "max_wall_seconds": config.budgets.max_wall_seconds,
             "workers": config.workers,
         },
@@ -418,6 +420,8 @@ def _manifest_projection(
             "standard_view_schema_id": STANDARD_COMPACT_SCHEMA_ID}
            if config.standard_view_layout == "compact" else {}),
         **({"trim_padding": config.trim_padding} if config.trim_padding is not None else {}),
+        **({"validation_stride": config.budgets.validation_stride}
+           if config.budgets.validation_stride is not None else {}),
         "schema_descriptor_digest": getattr(schema, "descriptor_digest", None),
         "learner_identity": identity_payload(_selected_identity(config)),
         "policy_kind": policy_kind,
@@ -488,6 +492,8 @@ def _diagnostic_projection(diagnostics: CollectionDiagnostics | None) -> dict[st
     result = {name: getattr(diagnostics, name) for name in _DIAGNOSTIC_INTEGER_FIELDS}
     if diagnostics.turn_action_budget_hits:
         result["turn_action_budget_hits"] = diagnostics.turn_action_budget_hits
+    if diagnostics.learner_truncations:
+        result["learner_truncations"] = diagnostics.learner_truncations
     result.update({
         "elapsed_seconds": diagnostics.elapsed_seconds,
         "wall_overshoot_seconds": diagnostics.wall_overshoot_seconds,
@@ -510,11 +516,19 @@ def _diagnostic_projection(diagnostics: CollectionDiagnostics | None) -> dict[st
     return result
 
 
+def _record_frame_hash(frame: CombatFrame, operation: str) -> str | None:
+    marker = frame._driver_validation
+    if operation == "train" and marker is not None and not marker[1]:
+        return None
+    return _frame_hash(frame)
+
+
 def _write_collection_events(
     writer: NeuralWriter,
     rollout: Rollout,
     *,
     cursors: dict[str, int],
+    operation: str,
 ) -> None:
     for record in rollout.records:
         writer.event({
@@ -531,8 +545,8 @@ def _write_collection_events(
             "continuation": record.task_signal.continuation,
             "terminated": record.terminated,
             "truncated": record.truncated,
-            "source_public_sha256": _frame_hash(record.source),
-            "successor_public_sha256": _frame_hash(record.successor),
+            "source_public_sha256": _record_frame_hash(record.source, operation),
+            "successor_public_sha256": _record_frame_hash(record.successor, operation),
         })
     diagnostics = rollout.collection
     if diagnostics is None:
@@ -561,7 +575,7 @@ def _write_collection_events(
             "encounter": checkpoint.encounter,
             "hp_before_healing": checkpoint.hp_before_healing,
             "hp_after_cleanup": checkpoint.hp_after_cleanup,
-            "public_frame_sha256": _frame_hash(checkpoint.frame),
+            "public_frame_sha256": _record_frame_hash(checkpoint.frame, operation),
         })
     cursors["checkpoints"] = len(diagnostics.resource_checkpoints)
     writer.event({"event": "collection_progress", "collection": _diagnostic_projection(diagnostics)})
@@ -864,7 +878,7 @@ def _fight_summary(config: NeuralConfig, runtime: Any, records: Sequence[StepRec
             "hp_after_cleanup": checkpoint.hp_after_cleanup,
             "max_hp": maximum,
             "hp_retention": retention,
-            "public_frame_sha256": _frame_hash(checkpoint.frame),
+            "public_frame_sha256": _record_frame_hash(checkpoint.frame, config.operation),
         })
     completed = len(fight_rows)
     wins = sum(item["outcome"] == "victory" for item in fight_rows)
@@ -1249,14 +1263,14 @@ def train(
                     latest_diagnostics = partial.collection
                     if _is_process_control(error) or config.scenario_stream is not None:
                         try:
-                            _write_collection_events(writer, partial, cursors=cursors)
+                            _write_collection_events(writer, partial, cursors=cursors, operation=config.operation)
                         except BaseException as artifact_error:
                             if _is_process_control(artifact_error):
                                 error = _promote_finalization_control(error, artifact_error, "partial collection event")
                             else:
                                 _note(error, f"partial collection event also failed: {type(artifact_error).__name__}: {_error_value(artifact_error)['message']}")
                     else:
-                        _write_collection_events(writer, partial, cursors=cursors)
+                        _write_collection_events(writer, partial, cursors=cursors, operation=config.operation)
                         _update_once(config, runtime, writer, partial)
                 if _is_process_control(error):
                     raise error
@@ -1267,7 +1281,7 @@ def train(
 
             records.extend(rollout.records)
             latest_diagnostics = rollout.collection
-            _write_collection_events(writer, rollout, cursors=cursors)
+            _write_collection_events(writer, rollout, cursors=cursors, operation=config.operation)
             diagnostics = rollout.collection
             if diagnostics is not None and diagnostics.fault is not None:
                 fatal = RuntimeError(f"collector reported {diagnostics.fault.phase} fault")
@@ -1602,11 +1616,11 @@ def evaluate_policy(
                     latest_diagnostics = partial.collection
                     if _is_process_control(error):
                         try:
-                            _write_collection_events(writer, partial, cursors=cursors)
+                            _write_collection_events(writer, partial, cursors=cursors, operation=config.operation)
                         except BaseException as artifact_error:
                             _note(error, f"partial evaluation event also failed: {type(artifact_error).__name__}: {_error_value(artifact_error)['message']}")
                     else:
-                        _write_collection_events(writer, partial, cursors=cursors)
+                        _write_collection_events(writer, partial, cursors=cursors, operation=config.operation)
                 if _is_process_control(error):
                     raise
                 fatal = error
@@ -1615,7 +1629,7 @@ def evaluate_policy(
                 break
             records.extend(rollout.records)
             latest_diagnostics = rollout.collection
-            _write_collection_events(writer, rollout, cursors=cursors)
+            _write_collection_events(writer, rollout, cursors=cursors, operation=config.operation)
             if rollout.collection is not None and rollout.collection.fault is not None:
                 fatal = RuntimeError(f"collector reported {rollout.collection.fault.phase} fault")
                 status = "operational_failure"

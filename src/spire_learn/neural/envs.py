@@ -10,7 +10,7 @@ from __future__ import annotations
 from spire_learn.neural.profiling import observed, span
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import math
@@ -30,11 +30,11 @@ from spire_learn.neural.config import (
     NeuralConfig,
 )
 from spire_learn.neural.contracts import CombatFrame, Lifecycle
-from spire_learn.neural.schema import CombatCandidate, CombatSchema, candidates
+from spire_learn.neural.schema import CombatCandidate, CombatSchema, _decode_candidates
 from spire_learn.neural.schema import (
     parse_combat_descriptor, parse_common_descriptor, parse_lifecycle, validate_frame,
 )
-from spire_learn.neural.snapshot import snapshot_common
+from spire_learn.neural.snapshot import _copy_common
 from spire_learn.neural.gym_contracts import contract_for_revision
 from spire_learn.neural.views import COMMON_V1
 from spire_learn.neural.views import STANDARD_COMBAT_COMPACT_V1, STANDARD_COMBAT_V1
@@ -725,16 +725,19 @@ def _row_from_raw(
     *,
     dispatch_action_count: int | None = None,
     redact_native_names: bool = False,
+    sampled: bool = True,
 ) -> DriverRow:
-    frame = snapshot_common(
+    frame = _copy_common(
         raw.observation, schema, redact_native_names=redact_native_names
     )
+    if sampled:
+        validate_frame(frame, schema)
     lifecycle = parse_lifecycle(raw.info, view=schema.view)
-    validate_frame(frame, schema)
+    object.__setattr__(frame, "_driver_validation", (schema, sampled))
     if lifecycle.active:
         if raw.noncombat_indices:
             raise ContractError("active Run row cannot expose fixed-controller indices")
-        legal = candidates(frame, schema)
+        legal = _decode_candidates(frame, schema)
         noncombat: tuple[int, ...] = ()
     else:
         if any(frame.tensors["action_mask"].data):
@@ -777,8 +780,34 @@ class CombatDriver:
         self._terminal: tuple[bool, ...] = (False,) * self.batch_size
         self._accepted_steps = 0
         self._accepted_operations = 0
+        self._validation_stride = 1
+        self._observation_positions = [0] * self.batch_size
         self._failed = False
         self._closed = False
+
+    def begin_rollout(self, stride: int, reset_mask: tuple[bool, ...]) -> None:
+        """Start observation numbering at zero in each slot."""
+        self._ensure_usable()
+        if type(stride) is not int or stride < 1:
+            raise ContractError("validation stride must be a positive integer")
+        updated = list(self._rows)
+        for slot, (current, will_reset) in enumerate(zip(updated, reset_mask, strict=True)):
+            if current is None or will_reset:
+                continue
+            marker = current.frame._driver_validation
+            if marker is None or marker[0] is not self.schema or not marker[1]:
+                # Keep the preceding rollout's sampling evidence on its successor.
+                frame = replace(current.frame)
+                validate_frame(frame, self.schema)
+                object.__setattr__(frame, "_driver_validation", (self.schema, True))
+                updated[slot] = replace(current, frame=frame)
+        self._rows = tuple(updated)
+        self._validation_stride = stride
+        self._observation_positions = [int(row is not None and not will_reset)
+                                       for row, will_reset in zip(updated, reset_mask, strict=True)]
+
+    def _sample_observation(self, slot: int) -> bool:
+        return self._observation_positions[slot] % self._validation_stride == 0
 
     @property
     def rows(self) -> tuple[DriverRow | None, ...]:
@@ -1327,6 +1356,7 @@ class CombatDriver:
                     updated[slot] = _row_from_raw(
                         raw,
                         self.schema,
+                        sampled=self._sample_observation(slot),
                         dispatch_action_count=self._dispatch_action_count,
                         redact_native_names=getattr(
                             self._provider, "redacts_native_errors", False
@@ -1344,6 +1374,7 @@ class CombatDriver:
                     observed = _row_from_raw(
                         raw,
                         self.schema,
+                        sampled=False,
                         dispatch_action_count=self._dispatch_action_count,
                         redact_native_names=getattr(
                             self._provider, "redacts_native_errors", False
@@ -1370,6 +1401,8 @@ class CombatDriver:
                 ),
             )
         self._rows = tuple(updated)
+        for slot, selected in enumerate(mask_values):
+            self._observation_positions[slot] += int(selected)
         self._terminal = tuple(terminal)
         self._accepted_operations += 1
         return tuple(row for row in self._rows if row is not None)
@@ -1461,6 +1494,7 @@ class CombatDriver:
                 successor = _row_from_raw(
                     raw.boundary,
                     self.schema,
+                    sampled=self._sample_observation(slot),
                     dispatch_action_count=self._dispatch_action_count,
                     redact_native_names=getattr(
                         self._provider, "redacts_native_errors", False
@@ -1488,6 +1522,8 @@ class CombatDriver:
         self._accepted_steps += 1
         self._accepted_operations += 1
         self._rows = tuple(successors)
+        for slot in range(self.batch_size):
+            self._observation_positions[slot] += 1
         self._terminal = tuple(terminal)
         return tuple(transitions)
 

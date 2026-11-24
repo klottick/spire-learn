@@ -29,6 +29,11 @@ MAX_EVENT_BYTES = 64 * 1024
 MAX_EVENT_LOG_BYTES = 64 * 1024 * 1024
 MAX_EVENT_COUNT = 1_000_000
 _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
+_FRAME_HASH_FIELDS = {
+    "accepted_action": ("source_public_sha256", "successor_public_sha256"),
+    "combat_settlement": ("public_frame_sha256",),
+}
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _RAW_EVENT_FIELDS = frozenset({
     "obs", "observation", "observations", "raw_observation", "raw_frame",
     "frame", "tensor", "tensors", "buffer", "frame_bytes",
@@ -107,6 +112,7 @@ class NeuralWriter:
         self.run_dir = Path(run_dir)
         self._events = (self.run_dir / "events.jsonl").open("x", encoding="utf-8", newline="\n")
         self._started = False
+        self._operation: object = None
         self._finalized = False
         self._closed = False
         self._failed = False
@@ -170,6 +176,7 @@ class NeuralWriter:
         except BaseException:
             self._failed = True
             raise
+        self._operation = safe_config.get("operation")
         self._started = True
 
     @observed("artifact_event")
@@ -184,6 +191,14 @@ class NeuralWriter:
         safe_record = _json_value(record, event=True)
         if not isinstance(safe_record, dict):
             raise TypeError("event record must project to a JSON object")
+        event_kind = safe_record.get("event")
+        fields = _FRAME_HASH_FIELDS.get(event_kind, ()) if type(event_kind) is str else ()
+        for field in fields:
+            digest = safe_record.get(field, "")
+            if digest is None and self._operation == "train":
+                continue
+            if not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
+                raise ValueError(f"invalid public frame hash: {field}")
         envelope = {
             "schema_id": RUN_SCHEMA_ID,
             "record_sha256": canonical_fingerprint(safe_record),

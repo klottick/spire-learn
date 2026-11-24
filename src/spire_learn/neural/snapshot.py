@@ -57,6 +57,14 @@ def snapshot_common(
     redact_native_names: bool = False,
 ) -> CombatFrame:
     """Copy and validate exactly the descriptor tensors into immutable learner bytes."""
+    frame = _copy_common(raw, schema, redact_native_names=redact_native_names)
+    validate_frame(frame, schema)
+    return frame
+
+
+def _copy_common(
+    raw: Mapping[str, object], schema: CombatSchema, *, redact_native_names: bool = False,
+) -> CombatFrame:
     if not isinstance(schema, CombatSchema):
         raise ContractError("schema must be a CombatSchema")
     if not isinstance(raw, Mapping) or any(not isinstance(key, str) for key in raw):
@@ -78,9 +86,7 @@ def snapshot_common(
         )
         for key, spec in schema.tensors.items()
     }
-    frame = CombatFrame(owned, schema.schema_fingerprint)
-    validate_frame(frame, schema)
-    return frame
+    return CombatFrame(owned, schema.schema_fingerprint)
 
 
 __all__ = ["snapshot_common"]

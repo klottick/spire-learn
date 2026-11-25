@@ -1,0 +1,68 @@
+{
+  "note": "Gym v1.2.4 teachers use native playouts (PublicSearch.playout_many under spire-gym-public-playout-v1). Simulation counts are copied from the Gym v1.2.0 calibration as placeholders and are NOT calibrated for native playouts; Task 3 recalibrates them. Uncalibrated teachers run only with --train-sample.",
+  "teachers": {
+    "current": {
+      "kind": "one-move",
+      "samples": 32,
+      "playout_steps": 80,
+      "playout_backend": "native"
+    },
+    "tree-1x": {
+      "calibrated": false,
+      "target_cost_multiple": 1,
+      "config": {
+        "simulations": 412,
+        "min_root_visits": 8,
+        "worlds": 8,
+        "ucb_c": 1.0,
+        "max_depth": 4,
+        "widening": [
+          2.0,
+          0.5
+        ],
+        "playout_steps": 80,
+        "branch_layout": "compact",
+        "workers": 1,
+        "playout_backend": "native"
+      }
+    },
+    "tree-3x": {
+      "calibrated": false,
+      "target_cost_multiple": 3,
+      "config": {
+        "simulations": 1237,
+        "min_root_visits": 8,
+        "worlds": 8,
+        "ucb_c": 1.0,
+        "max_depth": 4,
+        "widening": [
+          2.0,
+          0.5
+        ],
+        "playout_steps": 80,
+        "branch_layout": "compact",
+        "workers": 1,
+        "playout_backend": "native"
+      }
+    },
+    "tree-10x": {
+      "calibrated": false,
+      "target_cost_multiple": 10,
+      "config": {
+        "simulations": 4124,
+        "min_root_visits": 8,
+        "worlds": 8,
+        "ucb_c": 1.0,
+        "max_depth": 4,
+        "widening": [
+          2.0,
+          0.5
+        ],
+        "playout_steps": 80,
+        "branch_layout": "compact",
+        "workers": 1,
+        "playout_backend": "native"
+      }
+    }
+  }
+}

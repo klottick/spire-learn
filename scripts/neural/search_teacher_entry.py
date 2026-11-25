@@ -11,7 +11,6 @@ import argparse
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import ExitStack, contextmanager
-from dataclasses import asdict
 from hashlib import sha256
 from itertools import batched
 import json
@@ -32,8 +31,8 @@ from spire_learn.neural.cases import environment_seed_for
 from spire_learn.neural.gym_contracts import STANDARD_COMPACT_PRESET, contract_for_revision
 from spire_learn.neural.recipes import build_panel, load_recipe
 from spire_learn.neural.scenario_support import content_sha256, json_value
-from spire_learn.neural.search_one_move import one_move_values
-from spire_learn.neural.search_teacher import TeacherConfig, config_sha256, search_options, teach
+from spire_learn.neural.search_one_move import PLAYOUT_RULE_ID, one_move_values
+from spire_learn.neural.search_teacher import TeacherConfig, config_identity, config_sha256, search_options, teach
 from spire_learn.neural.search_view import View, refusal_class
 from spire_learn.neural.standard_stream import StandardRecipe
 
@@ -277,9 +276,14 @@ def _teacher(path, name, panel):
     row = json.loads(path.read_text())["teachers"][name]
     if name == "current":
         current = {"samples": 32, "playout_steps": 80}
+        if row.get("playout_backend") == "native":
+            current["playout_backend"] = "native"
         if row != {"kind": "one-move", **current}:
             raise ValueError("current must use one-move search with 32 samples and 80 playout steps")
-        return current, content_sha256({**row, "branch_layout": "compact", "workers": 1}), True
+        identity = {**row, "branch_layout": "compact", "workers": 1}
+        if "playout_backend" in current:
+            identity["playout_rule_id"] = PLAYOUT_RULE_ID
+        return current, content_sha256(identity), True
     calibrated = row["calibrated"] is True
     if panel and not calibrated:
         raise ValueError(f"{name} is uncalibrated; use --train-sample during calibration")
@@ -290,6 +294,11 @@ def _teacher(path, name, panel):
     if teacher.branch_layout != "compact" or teacher.workers != 1:
         raise ValueError("Tree teachers require compact search with one worker")
     return teacher, config_sha256(teacher), calibrated
+
+
+def _native_backend(teacher):
+    backend = teacher.playout_backend if isinstance(teacher, TeacherConfig) else teacher.get("playout_backend")
+    return backend == "native"
 
 
 def _run(args, output):
@@ -355,13 +364,14 @@ def _run(args, output):
             "recipe_sha256": sha256(args.recipe.read_bytes()).hexdigest(), "states_table_sha256": recipe.table_sha256,
             "panel": args.panel, "split": split, **identity, "case_manifest_sha256": content_sha256(cases),
             "teacher": args.teacher, "calibrated": calibrated, "config_sha256": teacher_sha,
-            "teacher_config": asdict(teacher) if isinstance(teacher, TeacherConfig) else teacher,
+            "teacher_config": config_identity(teacher) if isinstance(teacher, TeacherConfig) else teacher,
             "seed": args.seed, "environment_seeds": [case["environment_seed"] for case in cases],
             "research_seed_rule": "((seed + case_index) * max_steps + step) modulo 2**64",
             "character": recipe.character, "ascension": recipe.ascension, "profile": descriptor["profile_id"],
             "observation_schema": descriptor["schema_id"], "observation_fingerprint": descriptor["fingerprint"],
             "rules_epoch": contract.rules_epoch, "capacity_preset": STANDARD_COMPACT_PRESET,
             "reward": TERMINAL_REWARDS, "branch_layout": "compact",
+            **({"playout_backend": "native", "playout_rule_id": PLAYOUT_RULE_ID} if _native_backend(teacher) else {}),
             "workers": 1, "parallel": args.parallel, "max_steps": args.max_steps,
             "max_turn_actions": args.max_turn_actions, "gpu_seconds": 0,
         },

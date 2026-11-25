@@ -11,7 +11,9 @@ from time import process_time
 
 from . import search_view
 from .gym_contracts import STANDARD_COMPACT_PRESET
-from .search_one_move import ActionStat, _close_branch
+from .search_one_move import (
+    PLAYOUT_BACKENDS, PLAYOUT_RULE_ID, ActionStat, _close_branch, playout_branches, playout_seed,
+)
 from .search_view import View
 
 # Bound retained native branches and their Python observations per fight.
@@ -29,6 +31,8 @@ class TeacherConfig:
     playout_steps: int = 80
     branch_layout: str = "compact"
     workers: int = 1
+    # "python" is the reference rollout; "native" uses Gym's playout_many.
+    playout_backend: str = "python"
 
     def __post_init__(self) -> None:
         for name in ("simulations", "worlds", "max_depth", "workers"):
@@ -43,6 +47,8 @@ class TeacherConfig:
             raise ValueError("worlds cannot exceed the u64 sample space")
         if self.branch_layout not in ("compact", "dense") or self.workers > 256:
             raise ValueError("Invalid public search layout or worker count")
+        if self.playout_backend not in PLAYOUT_BACKENDS:
+            raise ValueError(f"playout_backend must be one of {PLAYOUT_BACKENDS}")
         if not isfinite(self.ucb_c) or self.ucb_c < 0:
             raise ValueError("ucb_c must be finite and nonnegative")
         if self.widening is not None:
@@ -60,8 +66,18 @@ class TeacherResult:
     cpu_seconds: float
 
 
+def config_identity(config: TeacherConfig) -> dict:
+    """Identity fields of a config. Python teachers keep the pre-native fields, so their hashes hold."""
+    fields = asdict(config)
+    if config.playout_backend == "python":
+        del fields["playout_backend"]
+    else:
+        fields["playout_rule_id"] = PLAYOUT_RULE_ID
+    return fields
+
+
 def config_sha256(config: TeacherConfig) -> str:
-    payload = json.dumps(asdict(config), sort_keys=True, separators=(",", ":"), allow_nan=False)
+    payload = json.dumps(config_identity(config), sort_keys=True, separators=(",", ":"), allow_nan=False)
     return sha256(payload.encode()).hexdigest()
 
 
@@ -162,6 +178,20 @@ def _playout_rng(node, research_seed, world, *, uniform):
     return random.Random((n << 128) | (research_seed << 64) | world)
 
 
+class _PlayoutRefused(Exception):
+    """A native playout stopped at a refusal boundary. Counted like a refused branch."""
+
+
+def _native_playout(search, branch, observation, view, config, research_seed, world, n):
+    if not config.playout_steps:
+        return 0.5 * view.balance(observation)
+    outcome, = playout_branches(search, [branch], max_steps=config.playout_steps,
+                                stream=playout_seed(research_seed, world, n))
+    if outcome.refused:
+        raise _PlayoutRefused
+    return outcome.value
+
+
 def _playout(branch, observation, view, rng, steps):
     for _ in range(steps):
         action = view.heuristic_choice(observation, rng)
@@ -228,6 +258,11 @@ def _simulate(search, world, root, first_action, view, config, nodes, points, ca
                     return 0.5 * view.balance(observation)
                 if branch is None:
                     branch = point.branch.fork()
+                if config.playout_backend == "native":
+                    n = 0 if uniform else node.playouts_by_world.get(world, 0)
+                    if not uniform:
+                        node.playouts_by_world[world] = n + 1
+                    return _native_playout(search, branch, observation, view, config, research_seed, world, n)
                 rng = _playout_rng(node, research_seed, world, uniform=uniform)
                 return _playout(branch, observation, view, rng, config.playout_steps)
             action = _select(node, config)
@@ -270,7 +305,7 @@ def teach(search, legal: Sequence[int], view: View, config: TeacherConfig, *,
                     search, world, root, action, view, config, nodes, points, capacity, path,
                     research_seed=research_seed, uniform=uniform,
                 )
-            except unsupported:
+            except (unsupported, _PlayoutRefused):
                 rejected = True
                 value = -1.0
                 refused += 1

@@ -1,0 +1,67 @@
+# Standard v1.2.4 baseline template: prepare_stream replaces manifest/output paths and split.
+# Model and PPO settings match baseline-gym-1.1.1-cv2; this file grants no execution authority.
+schema = "spire-learn-neural-config-v1"
+mode = "standard-standalone"
+operation = "train"
+split = "train"
+partition = "train"
+manifest_path = "../../cases/neural/standard-standalone-train.json"
+output_root = "../../../artifacts/development/neural-combat/runs/gym-1.2.4/standard-baseline"
+device = "cuda:0"
+
+[environment]
+gym_revision = "673eb8f220023b0c95401bbf96bec814a359457b"
+standard_view_layout = "compact"
+standard_view_preset = "standard-combat-compact-v1"
+standard_view_fingerprint = "49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8"
+workers = 1
+
+[seeds]
+policy = 1103
+optimizer = 2207
+curriculum = 3301
+noncombat = 4409
+
+[model]
+embedding_width = 16
+hidden_width = 64
+max_parameters = 10000000
+
+[ppo]
+learning_rate = 0.0003
+gamma = 0.99
+gae_lambda = 0.95
+clip_epsilon = 0.2
+value_coefficient = 0.5
+entropy_coefficient = 0.01
+max_grad_norm = 0.5
+epochs = 4
+minibatch_rows = 64
+adam_eps = 0.00001
+
+[rollout]
+rows = 16
+steps = 32
+
+[budgets]
+max_optimizer_steps = 262144
+max_training_decisions = 1638400
+max_environment_actions = 8000000
+max_wall_seconds = 12600.0
+max_turn_actions = 500
+
+[[accepted_identities]]
+model_id = "spire-learn-combat-ff-standard-v1"
+features_id = "spire-learn-combat-features-standard-v1"
+action_id = "spire-learn-combat-dispatch-v1"
+objective_id = "spire-learn-combat-winloss-v1"
+
+[accepted_identities.accepted_raw_mode_mappings]
+standard-standalone = "spire-learn-standard-combat-compact-v1@49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8+gym-1.2.4"
+
+[accepted_identities.config_hashes]
+model = "4fb628e06bf4952847795ac5d8548d12dfeede4c97e874ab843857ae0f91cd2f"
+ppo = "f08075e0b01a15095b542fc20cba11c3258381bcb5721bb5066a4448e43c9e2a"
+
+[runtime]
+gpu_uuid = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"

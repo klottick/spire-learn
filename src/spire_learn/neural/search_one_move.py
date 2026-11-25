@@ -1,7 +1,7 @@
 """Batched one-move public search with common random numbers."""
 
 from collections.abc import Mapping, Sequence
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass
 import random
 
@@ -26,12 +26,11 @@ class StepOutcome:
     refused: bool = False
 
 
-def step_branches(search, branches, actions, *, view: str, workers: int) -> list[StepOutcome]:
+def step_branches(search, branches, actions, *, view: str) -> list[StepOutcome]:
     """Step public branches in request order with the arena's configured worker count.
 
-    Gym v1.2.0 takes workers when opening the arena. The supplied search must
-    already have been opened with that count. Branch and arena ownership stay
-    with the caller.
+    Gym v1.2.0 sets workers when opening the arena. Branch and arena
+    ownership stay with the caller.
     """
     unsupported, _, fault_error = search_view._native_errors()
     try:
@@ -45,7 +44,7 @@ def step_branches(search, branches, actions, *, view: str, workers: int) -> list
                 row, reward, done, cut, detail = branch.step(action, view=view)
                 if view == "mask":
                     row = {"action_mask": row}
-                outcomes.append(StepOutcome(row, reward, done, cut, detail))
+                outcomes.append(StepOutcome(row, float(reward), bool(done), bool(cut), detail))
             except unsupported:
                 outcomes.append(StepOutcome(None, -1.0, False, False, {}, refused=True))
         return outcomes
@@ -78,8 +77,14 @@ class _Playout:
     refused: bool = False
 
 
+def _close_branch(branch) -> None:
+    # Preserve the search result or the original fault if cleanup fails.
+    with suppress(Exception):
+        branch.close()
+
+
 def one_move_values(search, legal: Sequence[int], view: View, *, samples: int,
-                    playout_steps: int, research_seed: int, workers: int,
+                    playout_steps: int, research_seed: int,
                     branch_view: str = "full") -> dict[int, ActionStat]:
     """Evaluate each action over paired worlds. The caller owns the search root."""
     with ExitStack() as handles:
@@ -89,7 +94,7 @@ def one_move_values(search, legal: Sequence[int], view: View, *, samples: int,
             group = []
             for sample in range(samples):
                 branch = search.branch(sample)
-                handles.callback(branch.close)
+                handles.callback(_close_branch, branch)
                 playout = _Playout(branch, action, random.Random(research_seed * 1_000_003 + sample))
                 group.append(playout)
                 active.append(playout)
@@ -98,10 +103,10 @@ def one_move_values(search, legal: Sequence[int], view: View, *, samples: int,
         for depth in range(playout_steps + 1):
             if not active:
                 break
-            results = step_branches(search, [item.branch for item in active], [item.action for item in active],
-                                    view=branch_view, workers=workers)
+            branches = [item.branch for item in active]
+            actions = [item.action for item in active]
             continuing = []
-            for item, result in zip(active, results, strict=True):
+            for item, result in zip(active, step_branches(search, branches, actions, view=branch_view), strict=True):
                 if result.refused or result.terminated:
                     item.value = result.reward
                     item.refused = result.refused
@@ -112,7 +117,7 @@ def one_move_values(search, legal: Sequence[int], view: View, *, samples: int,
                     continuing.append(item)
             active = continuing
             # Row views retain the stacked arrays. Release them before the next dispatch.
-            del results, result
+            result = None
 
         values = {}
         for action, group in by_action.items():

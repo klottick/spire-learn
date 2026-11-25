@@ -94,7 +94,7 @@ class SearchOneMoveNativeTests(unittest.TestCase):
                 self.assertEqual(scalar.spec()["root_digest"], batched.spec()["root_digest"])
                 self.assert_action_alignment(scalar, batched, legal, np)
                 actual = one_move_values(batched, legal, bw.View(batched.observation_spec()),
-                                         **params, workers=workers)
+                                         **params)
                 self.assertEqual(actual, expected, (research_seed, layout, workers))
                 self.assertEqual([stat.mean.hex() for stat in actual.values()],
                                  [stat.mean.hex() for stat in expected.values()])

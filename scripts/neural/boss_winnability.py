@@ -105,11 +105,11 @@ def search_choice(env, view: View, observation, *, samples: int, playout_steps: 
         dispatch = _TimedSearch(search, timing) if timing is not None else search
         try:
             stats_by_action = one_move_values(dispatch, legal, branch_policy_view, samples=samples,
-                                              playout_steps=playout_steps, research_seed=research_seed,
-                                              workers=workers)
+                                              playout_steps=playout_steps, research_seed=research_seed)
         except fault:
             stats['branch_fault'] += 1
             raise
+        # Refusal totals cover completed searches. A fault aborts the decision before its tally is available.
         refused = sum(item.refused for item in stats_by_action.values())
         if refused:
             stats['branch_refused'] += refused

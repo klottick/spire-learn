@@ -71,8 +71,8 @@ class OneMoveTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def values(self, search, **kwargs):
-        return one_move_values(search, self.legal, self.view, **self.params, **kwargs)
+    def values(self, search):
+        return one_move_values(search, self.legal, self.view, **self.params)
 
     def test_native_parity_candidates_are_train_only_and_fit_catalogs(self):
         from tests.integration.test_search_one_move_native import CHARACTERS, _training_batches
@@ -96,17 +96,15 @@ class OneMoveTests(unittest.TestCase):
     def test_batched_values_equal_sequential_values(self):
         expected = sequential_values(_ScriptedSearch({}), self.legal, self.view,
                                      **self.params, unsupported=_Errors.Unsupported)
-        for workers in (1, 4):
-            with self.subTest(workers=workers):
-                search = _ScriptedSearch({})
-                actual = self.values(search, workers=workers)
-                self.assertEqual(actual, expected)
-                self.assertEqual([item.mean.hex() for item in actual.values()],
-                                 [item.mean.hex() for item in expected.values()])
-                self.assertEqual(search.batch_sizes[0], 6)
-                self.assertEqual(len(search.batch_sizes), 5)
-                self.assertLess(search.batch_sizes[-1], 6)
-                self.assertTrue(all(branch.closed for branch in search.branches))
+        search = _ScriptedSearch({})
+        actual = self.values(search)
+        self.assertEqual(actual, expected)
+        self.assertEqual([item.mean.hex() for item in actual.values()],
+                         [item.mean.hex() for item in expected.values()])
+        self.assertEqual(search.batch_sizes[0], 6)
+        self.assertEqual(len(search.batch_sizes), 5)
+        self.assertLess(search.batch_sizes[-1], 6)
+        self.assertTrue(all(branch.closed for branch in search.branches))
 
     def terminal_search(self, outcome):
         outcomes = {(action, sample): 0.0 for action in self.legal for sample in range(3)}
@@ -115,7 +113,7 @@ class OneMoveTests(unittest.TestCase):
 
     def test_branch_refusal_counts_minus_one_and_is_reported(self):
         search = self.terminal_search(_Errors.Unsupported())
-        self.assertEqual(self.values(search, workers=1),
+        self.assertEqual(self.values(search),
                          {0: ActionStat(0.0, 3, 0), 1: ActionStat(-1 / 3, 3, 1)})
 
     def test_fault_in_one_branch_raises_and_closes_all_handles(self):
@@ -139,9 +137,41 @@ class OneMoveTests(unittest.TestCase):
         self.assertTrue(search.closed)
         unreadable.items.assert_not_called()
 
+    def test_branch_close_errors_do_not_change_success_or_mask_faults(self):
+        for outcome in (1.0, _Errors.Fault("step fault")):
+            with self.subTest(outcome=outcome):
+                search = self.terminal_search(outcome)
+                make_branch = search.branch
+
+                def branch_with_failing_close(sample):
+                    branch = make_branch(sample)
+                    close = branch.close
+
+                    def close_then_raise():
+                        close()
+                        raise RuntimeError("close fault")
+
+                    branch.close = close_then_raise
+                    return branch
+
+                search.branch = branch_with_failing_close
+
+                def choose():
+                    return bw.search_choice(_Env(search), self.view, {"legal": self.legal},
+                                            rng=random.Random(9), stats=Counter(), **self.params)
+
+                if isinstance(outcome, Exception):
+                    with self.assertRaisesRegex(_Errors.Fault, "step fault"):
+                        choose()
+                else:
+                    self.assertEqual(choose(), 1)
+                self.assertEqual(len(search.branches), 6)
+                self.assertTrue(all(branch.closed for branch in search.branches))
+                self.assertTrue(search.closed)
+
     def test_whole_call_unsupported_refusal_is_attributed_per_entry(self):
         search = self.terminal_search(_Errors.Unsupported("HIDDEN_ORDER_PICK"))
-        self.assertEqual(self.values(search, workers=4)[1], ActionStat(-1 / 3, 3, 1))
+        self.assertEqual(self.values(search)[1], ActionStat(-1 / 3, 3, 1))
         self.assertEqual(search.batch_sizes, [6])
         self.assertEqual(search.steps, [(sample, action) for action in self.legal for sample in range(3)])
 
@@ -151,7 +181,7 @@ class OneMoveTests(unittest.TestCase):
                 search = self.terminal_search(0.0)
                 search.step_many = Mock(side_effect=error_type())
                 with self.assertRaises(error_type):
-                    self.values(search, workers=1)
+                    self.values(search)
                 self.assertEqual(search.steps, [])
                 self.assertTrue(all(branch.closed for branch in search.branches))
 

@@ -96,3 +96,104 @@ fault during training or a panel. The play preset was measured only: baseline pl
 - The runs ran back to back on a shared host and GPU; other load was light but not controlled.
 - Simulator throughput only; no original-game transfer claim. RNG-001 and TIME-001
   qualifications apply.
+
+## Padding trim, sampled validation and workers (stage 1)
+
+Measured 2026-11-25 at learner commit `8861836` using the same Gym v1.2.0
+Standard compact preset, recipe and offline CUDA runtime. Each plan started
+with fresh weights and resumed across three early shards. The first two
+segments synchronized CUDA for timing, and the last ran unsynchronized.
+All ten profiles exited 0 with three segments and `learner_changed` false.
+The `gpu_wait` gate was active and recorded zero waits. Local evidence is
+under `artifacts/development/neural-combat/s1t4-profile-{16,64}-{compact,compact-fast,compact-w8,compact-fast-w8,compact-fast-inexact}/`.
+
+The `fast` plans enable exact padding trim and training validation with stride
+16. The `w8` plans use eight Gym batch workers, with the same four-CPU container
+limit across all plans. `fast-inexact` uses one worker and enables experimental
+trim compute in addition to trim and sampled validation.
+
+### Throughput
+
+Rates were checked by dividing learned decisions by segment wall time. The
+table uses the profiler's rates, calculated before its wall times are rounded
+to milliseconds. Speed-ups use the unsynchronized compact control at the same
+row count. Spread is the fastest segment divided by the slowest, minus one.
+
+| Rows | Variant | Segments (dec/s) | Headline | vs compact | Segment wall | Decisions | Spread |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 16 | compact | 209.4, 221.5, 233.1 | **233.1** | 1.00 | 17.6 s | 4,096 | 11.3% |
+| 16 | compact-fast | 247.9, 233.9, 218.1 | **218.1** | 0.94 | 18.8 s | 4,096 | 13.7% |
+| 16 | compact-w8 | 191.2, 196.1, 228.5 | **228.5** | 0.98 | 17.9 s | 4,096 | 19.5% |
+| 16 | compact-fast-w8 | 243.0, 246.8, 228.6 | **228.6** | 0.98 | 17.9 s | 4,096 | 8.0% |
+| 16 | compact-fast-inexact | 222.6, 229.8, 231.7 | **231.7** | 0.99 | 17.7 s | 4,096 | 4.1% |
+| 64 | compact | 253.4, 271.7, 272.4 | **272.4** | 1.00 | 60.1 s | 16,384 | 7.5% |
+| 64 | compact-fast | 315.5, 281.5, 311.7 | **311.7** | 1.14 | 52.6 s | 16,384 | 12.0% |
+| 64 | compact-w8 | 271.8, 262.6, 273.5 | **273.5** | 1.00 | 59.9 s | 16,384 | 4.2% |
+| 64 | compact-fast-w8 | 331.8, 309.6, 324.3 | **324.3** | 1.19 | 50.5 s | 16,384 | 7.2% |
+| 64 | compact-fast-inexact | 337.5, 347.1, 350.0 | **350.0** | 1.28 | 46.8 s | 16,384 | 3.7% |
+
+At 16 rows the headlines range from 218.1 to 233.1 decisions/s, with variants
+within 6.4% of compact. Each plan's segment spread is 4.1–19.5%, and the runs
+mix timing modes and shards. The 16-row differences are within observed noise.
+At 64 rows the spread is 3.7–12.0%. The exact fast plans gained 14% and 19%
+over compact in their unsynchronized segments, and the inexact plan gained
+28%. Eight workers alone changed the 64-row headline by about 0.4%.
+
+### Phase split (unsynchronized segment, share of segment wall time)
+
+The phase groups sum exclusive span times. Other includes checkpoint save,
+collection, and the remainder of segment wall time.
+
+| Phase (spans) | 16 compact | 16 fast | 16 w8 | 16 fast-w8 | 16 fast-inexact | 64 compact | 64 fast | 64 w8 | 64 fast-w8 | 64 fast-inexact |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Env step (native step/reset public export, driver step/reset) | 5.9% | 7.7% | 4.4% | 5.3% | 8.2% | 10.7% | 12.3% | 6.8% | 7.9% | 13.2% |
+| Snapshot/validation (`snapshot_validation`, `frame_hash`, artifact events) | 20.2% | 9.3% | 20.0% | 9.9% | 9.9% | 29.5% | 16.9% | 30.8% | 18.0% | 18.6% |
+| Features (`features_transfer`, `encode_frames`) | 4.6% | 4.5% | 4.9% | 4.7% | 4.8% | 4.3% | 5.1% | 4.6% | 5.3% | 5.3% |
+| Policy forward (`policy_act`, `bootstrap_values`) | 26.5% | 29.4% | 27.1% | 30.5% | 30.0% | 8.9% | 10.6% | 9.3% | 11.3% | 11.1% |
+| PPO update (forward/loss, backward, clipping, behaviour validation, Adam) | 36.0% | 41.9% | 35.9% | 42.1% | 38.2% | 43.6% | 50.9% | 45.3% | 53.2% | 48.0% |
+| Other (checkpoint save, collection, unattributed) | 6.8% | 7.2% | 7.7% | 7.5% | 8.9% | 3.0% | 4.2% | 3.2% | 4.3% | 3.8% |
+
+Exclusive seconds per segment for the larger spans follow.
+
+| Span | 16 compact | 16 fast | 16 w8 | 16 fast-w8 | 16 fast-inexact | 64 compact | 64 fast | 64 w8 | 64 fast-w8 | 64 fast-inexact |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `native_step_public_export` | 0.53 | 0.75 | 0.29 | 0.34 | 0.74 | 2.36 | 2.34 | 0.87 | 0.85 | 2.28 |
+| `snapshot_validation` | 2.45 | 1.60 | 2.51 | 1.63 | 1.61 | 13.48 | 8.38 | 14.06 | 8.57 | 8.21 |
+| `frame_hash` | 0.98 | 0.08 | 1.01 | 0.08 | 0.08 | 4.00 | 0.30 | 4.12 | 0.30 | 0.29 |
+| `features_transfer` | 0.80 | 0.84 | 0.87 | 0.84 | 0.84 | 2.60 | 2.65 | 2.74 | 2.68 | 2.46 |
+| `policy_act` | 2.38 | 2.81 | 2.48 | 2.80 | 2.71 | 2.80 | 2.92 | 2.93 | 2.99 | 2.73 |
+| `bootstrap_values` | 2.27 | 2.70 | 2.38 | 2.66 | 2.59 | 2.54 | 2.62 | 2.64 | 2.70 | 2.45 |
+| `ppo_forward_loss` | 2.51 | 3.31 | 2.59 | 3.15 | 3.08 | 10.60 | 11.05 | 11.16 | 11.06 | 10.34 |
+| `ppo_backward` | 2.40 | 2.81 | 2.38 | 2.69 | 2.31 | 9.63 | 9.71 | 9.75 | 9.76 | 7.65 |
+| `ppo_validate_behavior` | 0.50 | 0.51 | 0.50 | 0.52 | 0.17 | 2.00 | 2.02 | 2.02 | 2.02 | 0.59 |
+
+At 64 rows the exact fast plan cut snapshot validation from 13.48 to 8.38 s
+and hashing from 4.00 to 0.30 s. At 16 rows they fell from 2.45 to 1.60 s and
+from 0.98 to 0.08 s, while PPO forward/loss and backward took longer in that
+segment. Eight workers reduced native step public export at 64 rows from
+2.36 to 0.87 s on compact and from 2.34 to 0.85 s on compact-fast.
+
+Exact trim reduces encoded tensor widths for encoding, transfer and storage.
+The model restores full widths before computing. The measured 64-row exact
+fast segment spent 2.65 s in feature transfer versus 2.60 s for compact.
+Validation and hashing accounted for the largest measured savings in that
+comparison. The fast comparison bundles exact trim and sampled validation.
+
+Inexact trim runs the model on the trimmed rows. Comparing the two one-worker
+fast plans at 64 rows, feature transfer fell from 2.65 to 2.46 s, PPO
+forward/loss from 11.05 to 10.34 s, backward from 9.71 to 7.65 s, and PPO
+behaviour validation from 2.02 to 0.59 s. These are exclusive host wall times
+from the unsynchronized segment.
+
+On 64 synthetic CPU frames across one Adam update, the maximum absolute
+legal-logit difference was 2.24e-8 and the maximum value difference was
+1.49e-8. Greedy choices matched, and 22 parameter tensors had last-bit
+gradient differences. Inexact trim is measurement-only and refused outside
+`profile_entry`.
+
+### Caveats
+
+- One replicate per plan on a shared host and GPU. Other load was uncontrolled.
+- The first shards use fuzz level 0. Later fights can have more occupied rows
+  and a different combat mix.
+- These are simulator throughput measurements. RNG-001 and TIME-001 apply.

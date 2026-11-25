@@ -39,6 +39,8 @@ class TeacherConfig:
             value = getattr(self, name)
             if type(value) is not int or value < 0:
                 raise ValueError(f"{name} must be a nonnegative integer")
+        if self.worlds > 2**64:
+            raise ValueError("worlds cannot exceed the u64 sample space")
         if self.branch_layout not in ("compact", "dense") or self.workers > 256:
             raise ValueError("Invalid public search layout or worker count")
         if not isfinite(self.ucb_c) or self.ucb_c < 0:
@@ -98,6 +100,7 @@ class _Node:
     actions: dict[int, _Action] = field(init=False)
     children: dict[tuple[int, bytes], "_Node"] = field(default_factory=dict)
     visits: int = 0
+    playouts_by_world: dict[int, int] = field(default_factory=dict)
 
     def __post_init__(self):
         self.actions = {action: _Action() for action in self.legal}
@@ -146,6 +149,19 @@ def _select(node, config, *, root=False):
     return best_action
 
 
+def _playout_rng(node, research_seed, world, *, uniform):
+    # Depth-one uniform evaluates each action/world pair with the reference
+    # stream, even when two root actions reach the same public leaf.
+    n = 0 if uniform else node.playouts_by_world.get(world, 0)
+    if not uniform:
+        node.playouts_by_world[world] = n + 1
+    if n == 0:
+        return random.Random(research_seed * 1_000_003 + world)
+    # Pack (n, research_seed, world) with two 64-bit fields. For n >= 1
+    # the result is at least 2**128, above every first-visit value for u64 inputs.
+    return random.Random((n << 128) | (research_seed << 64) | world)
+
+
 def _playout(branch, observation, view, rng, steps):
     for _ in range(steps):
         action = view.heuristic_choice(observation, rng)
@@ -157,7 +173,8 @@ def _playout(branch, observation, view, rng, steps):
     return 0.5 * view.balance(observation)
 
 
-def _simulate(search, world, root, first_action, view, config, rng, nodes, points, capacity, path):
+def _simulate(search, world, root, first_action, view, config, nodes, points, capacity, path, *,
+              research_seed, uniform):
     node, action = root, first_action
     prefix = ()
     branch = point = None
@@ -192,7 +209,10 @@ def _simulate(search, world, root, first_action, view, config, rng, nodes, point
                 child = nodes.get(public_key)
                 expanded = child is None
                 if expanded:
-                    child = nodes[public_key] = _Node(tuple(sorted(view.legal(observation))))
+                    child_legal = tuple(sorted(view.legal(observation)))
+                    if not child_legal:
+                        raise RuntimeError("Public search returned a nonterminal node with no legal actions")
+                    child = nodes[public_key] = _Node(child_legal)
                 node.children[action, public_key] = child
                 node = child
                 if capacity and depth < config.max_depth:
@@ -208,6 +228,7 @@ def _simulate(search, world, root, first_action, view, config, rng, nodes, point
                     return 0.5 * view.balance(observation)
                 if branch is None:
                     branch = point.branch.fork()
+                rng = _playout_rng(node, research_seed, world, uniform=uniform)
                 return _playout(branch, observation, view, rng, config.playout_steps)
             action = _select(node, config)
     finally:
@@ -217,8 +238,13 @@ def _simulate(search, world, root, first_action, view, config, rng, nodes, point
 
 def teach(search, legal: Sequence[int], view: View, config: TeacherConfig, *,
           research_seed: int) -> TeacherResult:
-    """Run a tree search. The caller owns the arena and supplies its matching view."""
+    """Run a tree search on the caller's arena with its matching view.
+
+    A min_root_visits value of 0 is treated as 1.
+    """
     start = process_time()
+    if type(research_seed) is not int or not 0 <= research_seed < 2**64:
+        raise ValueError("research_seed must be a nonnegative built-in u64 integer")
     legal = tuple(sorted(legal))
     if not legal or len(set(legal)) != len(legal):
         raise ValueError("Expected a nonempty sequence of distinct legal actions")
@@ -237,11 +263,13 @@ def teach(search, legal: Sequence[int], view: View, config: TeacherConfig, *,
         for index in range(config.simulations):
             world = index % config.worlds
             action = legal[index // config.worlds] if uniform else _select(root, config, root=True)
-            rng = random.Random(research_seed * 1_000_003 + world)
             path = []
             rejected = False
             try:
-                value = _simulate(search, world, root, action, view, config, rng, nodes, points, capacity, path)
+                value = _simulate(
+                    search, world, root, action, view, config, nodes, points, capacity, path,
+                    research_seed=research_seed, uniform=uniform,
+                )
             except unsupported:
                 rejected = True
                 value = -1.0

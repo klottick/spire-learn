@@ -1,5 +1,6 @@
 """Scripted public worlds for the tree teacher."""
 from array import array
+from collections import OrderedDict
 from pathlib import Path
 import re
 import unittest
@@ -237,6 +238,77 @@ class SearchTeacherTests(unittest.TestCase):
             with self.subTest(limit=limit):
                 tight = self.teach(Search(script, 2, live_limit=limit), cfg)
                 self.assertEqual(tight.stats, wide.stats)
+
+    def test_repeat_playouts_in_one_world_vary_and_remain_deterministic(self):
+        values = []
+
+        def script(world, path):
+            if len(path) == 1:
+                return observation(1), 0.0, False
+            if len(path) == 2:
+                return observation(2, (1,) * 32), 0.0, False
+            value = path[-1] / 32
+            values.append(value)
+            return observation(9, (0,)), value, True
+
+        cfg = config(simulations=6, worlds=1, playout_steps=1)
+        with patch.object(teacher, "process_time", return_value=0.0):
+            first = self.teach(Search(script), cfg)
+            first_values = list(values)
+            values.clear()
+            second = self.teach(Search(script), cfg)
+        self.assertEqual(first, second)
+        self.assertEqual(values, first_values)
+        self.assertEqual(len(values), 5)
+        self.assertGreater(len(set(values)), 1)
+        self.assertAlmostEqual(first.stats[0].mean, (0.1 + sum(values)) / 6)
+
+    def test_nonterminal_child_with_empty_legal_mask_raises_contract_error(self):
+        search = Search(lambda world, path: (observation(1, (0,)), 0.0, False))
+        with self.assertRaisesRegex(RuntimeError, "nonterminal.*no legal actions"):
+            self.teach(search, config())
+        self.assertEqual(search.counters()["live_branches"], 0)
+
+    def test_progressive_widening_admits_sorted_actions_by_visit_count(self):
+        cfg = config(widening=(0.5, 0.5))
+        node = teacher._Node((2, 4, 6, 8))
+        for visits, admitted in ((0, (2,)), (4, (2,)), (5, (2, 4)),
+                                 (16, (2, 4)), (17, (2, 4, 6)), (37, (2, 4, 6, 8))):
+            with self.subTest(visits=visits):
+                node.visits = visits
+                selected = []
+                for stats in node.actions.values():
+                    stats.visits = 0
+                for _ in admitted:
+                    action = teacher._select(node, cfg)
+                    selected.append(action)
+                    node.actions[action].visits += 1
+                self.assertEqual(tuple(selected), admitted)
+                self.assertIn(teacher._select(node, cfg), admitted)
+
+    def test_retained_fork_points_cap_at_127_in_a_200_slot_arena(self):
+        class MeasuredPoints(OrderedDict):
+            peak = 0
+
+            def __setitem__(self, key, value):
+                super().__setitem__(key, value)
+                self.peak = max(self.peak, len(self))
+
+        def script(world, path):
+            if len(path) == 1:
+                return observation(1), 0.0, False
+            return observation(9, (0,)), float(world % 2), True
+
+        cfg = config(simulations=260, worlds=200)
+        capped_points, uncapped_points = MeasuredPoints(), MeasuredPoints()
+        with patch.object(teacher, "OrderedDict", return_value=capped_points):
+            capped = self.teach(Search(script, live_limit=200), cfg)
+        with (patch.object(teacher, "OrderedDict", return_value=uncapped_points),
+              patch.object(teacher, "_MAX_LIVE_BRANCHES", 200)):
+            uncapped = self.teach(Search(script, live_limit=200), cfg)
+        self.assertEqual(capped_points.peak, 127)
+        self.assertEqual(uncapped_points.peak, 199)
+        self.assertEqual(capped.stats, uncapped.stats)
 
     def test_arena_options_follow_config(self):
         cfg = config()

@@ -86,6 +86,7 @@ _TABLE_REVISIONS = (GYM_V1_1_1_CONTRACT.source_revision, GYM_V1_2_0_CONTRACT.sou
 PANEL_KINDS = ("monster", "elite", "boss")  # event fights are never panel strata
 PANEL_LEVELS = (0, 1, 2, 4)
 PANEL_PER_LEVEL = 64
+BOSS_PANEL_QUOTAS = {"boss": 40, "elite": 24}
 PANEL_SEED_OFFSET = 2**33  # panel ordinals sit above every shard ordinal (index * 256 + local < 2**32)
 DEFAULT_ALIASES = Path(__file__).resolve().parents[3] / "configs/neural/standard/name-aliases.json"
 _STRATUM = re.compile(r"[1-4]:(monster|elite|boss|event)\Z")
@@ -487,7 +488,7 @@ def _panel_rng(identity: str, *parts: object) -> random.Random:
     return random.Random(int(content_sha256([identity, *parts]), 16))
 
 
-def panel_identity(recipe: StandardRecipe) -> Mapping[str, object]:
+def panel_identity(recipe: StandardRecipe, *, kind: str = "selection") -> Mapping[str, object]:
     """Everything a panel depends on, and nothing training-only.
 
     The fuzz pools and ``max_upgrades`` follow from the states table (which pins the alias
@@ -496,17 +497,23 @@ def panel_identity(recipe: StandardRecipe) -> Mapping[str, object]:
     """
     if not isinstance(recipe, StandardRecipe):
         raise ValueError("recipe must be a StandardRecipe")
-    return _freeze_json({
+    if kind not in ("selection", "boss"):
+        raise ValueError(f"unknown Standard panel kind {kind!r}")
+    identity = {
         "panel_version": PANEL_VERSION, "generator_version": recipe.generator_version,
         "states_table": {"sha256": recipe.table_sha256}, "character": recipe.character,
         "ascension": recipe.ascension, "panel_levels": list(PANEL_LEVELS), "panel_per_level": PANEL_PER_LEVEL,
         "panel_kinds": list(PANEL_KINDS), "fuzz_levels_max": recipe.fuzz_levels_max,
-        "excluded_strata": list(recipe.excluded_strata), "redraw_bound": recipe.redraw_bound})
+        "excluded_strata": list(recipe.excluded_strata), "redraw_bound": recipe.redraw_bound}
+    if kind == "boss":
+        identity.update(panel_kinds=[room for room in PANEL_KINDS if room in BOSS_PANEL_QUOTAS],
+                        room_kind_quotas=BOSS_PANEL_QUOTAS)
+    return _freeze_json(identity)
 
 
-def panel_sha256(recipe: StandardRecipe) -> str:
+def panel_sha256(recipe: StandardRecipe, *, kind: str = "selection") -> str:
     """The panel seed: the hash of ``panel_identity(recipe)``."""
-    return content_sha256(panel_identity(recipe))
+    return content_sha256(panel_identity(recipe, kind=kind))
 
 
 def _annotation(draft: _Draft, pools: FuzzPools) -> dict[str, object]:
@@ -643,23 +650,35 @@ def allocate_quotas(total: int, sizes: Mapping[str, int], caps: Mapping[str, int
 
 
 def build_standard_panel(recipe: StandardRecipe, split: str, *, validate: Validate) -> Mapping[str, object]:
-    """The ``split`` panel: 64 cases at each of levels 0, 1, 2 and 4, with distinct base
-    states within a level, stratified by act x room kind (monster, elite and boss only) in
-    proportion to the available states, and seeded from ``panel_sha256(recipe)`` only. A stratum that runs out of Gym-accepted fuzz draws takes what it has and its
-    shortfall goes to the level's other strata."""
+    """64 distinct bases per level, stratified by act and room kind."""
+    return _build_panel(recipe, split, validate=validate, kind="selection")
+
+
+def build_boss_panel(recipe: StandardRecipe, split: str = "selection", *, validate: Validate) -> Mapping[str, object]:
+    """40 bosses and 24 elites per level, with shortfalls redistributed within each kind."""
+    return _build_panel(recipe, split, validate=validate, kind="boss")
+
+
+def _build_panel(recipe: StandardRecipe, split: str, *, validate: Validate, kind: str) -> Mapping[str, object]:
     if not isinstance(recipe, StandardRecipe):
         raise ValueError("recipe must be a StandardRecipe")
     if split not in ("selection", "final"):
         raise ValueError("panels are built from selection or final runs only")
+    if kind == "boss" and split != "selection":
+        raise ValueError("boss panels are built from selection runs only")
     if validate is None:
         raise ValueError("panels need the Gym validator")
-    identity = panel_identity(recipe)
+    identity = panel_identity(recipe, kind=kind)
     seed = content_sha256(identity)
     by_stratum: dict[str, list] = {}
     for state in recipe.states_for(split):
-        if state["room_kind"] in PANEL_KINDS:  # event fights are not panel strata (spec)
+        if state["room_kind"] in identity["panel_kinds"]:  # event fights are not panel strata (spec)
             by_stratum.setdefault(stratum(state), []).append(state)
     sizes = {key: len(rows) for key, rows in by_stratum.items()}
+    groups = [(PANEL_PER_LEVEL, sizes)]
+    if kind == "boss":
+        groups = [(total, {key: size for key, size in sizes.items() if key.endswith(f":{room}")})
+                  for room, total in BOSS_PANEL_QUOTAS.items()]
     cases, annotations, counts, skipped = [], {}, {}, {}
     for level in PANEL_LEVELS:
         orders = {}
@@ -672,7 +691,9 @@ def build_standard_panel(recipe: StandardRecipe, split: str, *, validate: Valida
         skipped[str(level)] = 0
         caps = dict(sizes)
         while True:
-            quotas = allocate_quotas(PANEL_PER_LEVEL, sizes, caps)
+            quotas = {}
+            for total, group in groups:
+                quotas.update(allocate_quotas(total, group, {key: caps[key] for key in group}))
             short = False
             for key in sorted(by_stratum, key=_stratum_order):
                 while len(accepted[key]) < quotas[key] and cursor[key] < len(orders[key]):
@@ -706,6 +727,6 @@ def build_standard_panel(recipe: StandardRecipe, split: str, *, validate: Valida
         "claim": "simulator panel of reconstructed public-run states; no original-game transfer claim"})
 
 
-__all__ = ["FuzzPools", "FuzzRecord", "StandardRecipe", "allocate_quotas", "build_standard_panel",
+__all__ = ["FuzzPools", "FuzzRecord", "StandardRecipe", "allocate_quotas", "build_boss_panel", "build_standard_panel",
            "clear_shard_cache", "fuzz", "generate_standard_shard", "levels_for_shard", "load_standard_recipe",
            "panel_identity", "panel_sha256", "run_split", "stratum"]

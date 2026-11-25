@@ -1,5 +1,6 @@
 import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from scripts.neural import search_teacher_entry as entry
@@ -51,7 +52,13 @@ class Fight:
 
 
 def process_job(job):
-    return os.getpid(), job
+    case = {**CASE, "case_id": f"fixture-{job}"}
+    view = Mock()
+    view.legal.return_value = [0]
+    fight, decisions = entry.play_fight(
+        Fight(finish=job + 1), case, view, 0, CURRENT, research_seed=job,
+    )
+    return os.getpid(), fight, decisions
 
 
 class TeacherEntryTests(unittest.TestCase):
@@ -160,11 +167,119 @@ class TeacherEntryTests(unittest.TestCase):
         self.assertFalse(calibrated)
         self.assertEqual(digest, entry.config_sha256(teacher))
 
-    def test_parallel_workers_emit_results_in_case_order(self):
+    def test_parallel_workers_emit_identical_rows_in_case_order(self):
         jobs = list(range(8))
         with patch.object(entry, "_run_case", process_job):
             serial = list(entry._results(jobs, 1))
             parallel = list(entry._results(jobs, 2))
-        self.assertTrue(all(pid == os.getpid() for pid, _ in serial))
-        self.assertTrue(all(pid != os.getpid() for pid, _ in parallel))
-        self.assertEqual([job for _, job in parallel], jobs)
+        self.assertTrue(all(pid == os.getpid() for pid, _, _ in serial))
+        self.assertTrue(all(pid != os.getpid() for pid, _, _ in parallel))
+        self.assertEqual([fight["case_id"] for _, fight, _ in parallel],
+                         [f"fixture-{job}" for job in jobs])
+
+        def without_timings(row):
+            return {key: value for key, value in row.items()
+                    if key not in {"cpu_seconds", "wall_seconds"}}
+
+        def payload(results):
+            return [(without_timings(fight), [without_timings(row) for row in decisions])
+                    for _, fight, decisions in results]
+
+        self.assertEqual(payload(serial), payload(parallel))
+
+
+class SearchFightParityTests(unittest.TestCase):
+    def setUp(self):
+        self.vector = Mock()
+        self.standalone = Mock()
+        self.standalone_factory = Mock(return_value=self.standalone)
+        gymnasium = SimpleNamespace(StandardCombatEnv=self.standalone_factory)
+        numpy = SimpleNamespace(bool_=bool, ones=lambda size, **_: [True] * size,
+                                asarray=lambda values, **_: values,
+                                array_equal=lambda left, right: left == right)
+        self.enterContext(patch.dict("sys.modules", {
+            "numpy": numpy, "spire_lab.gymnasium": gymnasium,
+        }))
+        self.enterContext(patch.object(entry, "_vector_env", return_value=self.vector))
+
+        reset = {"player": [1], "player_known": [1], "action_mask": [1, 0]}
+        successor = {"player": [2], "player_known": [1], "action_mask": [1, 1]}
+        info = {"phase": "combat", "terminal_reason": None, "hp_after_cleanup": None}
+        self.vector.reset.return_value = self.batch(reset), self.info_batch(info)
+        self.vector.step.return_value = (
+            self.batch(successor), [0.0], [False], [False], self.info_batch(info),
+        )
+        self.standalone.reset.return_value = reset, info
+        self.standalone.step.return_value = successor, 0.0, False, False, info
+
+    @staticmethod
+    def batch(observation):
+        return {key: [value] for key, value in observation.items()}
+
+    @staticmethod
+    def info_batch(info):
+        return {key: [value] for field, item in info.items()
+                for key, value in ((field, item), ("_" + field, True))}
+
+    def assert_fight_rejects(self, message, *, after_step):
+        view = SimpleNamespace(legal=lambda row: [
+            index for index, legal in enumerate(row["action_mask"]) if legal
+        ])
+        with (patch.object(entry.search_view, "_native_errors", return_value=(Unsupported, StateError, Fault)),
+              self.assertRaisesRegex(RuntimeError, message)):
+            with entry._fight_env(CASE, "train") as (fight, _):
+                entry.play_fight(fight, CASE, view, 0, CURRENT, research_seed=11)
+        self.standalone.public_search.assert_not_called()
+        self.vector.close.assert_called_once_with()
+        self.standalone.close.assert_called_once_with()
+        if after_step:
+            self.vector.step.assert_called_once_with([0])
+            self.standalone.step.assert_called_once_with(0)
+        else:
+            self.vector.step.assert_not_called()
+            self.standalone.step.assert_not_called()
+
+    def test_rejects_observation_divergence_at_reset(self):
+        observation, info = self.standalone.reset.return_value
+        self.standalone.reset.return_value = {**observation, "player": [3]}, info
+        self.assert_fight_rejects("public observations diverged", after_step=False)
+
+    def test_rejects_observation_divergence_after_step(self):
+        observation, *rest = self.standalone.step.return_value
+        self.standalone.step.return_value = ({**observation, "player": [3]}, *rest)
+        self.assert_fight_rejects("public observations diverged", after_step=True)
+
+    def test_rejects_legal_mask_divergence(self):
+        observation, *rest = self.standalone.step.return_value
+        self.standalone.step.return_value = ({**observation, "action_mask": [0, 1]}, *rest)
+        self.assert_fight_rejects("public observations diverged", after_step=True)
+
+    def test_rejects_transition_outcome_divergence(self):
+        original = self.standalone.step.return_value
+        for index, value in ((1, 1.0), (2, True), (3, True)):
+            with self.subTest(field=("reward", "terminated", "truncated")[index - 1]):
+                modified = list(original)
+                modified[index] = value
+                self.standalone.step.return_value = tuple(modified)
+                self.assert_fight_rejects("transition outcomes diverged", after_step=True)
+                self.vector.reset_mock()
+                self.standalone.reset_mock()
+
+    def test_rejects_boundary_info_divergence(self):
+        *transition, info = self.standalone.step.return_value
+        for field, value in (("phase", "terminal"), ("terminal_reason", "victory"), ("hp_after_cleanup", 4)):
+            with self.subTest(field=field):
+                self.standalone.step.return_value = (*transition, {**info, field: value})
+                self.assert_fight_rejects("public boundary info diverged", after_step=True)
+                self.vector.reset_mock()
+                self.standalone.reset_mock()
+
+    def test_closes_vector_when_standalone_construction_fails(self):
+        self.standalone_factory.side_effect = Fault("standalone construction failed")
+        with self.assertRaisesRegex(Fault, "standalone construction failed"):
+            with entry._fight_env(CASE, "train"):
+                self.fail("Fight yielded despite a standalone construction fault")
+        self.standalone_factory.assert_called_once()
+        self.vector.close.assert_called_once_with()
+        self.vector.reset.assert_not_called()
+        self.standalone.public_search.assert_not_called()

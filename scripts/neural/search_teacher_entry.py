@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Score a public-search teacher on selection or training-split Standard fights."""
+"""Score a public-search teacher on selection or training-split Standard fights.
+
+A failure during fight execution leaves partial fights.jsonl and decisions.jsonl
+without a summary.json. Rerun in a fresh output directory.
+"""
 
 from __future__ import annotations
 

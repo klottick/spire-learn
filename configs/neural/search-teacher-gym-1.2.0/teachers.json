@@ -1,0 +1,64 @@
+{
+  "note": "Tree simulation counts are uncalibrated placeholders for controller tuning.",
+  "teachers": {
+    "current": {
+      "kind": "one-move",
+      "samples": 32,
+      "playout_steps": 80
+    },
+    "tree-1x": {
+      "calibrated": false,
+      "target_cost_multiple": 1,
+      "config": {
+        "simulations": 128,
+        "min_root_visits": 1,
+        "worlds": 8,
+        "ucb_c": 1.0,
+        "max_depth": 4,
+        "widening": [
+          2.0,
+          0.5
+        ],
+        "playout_steps": 80,
+        "branch_layout": "compact",
+        "workers": 1
+      }
+    },
+    "tree-3x": {
+      "calibrated": false,
+      "target_cost_multiple": 3,
+      "config": {
+        "simulations": 128,
+        "min_root_visits": 1,
+        "worlds": 8,
+        "ucb_c": 1.0,
+        "max_depth": 4,
+        "widening": [
+          2.0,
+          0.5
+        ],
+        "playout_steps": 80,
+        "branch_layout": "compact",
+        "workers": 1
+      }
+    },
+    "tree-10x": {
+      "calibrated": false,
+      "target_cost_multiple": 10,
+      "config": {
+        "simulations": 128,
+        "min_root_visits": 1,
+        "worlds": 8,
+        "ucb_c": 1.0,
+        "max_depth": 4,
+        "widening": [
+          2.0,
+          0.5
+        ],
+        "playout_steps": 80,
+        "branch_layout": "compact",
+        "workers": 1
+      }
+    }
+  }
+}

@@ -181,6 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     native_suites = {
         "--standard-turncap": "tests.integration.test_standard_turncap",
         "--search-one-move": "tests.integration.test_search_one_move_native",
+        "--search-teacher": "tests.integration.test_search_teacher_native",
         "--padding-trim": "tests.integration.test_padding_trim_native",
         "--sampled-validation": "tests.integration.test_sampled_validation_native",
     }

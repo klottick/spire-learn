@@ -17,12 +17,11 @@ if __package__ in (None, ""):
 
 from scripts.neural import boss_winnability as bw
 from spire_learn.neural import search_view
-from spire_learn.neural.gym_contracts import GYM_V1_2_0_CONTRACT, STANDARD_COMPACT_PRESET
+from spire_learn.neural.gym_contracts import STANDARD_COMPACT_PRESET, contract_for_revision
 from spire_learn.neural.search_one_move import _close_branch
 
 ROOT = Path(__file__).resolve().parents[2]
 RECIPE = ROOT / "configs/neural/baalorlord-standard-gym-1.2.0/recipe.json"
-REVISION = GYM_V1_2_0_CONTRACT.source_revision
 DEPTHS = (1, 2, 4, 8)
 ROOTS = 50
 SEED = 20261117
@@ -181,8 +180,12 @@ def measure_root(env, entry, live_view, seed, timings, skips, root_refusals, fin
 
 def run(output):
     revision, states = bw._table_states(RECIPE)
-    if revision != REVISION:
-        raise ValueError(f"Expected Gym v1.2.0 table revision {REVISION}, got {revision}")
+    try:
+        contract = contract_for_revision(revision)
+    except ValueError as error:
+        raise ValueError(f"Unsupported Gym table revision {revision!r}") from error
+    if STANDARD_COMPACT_PRESET not in contract.standard_compact_fingerprints:
+        raise ValueError(f"Gym revision {revision} has no compact view for the descent cost entry")
     bw._check_live_revision(revision)
     selected = training_roots(states)
     timings = {depth: {"fork": [], "replay": []} for depth in DEPTHS}

@@ -294,16 +294,17 @@ def _search_measurement_provenance(recipe: Path, descriptor: dict, branch_layout
     from hashlib import sha256
 
     from spire_lab import _native
-    from spire_learn.neural.gym_contracts import GYM_V1_2_0_CONTRACT, STANDARD_COMPACT_PRESET
+    from spire_learn.neural.gym_contracts import STANDARD_COMPACT_PRESET, contract_for_revision
 
     data = recipe.read_bytes()
+    contract = contract_for_revision(_table_states(recipe)[0])
     return {
         'gym_build': dict(_native.build_info()),
         'recipe_sha256': sha256(data).hexdigest(),
         'states_table_sha256': json.loads(data)['states_table']['sha256'],
         'live_observation_fingerprint': descriptor['fingerprint'],
         'branch_observation_fingerprint': (
-            GYM_V1_2_0_CONTRACT.standard_compact_fingerprints[STANDARD_COMPACT_PRESET]
+            contract.standard_compact_fingerprints[STANDARD_COMPACT_PRESET]
             if branch_layout == 'compact' else descriptor['fingerprint']),
         'profile': descriptor['profile_id'],
         'terminal_rewards': {'victory': 1.0, 'death': -1.0, 'escape': 0.0},

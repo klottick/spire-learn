@@ -29,7 +29,7 @@ if __package__ in (None, ""):
 from scripts.neural.boss_winnability import _catalog, _is_train
 from spire_learn.neural import search_view
 from spire_learn.neural.cases import environment_seed_for
-from spire_learn.neural.gym_contracts import GYM_V1_2_0_CONTRACT, STANDARD_COMPACT_PRESET
+from spire_learn.neural.gym_contracts import STANDARD_COMPACT_PRESET, contract_for_revision
 from spire_learn.neural.recipes import build_panel, load_recipe
 from spire_learn.neural.scenario_support import content_sha256, json_value
 from spire_learn.neural.search_one_move import one_move_values
@@ -297,11 +297,16 @@ def _run(args, output):
 
     from spire_lab import _native
     recipe = load_recipe(args.recipe)
-    revision = GYM_V1_2_0_CONTRACT.source_revision
     gym_build = dict(_native.build_info())
-    if (not isinstance(recipe, StandardRecipe) or recipe.gym_revision != revision
-            or gym_build.get("revision") != revision):
-        raise ValueError(f"Teacher entry requires a Standard recipe and Gym revision {revision}")
+    if not isinstance(recipe, StandardRecipe):
+        raise ValueError("Teacher entry requires a Standard recipe")
+    try:
+        contract = contract_for_revision(recipe.gym_revision)
+    except ValueError as error:
+        raise ValueError(f"Teacher entry requires a supported Gym revision: {error}") from error
+    revision = contract.source_revision
+    if STANDARD_COMPACT_PRESET not in contract.standard_compact_fingerprints or gym_build.get("revision") != revision:
+        raise ValueError(f"Teacher entry requires a Standard recipe and Gym revision {revision} with compact views")
 
     if args.panel:
         split = "selection"
@@ -355,7 +360,7 @@ def _run(args, output):
             "research_seed_rule": "((seed + case_index) * max_steps + step) modulo 2**64",
             "character": recipe.character, "ascension": recipe.ascension, "profile": descriptor["profile_id"],
             "observation_schema": descriptor["schema_id"], "observation_fingerprint": descriptor["fingerprint"],
-            "rules_epoch": GYM_V1_2_0_CONTRACT.rules_epoch, "capacity_preset": STANDARD_COMPACT_PRESET,
+            "rules_epoch": contract.rules_epoch, "capacity_preset": STANDARD_COMPACT_PRESET,
             "reward": TERMINAL_REWARDS, "branch_layout": "compact",
             "workers": 1, "parallel": args.parallel, "max_steps": args.max_steps,
             "max_turn_actions": args.max_turn_actions, "gpu_seconds": 0,

@@ -248,7 +248,7 @@ class IdentityTests(unittest.TestCase):
 
 
 class EntryConfigTests(unittest.TestCase):
-    def test_gym_1_2_4_teachers_are_native_and_uncalibrated(self):
+    def test_gym_1_2_4_teachers_are_native_and_calibrated(self):
         from scripts.neural import search_teacher_entry as entry
 
         new = entry._ROOT / "configs/neural/search-teacher-gym-1.2.4/teachers.json"
@@ -259,10 +259,9 @@ class EntryConfigTests(unittest.TestCase):
             self.assertNotEqual(digest, old_digest)
             backend = config["playout_backend"] if name == "current" else config.playout_backend
             self.assertEqual(backend, "native")
-            self.assertFalse(calibrated)
+            self.assertTrue(calibrated)
             self.assertTrue(entry._native_backend(config))
-            with self.assertRaisesRegex(ValueError, "uncalibrated"):
-                entry._teacher(new, name, "selection")
+            self.assertEqual(entry._teacher(new, name, "selection")[1], digest)
         for name in ("current", "tree-1x"):
             self.assertFalse(entry._native_backend(entry._teacher(old, name, None)[0]))
 

@@ -1,15 +1,15 @@
 {
-  "note": "Gym v1.2.4 teachers use native playouts (PublicSearch.playout_many under spire-gym-public-playout-v1). Tree budgets are simulations_per_action (simulations = k x legal actions); k = 22, 66 and 220 are placeholders for 1x, 3x and 10x the current teacher and are NOT calibrated for native playouts; Task 3 recalibrates them. Uncalibrated teachers run only with --train-sample.",
+  "note": "Calibrated 2026-11-25 on Gym v1.2.4 (673eb8f2), native playouts (spire-gym-public-playout-v1), compact layout, workers 1, --parallel 12 in the offline container (12 CPUs). Cost unit: teacher 'current' (native) on --train-sample 200 seed 2026112501 = 0.2815 CPU s per searched decision (174/200 wins). Tree budgets are per legal action (controller ruling E); ucb_c 1.0, max_depth 4, worlds 8, widening and min_root_visits 8 carried from the v1.2.0 calibration and not re-tuned. Budgets verified on --train-sample 100 seed 2026112502; each measured ratio is within 15% of its target (1x 1.01, 3x 3.33, 10x 11.14; the last two near the top of the band). Verification wins are on a different 100-fight sample from the cost-unit run. Training-split fights only.",
   "teachers": {
     "current": {
       "kind": "one-move",
-      "calibrated": false,
+      "calibrated": true,
       "samples": 32,
       "playout_steps": 80,
       "playout_backend": "native"
     },
     "tree-1x": {
-      "calibrated": false,
+      "calibrated": true,
       "target_cost_multiple": 1,
       "config": {
         "simulations_per_action": 22,
@@ -25,10 +25,17 @@
         "branch_layout": "compact",
         "workers": 1,
         "playout_backend": "native"
+      },
+      "verification": {
+        "train_sample": 100,
+        "seed": 2026112502,
+        "cpu_seconds_per_searched_decision": 0.2844,
+        "measured_cost_multiple": 1.01,
+        "wins": 84
       }
     },
     "tree-3x": {
-      "calibrated": false,
+      "calibrated": true,
       "target_cost_multiple": 3,
       "config": {
         "simulations_per_action": 66,
@@ -44,10 +51,17 @@
         "branch_layout": "compact",
         "workers": 1,
         "playout_backend": "native"
+      },
+      "verification": {
+        "train_sample": 100,
+        "seed": 2026112502,
+        "cpu_seconds_per_searched_decision": 0.9362,
+        "measured_cost_multiple": 3.33,
+        "wins": 87
       }
     },
     "tree-10x": {
-      "calibrated": false,
+      "calibrated": true,
       "target_cost_multiple": 10,
       "config": {
         "simulations_per_action": 220,
@@ -63,6 +77,13 @@
         "branch_layout": "compact",
         "workers": 1,
         "playout_backend": "native"
+      },
+      "verification": {
+        "train_sample": 100,
+        "seed": 2026112502,
+        "cpu_seconds_per_searched_decision": 3.1352,
+        "measured_cost_multiple": 11.14,
+        "wins": 90
       }
     }
   }

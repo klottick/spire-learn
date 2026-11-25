@@ -340,6 +340,8 @@ def _config_projection(config: NeuralConfig) -> dict[str, object]:
             "hidden_width": config.model.hidden_width,
             "max_parameters": config.model.max_parameters,
             **({"trim_padding": config.trim_padding} if config.trim_padding is not None else {}),
+            **({"experimental_trim_compute": config.experimental_trim_compute}
+               if config.experimental_trim_compute is not None else {}),
         },
         "ppo": {
             "learning_rate": config.ppo.learning_rate,
@@ -2107,10 +2109,14 @@ def create_runtime(
     checkpoint: Path | None = None,
     policy_kind: str = "checkpoint",
     action_selection: str = "seeded-sampling",
+    allow_experimental_trim_compute: bool = False,
 ) -> TrainingRuntime:
     """Lazily assemble the selected device, model and training runtime."""
     if not isinstance(config, NeuralConfig):
         raise TypeError("config must be a NeuralConfig")
+    if config.experimental_trim_compute is not None and (
+            not allow_experimental_trim_compute or purpose == "evaluate"):
+        raise ValueError("model.experimental_trim_compute is restricted to profile_entry training")
     if purpose not in {"train", "resume", "warm_start", "evaluate"}:
         raise ValueError("purpose must be train, resume, warm_start, or evaluate")
     if purpose in {"train", "resume", "warm_start"} and (config.operation != "train" or config.split != "train"):
@@ -2244,6 +2250,8 @@ def create_runtime(
                                         features_id=selected_identity.features_id)
             if config.trim_padding is not None:
                 objective_kwargs["trim_padding"] = config.trim_padding
+            if config.experimental_trim_compute is not None:
+                objective_kwargs["experimental_trim_compute"] = config.experimental_trim_compute
             policy = build_policy(
                 driver.schema, config.model, seed=config.seed_streams.policy,
                 device=device_plan.device, **objective_kwargs,

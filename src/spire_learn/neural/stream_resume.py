@@ -98,6 +98,10 @@ def _stable_document(raw: Mapping[str, object]) -> dict[str, object]:
     if 'resume_skip' in table:
         validate_continuation_skip_authorization(table['resume_skip'])
     value.pop('manifest_path')
+    # Measurement mode is recorded in config provenance, outside checkpoint compatibility.
+    model = value.get('model')
+    if isinstance(model, dict):
+        model.pop('experimental_trim_compute', None)
     value['scenario_stream'].pop('shard_index')
     value['scenario_stream'].pop('resume_skip', None)
     return value
@@ -194,6 +198,7 @@ def _identity(config: NeuralConfig, table: Mapping[str, object],
     from .config import _stream_runtime_projection
     # Admission already compared these normalized settings with the loader binding.
     runtime = _stream_runtime_projection(config)
+    runtime['model'].pop('experimental_trim_compute', None)
     if (config.mode, config.operation, config.split, config.partition) not in _STREAM_MODES:
         raise ValueError('scenario_stream requires standalone train')
     _require_recipe_mode(recipe, config.mode)

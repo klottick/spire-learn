@@ -291,7 +291,8 @@ def _standard_preparation(recipe_path: Path, destination: Path, *, arm: str, spl
 
 
 def prepare_stream(recipe_path: Path, destination: Path, *, arm: str, split: str,
-                   shard_index: int, template: Path | None = None) -> Mapping[str, object]:
+                   shard_index: int, template: Path | None = None,
+                   allow_experimental_trim_compute: bool = False) -> Mapping[str, object]:
     """Exclusively publish bounded preparation under an absent artifact destination."""
     from .config import load_neural_config
     files, result = _preparation(recipe_path, destination, arm=arm, split=split,
@@ -301,7 +302,8 @@ def prepare_stream(recipe_path: Path, destination: Path, *, arm: str, split: str
     for name, data in files.items():
         with (destination / name).open('xb') as stream:
             stream.write(data)
-    config = load_neural_config(destination / 'config.toml')
+    config = load_neural_config(destination / 'config.toml',
+                                allow_experimental_trim_compute=allow_experimental_trim_compute)
     if (config.config_sha256 != result['config_sha256'] or
             config.manifest_sha256 != result['manifest_sha256']):
         raise ValueError('prepared loader roundtrip changed identity')

@@ -1,0 +1,69 @@
+# Standard throughput-profile template at 16 rows on Gym v1.2.0, the compact view, preset standard-combat-compact-v1 (the stream's):
+# standard-stream.toml re-bound to cuda:0 with the profile-standard-1.1.1 model/PPO settings and budgets wide enough not to bind. This file grants no execution authority.
+schema = "spire-learn-neural-config-v1"
+mode = "standard-standalone"
+operation = "train"
+split = "train"
+partition = "train"
+manifest_path = "../../cases/neural/standard-standalone-train.json"
+output_root = "../../../artifacts/development/neural-combat/runs/gym-1.2.0/standard-stream"
+device = "cuda:0"
+
+[environment]
+gym_revision = "4d198064b3b568b6f0d08d6e3937d236fbc48e9b"
+standard_view_layout = "compact"
+standard_view_preset = "standard-combat-compact-v1"
+standard_view_fingerprint = "49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8"
+workers = 1
+
+[seeds]
+policy = 1103
+optimizer = 2207
+curriculum = 3301
+noncombat = 4409
+
+[model]
+trim_padding = true
+experimental_trim_compute = true
+embedding_width = 16
+hidden_width = 64
+max_parameters = 10000000
+
+[ppo]
+learning_rate = 0.0003
+gamma = 0.99
+gae_lambda = 0.95
+clip_epsilon = 0.2
+value_coefficient = 0.5
+entropy_coefficient = 0.01
+max_grad_norm = 0.5
+epochs = 4
+minibatch_rows = 64
+adam_eps = 0.00001
+
+[rollout]
+rows = 16
+steps = 32
+
+[budgets]
+validation_stride = 16
+max_optimizer_steps = 65536
+max_training_decisions = 409600
+max_environment_actions = 2000000
+max_wall_seconds = 3000.0
+
+[[accepted_identities]]
+model_id = "spire-learn-combat-ff-standard-v1"
+features_id = "spire-learn-combat-features-standard-v1"
+action_id = "spire-learn-combat-dispatch-v1"
+objective_id = "spire-learn-combat-winloss-v1"
+
+[accepted_identities.accepted_raw_mode_mappings]
+standard-standalone = "spire-learn-standard-combat-compact-v1@49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8+gym-1.2.0"
+
+[accepted_identities.config_hashes]
+model = "4fb628e06bf4952847795ac5d8548d12dfeede4c97e874ab843857ae0f91cd2f"
+ppo = "f08075e0b01a15095b542fc20cba11c3258381bcb5721bb5066a4448e43c9e2a"
+
+[runtime]
+gpu_uuid = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"

@@ -278,6 +278,7 @@ def build_policy(
     model_id: str = MODEL_ID,
     features_id: str | None = None,
     trim_padding: bool = False,
+    experimental_trim_compute: bool = False,
 ) -> Any:
     """Compile a capped shared candidate actor and public-state critic lazily.
 
@@ -303,6 +304,10 @@ def build_policy(
         raise ContractError("policy device must be a non-empty string")
     if type(trim_padding) is not bool:
         raise ContractError("trim_padding must be a boolean")
+    if type(experimental_trim_compute) is not bool:
+        raise ContractError("experimental_trim_compute must be a boolean")
+    if experimental_trim_compute and not trim_padding:
+        raise ContractError("experimental_trim_compute requires trim_padding")
     import torch
 
     class CombatPolicy(torch.nn.Module):
@@ -574,7 +579,7 @@ def build_policy(
                 raise ContractError("CombatPolicy.forward requires an EncodedBatch")
             if batch.schema_fingerprint != self._schema.schema_fingerprint:
                 raise ContractError("EncodedBatch schema fingerprint does not match this policy")
-            if batch._row_padding:
+            if batch._row_padding and not experimental_trim_compute:
                 batch = self._restore_row_capacity(batch)
             base = self._base_group_embeddings(batch)
             relational = self._reference_enrichment(batch, base)
@@ -600,6 +605,9 @@ def build_policy(
             candidate = torch.tanh(self.candidate_first(candidate_input))
             candidate = torch.tanh(self.candidate_second(candidate))
             logits = self.candidate_output(candidate).squeeze(-1)
+            if experimental_trim_compute and logits.shape[1] < batch.action_mask.shape[1]:
+                # Preserve the public dispatch width after computing only the occupied prefix.
+                logits = torch.nn.functional.pad(logits, (0, batch.action_mask.shape[1] - logits.shape[1]))
             values = self.value_head(global_context).squeeze(-1)
             if not torch.isfinite(values).all().item():
                 raise ContractError("critic values must be finite")

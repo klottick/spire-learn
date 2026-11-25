@@ -195,6 +195,7 @@ class NeuralConfig:
     standard_view_preset: str | None = None
     # None records omission; the effective setting is false.
     trim_padding: bool | None = None
+    experimental_trim_compute: bool | None = None
 
     @property
     def effective_validation_stride(self) -> int:
@@ -215,6 +216,8 @@ def _stream_runtime_projection(config: NeuralConfig) -> dict[str, object]:
         'seed_streams', 'model', 'ppo', 'budgets')})
     if config.trim_padding is not None:
         runtime['model']['trim_padding'] = config.trim_padding
+    if config.experimental_trim_compute is not None:
+        runtime['model']['experimental_trim_compute'] = config.experimental_trim_compute
     if config.budgets.max_turn_actions is None:
         del runtime['budgets']['max_turn_actions']
     if config.budgets.validation_stride is None:
@@ -309,7 +312,7 @@ def mode_family(mode: str) -> str:
         raise ValueError("mode must be standalone, run, standard-standalone, or standard-run") from None
 
 
-def load_neural_config(path: Path) -> NeuralConfig:
+def load_neural_config(path: Path, *, allow_experimental_trim_compute: bool = False) -> NeuralConfig:
     """Parse a strict TOML config and its case manifest without runtime side effects."""
     source = Path(path).resolve()
     try:
@@ -470,12 +473,20 @@ def load_neural_config(path: Path) -> NeuralConfig:
     seeds = SeedStreams(**seed_values)
 
     model_fields = {"embedding_width", "hidden_width", "max_parameters"}
-    if isinstance(raw["model"], dict) and "trim_padding" in raw["model"]:
-        model_fields.add("trim_padding")
+    if isinstance(raw["model"], dict):
+        model_fields.update(raw["model"].keys() & {"trim_padding", "experimental_trim_compute"})
     model_raw = dict(_exact_keys(raw["model"], model_fields, "model"))
     trim_padding = model_raw.pop("trim_padding", None)
     if trim_padding is not None and type(trim_padding) is not bool:
         raise ValueError("model.trim_padding must be a boolean")
+    experimental_trim_compute = model_raw.pop("experimental_trim_compute", None)
+    if experimental_trim_compute is not None:
+        if type(experimental_trim_compute) is not bool:
+            raise ValueError("model.experimental_trim_compute must be a boolean")
+        if trim_padding is not True:
+            raise ValueError("model.experimental_trim_compute requires model.trim_padding = true")
+        if not allow_experimental_trim_compute or raw["operation"] != "train":
+            raise ValueError("model.experimental_trim_compute is restricted to profile_entry training")
     model = ModelConfig(**model_raw)
 
     ppo_required = {
@@ -618,6 +629,7 @@ def load_neural_config(path: Path) -> NeuralConfig:
         workers=workers,
         objective=objective,
         trim_padding=trim_padding,
+        experimental_trim_compute=experimental_trim_compute,
         standard_view_layout=standard_view_layout,
         standard_view_preset=standard_view_preset,
     )

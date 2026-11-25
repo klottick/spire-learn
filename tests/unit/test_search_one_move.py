@@ -74,6 +74,25 @@ class OneMoveTests(unittest.TestCase):
     def values(self, search, **kwargs):
         return one_move_values(search, self.legal, self.view, **self.params, **kwargs)
 
+    def test_native_parity_candidates_are_train_only_and_fit_catalogs(self):
+        from tests.integration.test_search_one_move_native import CHARACTERS, _training_batches
+
+        states = [
+            {"character": character, "run_id": split, "floor": floor,
+             "entry": {"ascension": ascension}}
+            for character in ("ironclad", "silent", "defect", "watcher")
+            for split, ascension, count in (("train", 20, 405), ("selection", 20, 2), ("train", 0, 2))
+            for floor in range(count)
+        ]
+        self.assertEqual(CHARACTERS, ("ironclad", "silent", "defect", "watcher"))
+        with patch.object(bw, "_is_train", side_effect=lambda run: run == "train"):
+            for character in CHARACTERS:
+                batches = list(_training_batches(states, character))
+                self.assertTrue(all(1 <= len(batch) <= 256 for batch in batches))
+                expected = [state for state in states if state["character"] == character
+                            and state["run_id"] == "train" and state["entry"]["ascension"] == 20]
+                self.assertEqual([state for batch in batches for state in batch], expected)
+
     def test_batched_values_equal_sequential_values(self):
         expected = sequential_values(_ScriptedSearch({}), self.legal, self.view,
                                      **self.params, unsupported=_Errors.Unsupported)

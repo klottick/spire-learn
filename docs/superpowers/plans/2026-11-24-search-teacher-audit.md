@@ -188,7 +188,7 @@
   - `max_depth: int`;
   - `widening: tuple[float, float] | None`;
   - `playout_steps: int = 80`;
-  - `branch_view: str = "compact"`, selecting the arena layout with preset `standard-combat-compact-v1`. Branch steps request `view="full"` to supply the heuristic with action rows;
+  - `branch_layout: str = "compact"`, selecting the search-arena layout with preset `standard-combat-compact-v1` (named as in `boss_winnability.py --branch-layout`; distinct from the per-step `view` argument). Branch steps request `view="full"` to supply the heuristic with action rows;
   - `workers: int = 1`.
 
   `config_sha256(TeacherConfig) -> str` is its provenance hash.

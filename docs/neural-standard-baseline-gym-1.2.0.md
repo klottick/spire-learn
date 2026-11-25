@@ -449,15 +449,19 @@ CPU and wall times are sums from individual searched decisions divided by
 total searched-decision wall time. The earlier sequential run took 4,046 s
 wall for 5,977 searched decisions in one process, about **0.68 s per searched
 decision**, including the rest of the run. Sequential CPU time per decision
-was not measured directly. Even its run-level wall time implies lower CPU
-cost per decision than each batched configuration, given its serial search.
+was not measured directly. If that run was single-threaded, its 0.68 s wall is
+also a ceiling on its CPU per decision, below every batched configuration
+(compact with one worker is 0.82 s). On wall time, dense with four workers
+(0.682 s) only matches the sequential run; only compact with four workers
+(0.524 s) beats it.
 
-Compact cuts CPU and wall cost by about 20% at either worker count. Four
+Compact cuts CPU by about 20% at either worker count, and wall time by 20% with one worker and 23% with four. Four
 workers use about 12–13% more CPU per decision while cutting wall time by
 34–36%. About 83–90% of searched-decision wall time falls inside
 `step_many`. The savings from the smaller observations at the same call count
-suggest that producing observations accounts for most of that time, with
-Python round trips contributing less. The inclusive spans do not separate
+show that the observation-size-dependent part of that time is large (about
+a fifth of the total); how the remainder splits between native stepping and
+Python round trips is not measured. The inclusive spans do not separate
 encoding, native stepping and Python work.
 
 For CPU-bound labelling across many cores, these results favor independent

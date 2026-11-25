@@ -511,6 +511,7 @@ def _diagnostic_projection(diagnostics: CollectionDiagnostics | None) -> dict[st
             "operation_slots": diagnostics.fault.operation_slots,
             "known_accepted_slots": diagnostics.fault.known_accepted_slots,
             "uncertain_slots": diagnostics.fault.uncertain_slots,
+            **({"bound": dict(diagnostics.fault.bound)} if diagnostics.fault.bound else {}),
         },
         "incomplete_tasks": [
             {"stream_id": item.stream_id, "task_id": item.task_id, "decisions": item.decisions}

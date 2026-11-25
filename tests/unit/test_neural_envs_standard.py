@@ -207,7 +207,11 @@ def assert_no_secret_error_chain(testcase, error):
         for value in values:
             testcase.assertNotIn("SECRET", value)
         if isinstance(current, envs._StandardNativeError):
-            testcase.assertEqual(set(current.__dict__), {"native_type"})
+            # Only a fault may also carry the Gym's public bound: (name, int or short identifier) pairs.
+            testcase.assertLessEqual(set(current.__dict__), {"native_type", "bound"})
+            for name, value in current.__dict__.get("bound", ()):
+                testcase.assertIn(name, ("counter", "limit", "attempted", "power_id"))
+                testcase.assertIn(type(value), (int, str))
         if current.__cause__ is not None:
             pending.append(current.__cause__)
         if current.__context__ is not None:

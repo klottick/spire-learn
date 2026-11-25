@@ -1,6 +1,6 @@
 # Spire Gym 1.0.0 and Standard adoption
 
-Updated **2026-11-23** (current release `v1.2.0`, build `4d19806`; see the re-pin sections). Originally written 2026-11-12 for build `1929e18b`. Spire Learn now selects Gym by the configured revision
+Updated **2026-11-25** (current release `v1.2.4`, build `673eb8f`; `v1.2.0`, build `4d19806`, stays valid; see the re-pin sections). Originally written 2026-11-12 for build `1929e18b`. Spire Learn now selects Gym by the configured revision
 and supports the Gym 1.0.0 common, Standard combat and Standard Run contracts.
 The native extension revision is
 `1929e18b9f44372e020877bd62f2a5c9dee3e64e` (tag `v1.0.0` is `fc3c0118`,
@@ -8,6 +8,63 @@ documentation/data only). The release build identity is `release`, clean, with
 feature `spire-python/extension`, source digest
 `d4b3121226cfbb030b89731ed7ea3773f5c2b44988c9ec01c2355d53f2dfa9b2` and file
 digest `dce682976f221f5686d16beda7ced03f0221624da0a9b83e8b5969f7300f60ce`.
+
+## Re-pin to release v1.2.4 (2026-11-25)
+
+Learn's newest templates are `configs/neural/gym-1.2.4/`. They pin Gym release
+`v1.2.4`, revision `673eb8f220023b0c95401bbf96bec814a359457b`, under its own
+rules epoch `gym-1.2.4`. The `v1.2.0` and earlier contracts and templates stay
+byte-identical and valid for those revisions. Nothing crosses between the
+`gym-1.2.0` and `gym-1.2.4` epochs: checkpoints, run-states tables, recipes and
+panels are regenerated, and each is refused under the other.
+
+| Item | Value |
+| --- | --- |
+| Packet | `~/.local/share/spire-gym/evidence/builds/673eb8f/packet/` (never the network) |
+| Wheel SHA-256 | `5726443b35543f378fdaa6857d6d518132ab460157c1d98e2b0ee3b2a41ce317` |
+| `_native` SHA-256 | `c2b1d5352b95a95c246d5992850300b06bb520e858db9b335d640668f3c6e828` |
+| `build_info()` | version `1.2.4`, `dirty=false`, `release`, feature `spire-python/extension` |
+| `source_digest` / `file_digest` | `194a901c8bff91a5176eb994f5e1b52c70473c3af74ea0cf1c2672cd679f3757` / `934fcd6a297196d493e63ea8ae0bf5f0e5f021de877e9ee646cc5e181a611dfb` |
+| Rules IDs | Standard `spire-gym-native-standard-rules-v9`; M10/Gym66 `spire-gym-native-m10-rules-v6`; M9 `spire-gym-native-m9-rules-v7` |
+| Fingerprints | Dense, both compact presets, entry-resource descriptor, card metadata and PublicRoot digests are all unchanged from `v1.2.0` (the contract reuses the `v1.2.0` values; the container check verifies them) |
+| `rules_epoch` | `gym-1.2.4` |
+
+**Gym changes** (`docs/releases/v1.2.4.md` and the earlier 1.2.x notes): the
+rules IDs moved from `v1.2.0` (Standard v7 to v9, M10 v4 to v6); typed engine
+`bound` faults (v1.2.2); wider search-root coverage (v1.2.3); and native batched
+playouts on `PublicSearch` (v1.2.4: `playout_many`, `playout_action`, rule
+`spire-gym-public-playout-v1`). The playout API is used by Task 1c, not this
+re-pin.
+
+**Learn changes.**
+- Added `GYM_V1_2_4_CONTRACT` to `CONTRACTS_BY_REVISION` (the registry from PR
+  #54): the identities above, the entry-resource fingerprint and the v1.2.4
+  smoke tests. Its mode mappings end `+gym-1.2.4`; the compact mapping is
+  `spire-learn-standard-combat-compact-v1@<preset fingerprint>+gym-1.2.4`.
+- The run-states table schema is still `spire-learn-run-states-v1`. A table's
+  generation is its recorded Gym revision, as for `v1.2.0`, so a `v1.2.0` table
+  and its recipe are refused under `v1.2.4`, and the reverse.
+- Added the six `configs/neural/gym-1.2.4/` files (runtime profile and five
+  templates), the `v1.2.0` ones with only the revision and epoch changed;
+  Standard standalone and the stream use the compact view
+  `standard-combat-compact-v1`. The package overlay is the wheel extracted
+  unchanged; the dependency venv is `v1.2.0`'s.
+- **Typed `bound` faults** (controller ruling C). Native fault text stays
+  redacted. When a `RunFaultError` (or a batch fault record) carries the public,
+  values-only `bound` dict, Learn copies `counter`, `limit`, `attempted` and
+  `power_id` (only those keys, only exact ints or short identifier strings) into
+  `DriverFaultEvidence.bound`, the collection `CollectionFault.bound` and the
+  runner's `fault` record. A bound fault is still an error: the driver freezes,
+  and it is never a loss or a successful truncation.
+- Qualification, soak and `validation_profile.py` keep their `v1.2.0` defaults;
+  pass `--profile-dir configs/neural/gym-1.2.4` explicitly.
+- Tests: contract identities, checkpoints refused across `gym-1.2.0` and
+  `gym-1.2.4` in both directions, profile loading, table refusal both ways, the
+  bound-field record, and the registry-sites test on the real `v1.2.4` contract.
+
+**Verification** is a controller task in the runtime container; its results are
+recorded here when done. The commands are listed in
+`.superpowers/sdd/2026-11-25-gym-1.2.3-repin/task-1b-report.md`.
 
 ## Re-pin to release v1.2.0 (2026-11-23)
 

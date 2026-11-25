@@ -80,13 +80,14 @@ def synthetic_states(runs=400, seed=7):
 
 GYM_1_1_1 = "e3c13836bd1458be8a87b93160f5c350f78fcd80"
 GYM_1_2_0 = "4d198064b3b568b6f0d08d6e3937d236fbc48e9b"
+GYM_1_2_4 = "673eb8f220023b0c95401bbf96bec814a359457b"
 
 
 def write_table(directory: Path, states=None, *, aliases_sha=ALIASES_SHA, revision=GYM_1_1_1) -> tuple[Path, str]:
     document = {"aliases_sha256": aliases_sha, "gym_revision": revision,
                 "schema": "spire-learn-run-states-v1",
                 "states": synthetic_states() if states is None else states}
-    if revision == GYM_1_2_0:  # Gym 1.2.0 tables record the descriptor they were extracted under
+    if revision in (GYM_1_2_0, GYM_1_2_4):  # Gym 1.2.0 and later tables record the descriptor they were extracted under
         document["entry_resources_fingerprint"] = load_entry_resources().fingerprint
     data = canonical_bytes(document)
     path = directory / "run-states.json"

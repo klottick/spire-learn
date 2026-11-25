@@ -19,7 +19,7 @@ from spire_learn.neural.views import STANDARD_COMBAT_COMPACT_V1, STANDARD_COMBAT
 ROOT = Path(__file__).resolve().parents[2]
 FAKE = "c" * 40
 UNKNOWN = "d" * 40
-REAL = gym_contracts.GYM_V1_2_0_CONTRACT
+REAL = gym_contracts.GYM_V1_2_4_CONTRACT
 FAKE_CONTRACT = dataclasses.replace(
     REAL, source_revision=FAKE, runtime_revisions=(FAKE,),
     standard_combat_fingerprint="2" * 64,
@@ -33,7 +33,7 @@ def registered():
 
 class RegistrySitesTest(unittest.TestCase):
     def test_config_and_driver_factory_gates(self):
-        source = (ROOT / "configs/neural/gym-1.2.0/standalone.toml").read_text()
+        source = (ROOT / "configs/neural/gym-1.2.4/standalone.toml").read_text()
         source = source.replace("../../cases/neural/train.json", str(ROOT / "configs/cases/neural/train.json"))
         source = source.replace("../../../artifacts", str(ROOT / "artifacts"))
         with tempfile.TemporaryDirectory() as tmp:

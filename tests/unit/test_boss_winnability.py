@@ -42,6 +42,12 @@ def _observation(view, verbs_by_index, mask):
 
 
 class _Errors:
+    class Input(Exception):
+        pass
+
+    class Budget(Exception):
+        pass
+
     class Unsupported(Exception):
         pass
 
@@ -70,11 +76,34 @@ class _Branch:
 class _Search:
     def __init__(self, outcomes):
         self.outcomes, self.steps, self.branches, self.closed = outcomes, [], [], False
+        self.batch_sizes = []
 
     def branch(self, sample=None):
         branch = _Branch(self, sample)
         self.branches.append(branch)
         return branch
+
+    def step_many(self, branches, actions, *, view):
+        self.batch_sizes.append(len(branches))
+        for branch, action in zip(branches, actions, strict=True):
+            outcome = self.outcomes.get((action, branch.sample))
+            if isinstance(outcome, _Errors.Unsupported):
+                raise outcome
+        rows, rewards, terminated, truncated, faults = [], [], [], [], []
+        for branch, action in zip(branches, actions, strict=True):
+            try:
+                observation, reward, done, cut, _ = branch.step(action, view=view)
+                fault = None
+            except _Errors.Fault as error:
+                observation, reward, done, cut = {}, 0.0, False, False
+                fault = {"message": str(error)}
+            rows.append(observation)
+            rewards.append(reward)
+            terminated.append(done)
+            truncated.append(cut)
+            faults.append(fault)
+        stacked = {key: [row.get(key) for row in rows] for key in rows[0]}
+        return stacked, rewards, terminated, truncated, {"fault": faults}
 
     def close(self):
         self.closed = True
@@ -84,16 +113,29 @@ class _Env:
     def __init__(self, search=None, error=None):
         self.search, self.error = search, error
 
-    def public_search(self, seed, *, limits):
+    def public_search(self, seed, *, limits, **options):
+        self.search_options = options
         if self.error is not None:
             raise self.error
         return self.search
 
 
+def _playout(branch, action: int, view: bw.View, steps: int, rng: random.Random) -> float:
+    observation, reward, terminated, truncated, _ = branch.step(action, view='full')
+    for _ in range(steps):
+        if terminated or truncated:
+            break
+        observation, reward, terminated, truncated, _ = branch.step(
+            view.heuristic_choice(observation, rng), view='full')
+    if terminated:
+        return float(reward)  # +1 victory, -1 death, 0 escape
+    return 0.5 * view.balance(observation)
+
+
 class BossWinnabilityTests(unittest.TestCase):
     def setUp(self):
         self.view = bw.View(DESCRIPTOR)
-        patcher = patch.object(bw, "_native_errors", return_value=(_Errors.Unsupported, _Errors.State, _Errors.Fault))
+        patcher = patch.object(bw.search_view, "_native_errors", return_value=(_Errors.Unsupported, _Errors.State, _Errors.Fault))
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -160,7 +202,7 @@ class BossWinnabilityTests(unittest.TestCase):
 
     def test_branch_fault_aborts_search_and_closes_handles(self):
         observation = _observation(self.view, {0: "end_turn", 1: "play_card"}, [1, 1])
-        search = _Search({(0, 0): _Errors.Fault()})
+        search = _Search({(0, 0): _Errors.Fault(), (1, 0): 0.0})
         stats = Counter()
         with self.assertRaises(_Errors.Fault):
             bw.search_choice(_Env(search), self.view, observation, samples=1, playout_steps=5,
@@ -193,7 +235,7 @@ class BossWinnabilityTests(unittest.TestCase):
         branch = Branch()
         with patch.object(bw.View, "heuristic_choice", return_value=0), \
              patch.object(bw.View, "balance", return_value=0.4):
-            value = bw._playout(branch, 1, view, 5, random.Random(0))
+            value = _playout(branch, 1, view, 5, random.Random(0))
         self.assertEqual(branch.steps, 6)  # the searched action, then 5 playout steps
         self.assertAlmostEqual(value, 0.2)
 
@@ -409,6 +451,13 @@ class BossWinnabilityTests(unittest.TestCase):
         def fake_play(catalog, case, player, view, **kwargs):
             roots = kwargs["roots"]
             roots["searched"] += 2
+            self.assertTrue(kwargs["measure_search"])
+            for step in (0, 1):
+                kwargs["records"].append({"step": step, "root_outcome": "searched", "search_timing": {
+                    "cpu_seconds": 3.0, "wall_seconds": 2.0, "step_many_calls": 3,
+                    "step_many_cpu_seconds": 2.0, "step_many_wall_seconds": 0.5,
+                    "other_cpu_seconds": 1.0, "other_wall_seconds": 1.5,
+                }})
             if case["case_id"] == "p-2":
                 roots["hidden intents are not modelled"] += 1
             return {"outcome": "victory", "steps": 3}
@@ -416,14 +465,24 @@ class BossWinnabilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(bw, "_build_standard_panel", return_value=panel), \
              patch.object(bw, "_view_for", return_value=(self.view, DESCRIPTOR)), \
-             patch.object(bw, "play", side_effect=fake_play):
+             patch.object(bw, "play", side_effect=fake_play), \
+             patch.object(bw, "_search_measurement_provenance", return_value={"recipe_sha256": "hash"}):
             output = Path(directory)
             result = bw.standard_panel_winnability(output, recipe=Path("recipe.json"), samples=2,
-                                                   playout_steps=3, max_steps=9, seed=1, limit=None)
+                                                   playout_steps=3, max_steps=9, seed=1, limit=None, measure_search=True)
             rows = [json.loads(line) for line in (output / "standard_panel.jsonl").read_text().splitlines()]
         self.assertEqual(result["root_outcomes"]["1:monster"], {"searched": 4})
         self.assertEqual(result["root_outcomes"]["3:boss"], {"searched": 2, "hidden intents are not modelled": 1})
         self.assertEqual(rows[2]["roots"], {"searched": 2, "hidden intents are not modelled": 1})
+        self.assertEqual(result["search_provenance"], {"recipe_sha256": "hash"})
+        timing = result["search_timing"]
+        self.assertEqual(timing["searched_decisions"], 6)
+        self.assertEqual(timing["step_many_calls"], 18)
+        self.assertEqual(timing["cpu_seconds_per_searched_decision"], 3.0)
+        self.assertEqual(timing["wall_seconds_per_searched_decision"], 2.0)
+        self.assertEqual(timing["step_many_cpu_share"], 2 / 3)
+        self.assertEqual(timing["other_wall_share"], 0.75)
+        self.assertEqual(rows[0]["root_decisions"][0]["search_timing"]["wall_seconds"], 2.0)
 
     def test_search_choice_tallies_the_root_outcome_per_decision(self):
         observation = _observation(self.view, {0: "end_turn", 1: "play_card"}, [1, 1])

@@ -11,7 +11,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from spire_learn.neural import run_states
+from scripts.neural import run_states as extract, standard_stream_smoke_entry as smoke
+from spire_learn.neural import gym_contracts, run_states
 from spire_learn.neural import standard_stream as ss
 from spire_learn.neural.entry_resources import DEFAULT_SNAPSHOT, load_entry_resources
 from spire_learn.neural.cases import _parse_case
@@ -126,6 +127,80 @@ class _Fixture(unittest.TestCase):
 
     def fuzz(self, state, level, seed=0):
         return ss.fuzz(state, level, self.recipe.pools, random.Random(seed))
+
+
+class GymContractRegistryTest(unittest.TestCase):
+    def test_every_revision_site_uses_the_registry(self):
+        revision = "a" * 40
+        unknown = "b" * 40
+        resources = load_entry_resources()
+        contract = dataclasses.replace(
+            gym_contracts.GYM_V1_2_0_CONTRACT, source_revision=revision,
+            runtime_revisions=(revision,), standard_stream_smoke_tests=("fake.test_smoke",),
+        )
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(gym_contracts.CONTRACTS_BY_REVISION,
+                                                               {revision: contract}):
+            directory = Path(tmp)
+            recipe_path = directory / "recipe.json"
+            profile_path = directory / "runtime.json"
+
+            def write_inputs(rev):
+                table_path, _ = write_table(directory, revision=GYM_1_2_0)
+                table = json.loads(table_path.read_bytes())
+                table["gym_revision"] = rev
+                data = canonical_bytes(table)
+                table_path.write_bytes(data)
+                recipe_path.write_text(json.dumps(recipe_document(hashlib.sha256(data).hexdigest())))
+                profile_path.write_text(json.dumps({"gym_revision": rev}))
+
+            write_inputs(revision)
+            recipe = ss.load_standard_recipe(recipe_path)
+            self.assertEqual(recipe.gym_revision, revision)
+            self.assertEqual(recipe.entry_resources.fingerprint, resources.fingerprint)
+            self.assertEqual(extract.profile_revision(profile_path), revision)
+            table, _ = extract.build([], recipe.aliases, [], {}, NO_FUZZ,
+                                     gym_revision=revision, entry_resources=resources)
+            self.assertEqual(table["gym_revision"], revision)
+            self.assertEqual(smoke.smoke_tests_for_revision(revision), ("fake.test_smoke",))
+
+            write_inputs(unknown)
+            checks = (
+                ("recipe", lambda: ss.load_standard_recipe(recipe_path)),
+                ("profile", lambda: extract.profile_revision(profile_path)),
+                ("extraction", lambda: extract.build([], recipe.aliases, [], {}, NO_FUZZ,
+                                                    gym_revision=unknown, entry_resources=resources)),
+                ("smoke", lambda: smoke.smoke_tests_for_revision(unknown)),
+            )
+            for site, check in checks:
+                with self.subTest(site=site), self.assertRaisesRegex(ValueError, unknown):
+                    check()
+
+            write_inputs(revision)
+            with patch.dict(gym_contracts.CONTRACTS_BY_REVISION, {
+                revision: dataclasses.replace(contract, run_states_table_schemas=()),
+            }):
+                for site, check in checks[:2]:
+                    with self.subTest(site=site), self.assertRaisesRegex(ValueError, "run-states schema"):
+                        check()
+
+    def test_entry_resource_fingerprint_is_read_from_contract(self):
+        contract = gym_contracts.GYM_V1_2_0_CONTRACT
+        revision = contract.source_revision
+        resources = load_entry_resources()
+        self.assertEqual(contract.entry_resources_fingerprint, resources.fingerprint)
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            gym_contracts.CONTRACTS_BY_REVISION,
+            {revision: dataclasses.replace(contract, entry_resources_fingerprint="f" * 64)},
+        ):
+            directory = Path(tmp)
+            _, sha = write_table(directory, revision=revision)
+            recipe_path = directory / "recipe.json"
+            recipe_path.write_text(json.dumps(recipe_document(sha)))
+            with self.assertRaisesRegex(ValueError, "entry-resource descriptor"):
+                ss.load_standard_recipe(recipe_path)
+            with self.assertRaisesRegex(ValueError, "entry-resource descriptor"):
+                extract.build([], ss.load_aliases(ALIASES), [], {}, NO_FUZZ,
+                              gym_revision=revision, entry_resources=resources)
 
 
 class EntryResourceRulesTest(unittest.TestCase):

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from spire_learn.contracts import ContractError
-from spire_learn.neural.gym_contracts import CONTRACTS, STANDARD_COMPACT_SCHEMA_ID
+from spire_learn.neural.gym_contracts import CONTRACTS_BY_REVISION, STANDARD_COMPACT_SCHEMA_ID
 
 
 # Synthetic structural fixtures use this legacy common-view fingerprint.
@@ -130,11 +130,12 @@ def view_for_id(view_id: object) -> ViewSpec:
 
 def view_for_fingerprint(fingerprint: object) -> ViewSpec:
     """Return the view an accepted descriptor fingerprint belongs to."""
+    contracts = CONTRACTS_BY_REVISION.values()
     if fingerprint == _LEGACY_SYNTHETIC_FINGERPRINT or any(
-            fingerprint == contract.common_fingerprint for contract in CONTRACTS):
+            fingerprint == contract.common_fingerprint for contract in contracts):
         return COMMON_V1
-    if any(fingerprint == contract.standard_combat_fingerprint for contract in CONTRACTS):
+    if any(fingerprint == contract.standard_combat_fingerprint for contract in contracts):
         return STANDARD_COMBAT_V1
-    if any(fingerprint in contract.standard_compact_fingerprints.values() for contract in CONTRACTS):
+    if any(fingerprint in contract.standard_compact_fingerprints.values() for contract in contracts):
         return STANDARD_COMBAT_COMPACT_V1
     raise ContractError("combat view fingerprint is not accepted")

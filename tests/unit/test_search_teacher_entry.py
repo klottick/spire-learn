@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 from scripts.neural import search_teacher_entry as entry
 from scripts.neural.boss_winnability import _is_train
+from spire_learn.neural.gym_contracts import GYM_V1_2_0_CONTRACT
 from spire_learn.neural.search_one_move import ActionStat
 from spire_learn.neural.standard_stream import run_split
 
@@ -303,7 +304,7 @@ class SearchFightParityTests(unittest.TestCase):
 
 class BossPanelEntryTest(unittest.TestCase):
     def test_boss_cli_uses_selection_split_boss_panel(self):
-        revision = entry.GYM_V1_2_0_CONTRACT.source_revision
+        revision = GYM_V1_2_0_CONTRACT.source_revision
         recipe = Mock(spec=entry.StandardRecipe, gym_revision=revision)
         gym = SimpleNamespace(_native=SimpleNamespace(build_info=lambda: {"revision": revision}))
         stop = RuntimeError("dispatched panel")

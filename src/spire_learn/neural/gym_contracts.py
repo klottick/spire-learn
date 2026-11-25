@@ -14,6 +14,7 @@ from collections.abc import Mapping
 STANDARD_COMPACT_SCHEMA_ID = "spire-gym-standard-combat-view-compact-v1"
 STANDARD_COMPACT_PRESET = "standard-combat-compact-v1"
 STANDARD_COMPACT_PLAY_PRESET = "standard-combat-compact-play-v1"
+RUN_STATES_TABLE_V1 = "spire-learn-run-states-v1"
 _STANDARD_COMPACT_MAPPING_ID = "spire-learn-standard-combat-compact-v1"
 
 
@@ -49,6 +50,10 @@ class GymContract:
     # ``raw_mode_mappings_for_view``.
     standard_compact_combat_fingerprint: str | None = None
     standard_compact_combat_play_fingerprint: str | None = None
+
+    entry_resources_fingerprint: str | None = None
+    run_states_table_schemas: tuple[str, ...] = ()
+    standard_stream_smoke_tests: tuple[str, ...] = ()
 
     @property
     def standard_compact_fingerprints(self) -> Mapping[str, str]:
@@ -183,6 +188,10 @@ GYM_V1_1_1_CONTRACT = GymContract(
     rules_epoch="gym-1.1.1",
     m10_rules_id="spire-gym-native-m10-rules-v3",
     standard_rules_id="spire-gym-native-standard-rules-v6",
+    run_states_table_schemas=(RUN_STATES_TABLE_V1,),
+    standard_stream_smoke_tests=(
+        "tests.unit.test_neural_standard_stream_runtime.StandardStreamSmokeTest.test_standard_stream_smoke",
+    ),
 )
 GYM_V1_2_0_CONTRACT = GymContract(
     "4d198064b3b568b6f0d08d6e3937d236fbc48e9b",
@@ -204,24 +213,55 @@ GYM_V1_2_0_CONTRACT = GymContract(
     standard_rules_id="spire-gym-native-standard-rules-v7",
     standard_compact_combat_fingerprint="49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8",
     standard_compact_combat_play_fingerprint="fbfade07003bd64ad6071243ec3a52e23413c88c5758ca702a515945935439ae",
+    entry_resources_fingerprint="4eafca3b0089e15735fb6aef24d594a084030438daa9738a1ac8cf6eab75dc5a",
+    run_states_table_schemas=(RUN_STATES_TABLE_V1,),
+    standard_stream_smoke_tests=(
+        "tests.unit.test_neural_standard_stream_runtime.StandardStreamSmokeTest.test_standard_stream_smoke_gym_1_2_0",
+        "tests.unit.test_neural_standard_compact.GatedCompactTests.test_compact_and_dense_give_identical_policy_outputs",
+        "tests.unit.test_neural_standard_compact.GatedCompactTests.test_capacity_overflow_is_a_driver_fault",
+    ),
 )
-CONTRACTS = (LEGACY_CONTRACT, CURRENT_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT,
-             GYM_V1_1_0_CONTRACT, GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT)
-RUNTIME_REVISIONS = frozenset(revision for item in CONTRACTS for revision in item.runtime_revisions)
+CONTRACTS_BY_REVISION: dict[str, GymContract] = {
+    revision: contract
+    for contract in (
+        LEGACY_CONTRACT, CURRENT_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT,
+        GYM_V1_1_0_CONTRACT, GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT,
+    )
+    for revision in contract.runtime_revisions
+}
+
+
+def supported_contracts() -> tuple[GymContract, ...]:
+    """List the registered contracts once, even when a contract has runtime aliases."""
+    return tuple(dict.fromkeys(CONTRACTS_BY_REVISION.values()))
+
+
+CONTRACTS = supported_contracts()
+RUNTIME_REVISIONS = frozenset(CONTRACTS_BY_REVISION)
 COMMON_FINGERPRINTS = frozenset(item.common_fingerprint for item in CONTRACTS)
 
 
 def contract_for_revision(revision: str) -> GymContract:
-    for contract in CONTRACTS:
-        if type(revision) is str and revision in contract.runtime_revisions:
-            return contract
+    if type(revision) is str and revision in CONTRACTS_BY_REVISION:
+        return CONTRACTS_BY_REVISION[revision]
     raise ValueError("unsupported Gym revision")
+
+
+def contract_for_run_states(revision: str, table_schema: str) -> GymContract:
+    """Select the public contract for a supported run-states table generation."""
+    try:
+        contract = contract_for_revision(revision)
+    except ValueError as error:
+        raise ValueError(f"unsupported Gym revision {revision!r}") from error
+    if table_schema not in contract.run_states_table_schemas:
+        raise ValueError(f"unsupported Gym revision {revision!r} for run-states schema {table_schema!r}")
+    return contract
 
 
 def contracts_for_fingerprint(fingerprint: str) -> tuple[GymContract, ...]:
     """Return every contract sharing a common-view fingerprint; may be several."""
     return tuple(
-        contract for contract in CONTRACTS
+        contract for contract in supported_contracts()
         if type(fingerprint) is str and fingerprint == contract.common_fingerprint
     )
 
@@ -248,7 +288,7 @@ def contract_for_schema(
         if not accepts(contract):
             raise ValueError("combat view fingerprint does not match the Gym revision")
         return contract
-    matches = tuple(contract for contract in CONTRACTS if accepts(contract))
+    matches = tuple(contract for contract in supported_contracts() if accepts(contract))
     if not matches:
         raise ValueError("unsupported combat view fingerprint")
     if len(matches) > 1:

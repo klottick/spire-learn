@@ -55,15 +55,15 @@ import threading
 from .cases import _freeze_json, _parse_case, environment_seed_for
 from .scenario_stream import ScenarioShard
 from .scenario_support import content_sha256, json_value, read_json
-from .entry_resources import DEFAULT_SNAPSHOT, EXPECTED_FINGERPRINTS, EntryResources, load_entry_resources
-from .gym_contracts import GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT
+from .entry_resources import DEFAULT_SNAPSHOT, EntryResources, load_entry_resources
+from .gym_contracts import GYM_V1_1_1_CONTRACT, RUN_STATES_TABLE_V1, contract_for_run_states
 from .run_states import RECORDED_COUNTER_RELICS
 from .standard_catalog import Validate, potion_slots, validate_entries
 from .standard_names import NameAliases, load_aliases
 
 GENERATOR = "baalorlord-standard-v1"
 RECIPE_SCHEMA = "spire-learn-standard-recipe-v1"
-TABLE_SCHEMA = "spire-learn-run-states-v1"
+TABLE_SCHEMA = RUN_STATES_TABLE_V1
 PANEL_SCHEMA = "spire-learn-standard-panel-v2"
 PANEL_VERSION = "baalorlord-standard-panel-v1"  # fixed: part of every panel identity
 MODE = "standard-standalone"
@@ -82,7 +82,6 @@ MISC_DEFAULTS = {"genetic_algorithm": 1, "ritual_dagger": 15}  # Ruling A
 DEFAULTED_COUNTER_RELICS = ("pen_nib", "nunchaku", "ink_bottle", "incense_burner", "happy_flower", "sundial",
                             "inserter", "wing_boots", "tiny_chest", "matryoshka")
 DEFAULT_ENTRY_RESOURCES = DEFAULT_SNAPSHOT
-_TABLE_REVISIONS = (GYM_V1_1_1_CONTRACT.source_revision, GYM_V1_2_0_CONTRACT.source_revision)
 PANEL_KINDS = ("monster", "elite", "boss")  # event fights are never panel strata
 PANEL_LEVELS = (0, 1, 2, 4)
 PANEL_PER_LEVEL = 64
@@ -170,7 +169,7 @@ class StandardRecipe:
     fuzz_levels_max: int = 4
     split_fractions: tuple[float, ...] = SPLIT_FRACTIONS
     generator_version: str = GENERATOR
-    entry_resources: EntryResources | None = field(default=None, compare=False)  # set for Gym 1.2.0 tables
+    entry_resources: EntryResources | None = field(default=None, compare=False)  # set for descriptor-backed tables
     gym_revision: str = GYM_V1_1_1_CONTRACT.source_revision  # the table's; configs must name the same one
     _by_split: Mapping[str, tuple[Mapping[str, object], ...]] = field(default=None, repr=False, compare=False)
     _pools: FuzzPools = field(default=None, repr=False, compare=False)
@@ -178,10 +177,9 @@ class StandardRecipe:
     def __post_init__(self) -> None:
         if self.generator_version != GENERATOR:
             raise ValueError(f"generator_version must be {GENERATOR}")
-        if self.gym_revision not in _TABLE_REVISIONS:
-            raise ValueError(f"unsupported Gym revision {self.gym_revision!r}")
-        if (self.entry_resources is not None) != (self.gym_revision == GYM_V1_2_0_CONTRACT.source_revision):
-            raise ValueError("entry_resources are required for Gym 1.2.0 recipes and only for them")
+        contract = contract_for_run_states(self.gym_revision, TABLE_SCHEMA)
+        if (self.entry_resources is not None) != (contract.entry_resources_fingerprint is not None):
+            raise ValueError(f"entry_resources presence does not match the contract for Gym revision {self.gym_revision!r}")
         if self.character not in STARTER_RELICS:
             raise ValueError("the curriculum character must be ironclad")
         if self.ascension != 20:
@@ -312,22 +310,18 @@ def load_standard_recipe(path: Path, *, aliases_path: Path = DEFAULT_ALIASES,
     aliases = load_aliases(aliases_path)
     if aliases.sha256 != table.get("aliases_sha256"):
         raise ValueError("the name alias table differs from the one the run-states table was built with")
-    # The table's Gym revision selects the per-relic rules: Gym 1.1.1 tables keep the constants above,
-    # Gym 1.2.0 tables follow the entry-resource descriptor.
     revision = table.get("gym_revision")
-    if revision not in _TABLE_REVISIONS:
-        raise ValueError(f"run-states table has an unsupported Gym revision {revision!r}")
+    contract = contract_for_run_states(revision, TABLE_SCHEMA)
     resources = None
     recorded = table.get("entry_resources_fingerprint")
-    if revision == GYM_V1_2_0_CONTRACT.source_revision:
+    if contract.entry_resources_fingerprint is not None:
         resources = load_entry_resources(entry_resources_path)
-        # The descriptor is part of the table's identity (and so of the recipe's and the panels'):
-        # the table records it, and only the fingerprint pinned for this revision is accepted.
-        if resources.fingerprint != EXPECTED_FINGERPRINTS[revision] or recorded != resources.fingerprint:
+        # The table records the descriptor so its identity covers the extraction rules.
+        if resources.fingerprint != contract.entry_resources_fingerprint or recorded != resources.fingerprint:
             raise ValueError("the entry-resource descriptor differs from the one the run-states table "
-                             "was built with (or from the one pinned for Gym 1.2.0)")
+                             f"was built with (or from the one pinned for Gym revision {revision!r})")
     elif recorded is not None:
-        raise ValueError("a Gym 1.1.1 run-states table cannot carry an entry-resource fingerprint")
+        raise ValueError(f"a run-states table for Gym revision {revision!r} cannot carry an entry-resource fingerprint")
     schedule = raw["fuzz_schedule"]
     if (not isinstance(schedule, list)
             or any(not isinstance(s, dict) or set(s) != {"from_shard", "levels"} or not isinstance(s["levels"], list)

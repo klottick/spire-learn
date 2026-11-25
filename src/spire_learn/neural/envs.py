@@ -22,7 +22,6 @@ from spire_learn.artifacts.codec import to_json_value
 from spire_learn.contracts import ContractError
 from spire_learn.neural.cases import NeuralCase, NeuralCases
 from spire_learn.neural.config import (
-    ACCEPTED_RUNTIME_GYM_REVISIONS,
     COMMON_VIEW_FINGERPRINT,
     COMMON_VIEW_ID,
     RUN_OBSERVATION_FINGERPRINT,
@@ -1770,10 +1769,10 @@ def _run_action_count(descriptor: object) -> int:
 def _validate_factory_inputs(config: NeuralConfig, cases: NeuralCases) -> None:
     if not isinstance(config, NeuralConfig) or not isinstance(cases, NeuralCases):
         raise TypeError("make_driver requires NeuralConfig and NeuralCases")
-    if (not isinstance(config.environment_revision, str)
-            or config.environment_revision not in ACCEPTED_RUNTIME_GYM_REVISIONS):
-        raise ContractError("NeuralConfig does not pin the accepted Gym revision")
-    contract = contract_for_revision(config.environment_revision)
+    try:
+        contract = contract_for_revision(config.environment_revision)
+    except ValueError as error:
+        raise ContractError("NeuralConfig does not pin the accepted Gym revision") from error
     # Standard-only configs may omit the common view entirely (both fields None).
     common_omitted = (config.mode in {"standard-standalone", "standard-run"}
                       and config.common_view_id is None and config.common_view_fingerprint is None)

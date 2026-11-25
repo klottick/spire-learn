@@ -139,6 +139,56 @@ class StandardBaselineConfigTests(unittest.TestCase):
                 self.assertEqual(config.standard_view_preset, COMPACT_PRESET)
                 self.assertEqual(tuple(config.seed_streams.__dict__.values()), seeds)
 
+    def test_gym_124_baselines_change_only_the_pin_recipe_and_versioned_names(self):
+        revision = "673eb8f220023b0c95401bbf96bec814a359457b"
+        recipe_path = "configs/neural/baalorlord-standard-gym-1.2.4/recipe.json"
+        runtime = json.loads((CONFIGS / "gym-1.2.4/runtime.json").read_text())
+        self.assertEqual(runtime["gym_revision"], revision)
+        self.assertEqual(runtime["standard_fingerprints"]["combat_compact"], COMPACT_FINGERPRINT)
+        recipe = json.loads((ROOT / recipe_path).read_text())
+        self.assertEqual(recipe["states_table"]["sha256"],
+                         "3121570f1b970d96acd76e9c6c7681ca32789e22c9b11af74ab5aa9283dfb6a0")
+
+        for old_name, seeds in (("baseline-standard-1.2.0", (1103, 2207, 3301, 4409)),
+                                ("baseline-standard-1.2.0-r2", (5101, 6203, 7307, 8419))):
+            new_name = old_name.replace("1.2.0", "1.2.4")
+            with self.subTest(config=new_name):
+                old_dir, new_dir = CONFIGS / old_name, CONFIGS / new_name
+                expected_plan = load_plan(old_dir / "plan.json")
+                expected_plan.update(
+                    baseline_id=expected_plan["baseline_id"].replace(old_name, new_name),
+                    gym_revision=revision,
+                    recipe=recipe_path,
+                    template=f"configs/neural/{new_name}/template.toml",
+                )
+                plan = load_plan(new_dir / "plan.json")
+                self.assertEqual(plan, expected_plan)
+                self.assertEqual(plan["max_turn_actions"], 500)
+                self.assertEqual(plan["target_learned_decisions"], TARGET)
+                self.assertEqual(plan["retain_near_decisions"], RETAINED)
+                self.assertEqual(plan["evaluation"]["case_actions"], 1024)
+
+                expected_template = tomllib.loads((old_dir / "template.toml").read_text())
+                expected_template["output_root"] = expected_template["output_root"].replace(
+                    "/gym-1.2.0/", "/gym-1.2.4/")
+                expected_template["environment"]["gym_revision"] = revision
+                expected_template["budgets"]["max_turn_actions"] = 500
+                mappings = expected_template["accepted_identities"][0]["accepted_raw_mode_mappings"]
+                mappings["standard-standalone"] = (
+                    f"spire-learn-standard-combat-compact-v1@{COMPACT_FINGERPRINT}+gym-1.2.4")
+                template = ROOT / plan["template"]
+                document = tomllib.loads(template.read_text())
+                self.assertEqual(document, expected_template)
+                self.assertEqual(document["budgets"]["max_turn_actions"], 500)
+                self.assertEqual(document["rollout"], {"rows": 16, "steps": 32})
+
+                config = self._load_template(template)
+                self.assertEqual(config.environment_revision, revision)
+                self.assertEqual(config.standard_view_preset, COMPACT_PRESET)
+                self.assertEqual(config.budgets.max_turn_actions, 500)
+                self.assertEqual(tuple(config.seed_streams.__dict__.values()), seeds)
+                _refuse_overflowing_preset(template)
+
     def test_stage_one_profiles_change_only_the_named_settings(self):
         directory = CONFIGS / "profile-standard-1.2.0"
         variants = {

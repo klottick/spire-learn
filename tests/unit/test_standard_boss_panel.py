@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import tomllib
 from types import SimpleNamespace
 import unittest
 from collections import Counter
@@ -87,6 +88,20 @@ class BossPanelTests(_Fixture):
                 baseline_entry.run_baseline(ROOT, plan_path, output, dependencies=deps,
                                             clock=_Clock(), reevaluate=prior, panel="boss")
             summary = json.loads((output / "summary.json").read_text())
+            events = [json.loads(line) for line in (output / "progress.jsonl").read_text().splitlines()]
+            case_config = tomllib.loads((output / "panel" / "config-0.toml").read_text())
+            panel_path = output / "boss-panel.json"
+            written_panel = json.loads(panel_path.read_text()) if panel_path.is_file() else {}
+        with self.subTest(output="deadline"):
+            self.assertEqual(summary.get("boss_case_seconds"), plan["wall_seconds"]["total"])
+            self.assertEqual(summary["boss_case_seconds"], case_config["budgets"]["max_wall_seconds"])
+            self.assertEqual(summary["plan"]["evaluation"]["case_seconds"], plan["evaluation"]["case_seconds"])
+        with self.subTest(output="journal"):
+            completed = [row for row in events if row["event"] == "evaluation_complete"]
+            self.assertEqual(len(completed), len(previous["checkpoints"]))
+            self.assertTrue(all(row.get("panel") == "boss" for row in events))
+        with self.subTest(output="panel file"):
+            self.assertEqual(written_panel.get("manifest_sha256"), panel["manifest_sha256"])
         self.assertEqual(summary["result"], "complete")
         self.assertEqual(summary["panel"], "boss")
         self.assertEqual(summary["manifest_sha256"], panel["manifest_sha256"])

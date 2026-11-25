@@ -137,11 +137,14 @@ def _json(value: object) -> object:
 class _Journal:
     """Append-only progress record; one JSON object per line, flushed per event."""
 
-    def __init__(self, path: Path, clock: Callable[[], float], started: float):
+    def __init__(self, path: Path, clock: Callable[[], float], started: float, *, panel: str | None = None):
         self._path, self._clock, self._started = path, clock, started
+        self._panel = panel
 
     def write(self, event: str, **fields: object) -> None:
         row = {'event': event, 'elapsed_seconds': round(self._clock() - self._started, 3), **fields}
+        if self._panel is not None:
+            row.setdefault('panel', self._panel)
         with self._path.open('a') as stream:
             stream.write(json.dumps(_json(row), sort_keys=True) + '\n')
             stream.flush()
@@ -395,7 +398,7 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
     started = clock()
     budget = _Budget(training=started + plan['wall_seconds']['training'],
                      total=started + plan['wall_seconds']['total'])
-    journal = _Journal(output / 'progress.jsonl', clock, started)
+    journal = _Journal(output / 'progress.jsonl', clock, started, panel=panel if panel == 'boss' else None)
     gate = _GpuGate(plan, deps, clock, journal, budget)
     template = root / plan['template']
     _refuse_overflowing_preset(template)
@@ -726,10 +729,15 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, 
         result_container.update(panel_sha256=panel['panel_sha256'], manifest_sha256=panel['manifest_sha256'])
         # The runner config requires a finite wall budget. The run's total budget
         # bounds every boss evaluation without adding a shorter per-case deadline.
-        settings = {**settings, 'case_seconds': plan['wall_seconds']['total']}
+        boss_case_seconds = plan['wall_seconds']['total']
+        settings = {**settings, 'case_seconds': boss_case_seconds}
+        result_container['boss_case_seconds'] = boss_case_seconds
+        panel_id = 'boss'
+        panel_filename = 'boss-panel.json'
     else:
         panel = deps['build_panel'](recipe)
-    with (output / 'development-panel.json').open('x') as stream:
+        panel_filename = 'development-panel.json'
+    with (output / panel_filename).open('x') as stream:
         stream.write(json.dumps(_json(panel), sort_keys=True) + '\n')
     rows = _panel_configs(panel, template, output / 'panel', plan, settings)
     labelled = {row['label']: row for row in summary['checkpoints']}

@@ -150,7 +150,7 @@ collection, and the remainder of segment wall time.
 | Snapshot/validation (`snapshot_validation`, `frame_hash`, artifact events) | 20.2% | 9.3% | 20.0% | 9.9% | 9.9% | 29.5% | 16.9% | 30.8% | 18.0% | 18.6% |
 | Features (`features_transfer`, `encode_frames`) | 4.6% | 4.5% | 4.9% | 4.7% | 4.8% | 4.3% | 5.1% | 4.6% | 5.3% | 5.3% |
 | Policy forward (`policy_act`, `bootstrap_values`) | 26.5% | 29.4% | 27.1% | 30.5% | 30.0% | 8.9% | 10.6% | 9.3% | 11.3% | 11.1% |
-| PPO update (forward/loss, backward, clipping, behaviour validation, Adam) | 36.0% | 41.9% | 35.9% | 42.1% | 38.2% | 43.6% | 50.9% | 45.3% | 53.2% | 48.0% |
+| PPO update (forward/loss, backward, clipping, behaviour validation, Adam, plus the `ppo_update`, `ppo_metrics` and `ppo_freeze_rollout` spans) | 36.0% | 41.9% | 35.9% | 42.1% | 38.2% | 43.6% | 50.9% | 45.3% | 53.2% | 48.0% |
 | Other (checkpoint save, collection, unattributed) | 6.8% | 7.2% | 7.7% | 7.5% | 8.9% | 3.0% | 4.2% | 3.2% | 4.3% | 3.8% |
 
 Exclusive seconds per segment for the larger spans follow.
@@ -187,8 +187,8 @@ from the unsynchronized segment.
 
 On 64 synthetic CPU frames across one Adam update, the maximum absolute
 legal-logit difference was 2.24e-8 and the maximum value difference was
-1.49e-8. Greedy choices matched, and 22 parameter tensors had last-bit
-gradient differences. Inexact trim is measurement-only and refused outside
+1.49e-8. Greedy choices matched, and 22 parameter tensors had unequal
+gradients (the test counts unequal tensors; it does not measure the size of the differences). Inexact trim is measurement-only and refused outside
 `profile_entry`.
 
 ### Caveats

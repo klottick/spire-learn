@@ -15,6 +15,7 @@ import re
 
 from .cases import _freeze_json, _reject_json_constant, _unique_object, _validate_entry
 from .config import ACCEPTED_GYM_REVISION
+from .gym_contracts import CONTRACTS_BY_REVISION
 
 
 def json_value(value: object) -> object:
@@ -67,7 +68,7 @@ class ScenarioSupport:
         if not isinstance(raw, dict) or set(raw) != required:
             raise ValueError("support has missing or unknown fields")
         if (raw["schema"] != "spire-learn-scenario-support-v1"
-                or raw["gym_revision"] != ACCEPTED_GYM_REVISION
+                or raw["gym_revision"] not in CONTRACTS_BY_REVISION
                 or raw["profile_id"] != "ironclad-combat-v1"
                 or raw["content_id"] != "spire-gym-ironclad-combat-content-v1"):
             raise ValueError("unsupported source-bound support identity")
@@ -96,7 +97,7 @@ class ScenarioSupport:
         if (not isinstance(provenance, dict) or set(provenance) != {
                 "repository", "revision", "sources", "support_authority",
                 "annotation_semantics", "qualification"}
-                or provenance["revision"] != ACCEPTED_GYM_REVISION
+                or provenance["revision"] != raw["gym_revision"]
                 or provenance["repository"] != "https://github.com/klottick/spire-gym"
                 or not isinstance(provenance["sources"], list)
                 or any(not isinstance(row, dict) or set(row) != {"path", "sha256"}
@@ -111,7 +112,10 @@ class ScenarioSupport:
                      **{k: raw[k] for k in ("encounters", "relics", "potions")}}
         if content_sha256(inventory) != _INVENTORY_SHA256:
             raise ValueError("support inventory differs from accepted Gym66 public tables")
-        if {r["path"]: r["sha256"] for r in provenance["sources"]} != _SOURCE_SHA256:
+        # Source hashes are pinned for the frozen original revision only; support for another
+        # registered revision is authenticated by its registered revision and the shared inventory.
+        if (raw["gym_revision"] == ACCEPTED_GYM_REVISION
+                and {r["path"]: r["sha256"] for r in provenance["sources"]} != _SOURCE_SHA256):
             raise ValueError("support provenance differs from accepted public sources")
         object.__setattr__(self, "payload", _freeze_json(raw))
 

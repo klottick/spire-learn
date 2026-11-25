@@ -479,11 +479,13 @@ def _cases_manifest(directory: Path, entries: list[dict]) -> Path:
 
 
 TABLE_1_2_0 = ARTIFACTS / "run-states/run-states-gym-1.2.0.json"
+TABLE_1_2_4 = ARTIFACTS / "run-states/run-states-gym-1.2.4.json"
+TABLES = {GYM_1_2_0: TABLE_1_2_0, GYM_1_2_4: TABLE_1_2_4}  # the live runtime's revision -> its table
 CHARACTERS = ("ironclad", "silent", "defect", "watcher")
 
 
-def _table_states() -> list[dict]:
-    return json.loads(TABLE_1_2_0.read_text())["states"]
+def _table_states(revision: str = GYM_1_2_0) -> list[dict]:
+    return json.loads(TABLES[revision].read_text())["states"]
 
 
 def diverse_entries(states: list[dict], per_character: int = 8) -> list[dict]:
@@ -663,10 +665,11 @@ class GatedCompactTests(unittest.TestCase):
         return stats
 
     def test_compact_and_dense_give_identical_policy_outputs(self):
-        """Real v1.2.0 entries for all four characters: features and policy outputs byte-identical on CPU."""
-        if self.revision != GYM_1_2_0 or not TABLE_1_2_0.is_file():
-            self.skipTest("the local v1.2.0 run-states table is absent (or this is not the v1.2.0 runtime)")
-        states = _table_states()
+        """Real entries (the live runtime's own table) for all four characters: byte-identical on CPU."""
+        table = TABLES.get(self.revision)
+        if table is None or not table.is_file():
+            self.skipTest("the local run-states table for this runtime's revision is absent")
+        states = _table_states(self.revision)
         evidence = {"bounds": self._compare(diverse_entries(states), preset="standard-combat-compact-v1",
                                             rows=self.ROWS, steps=300, seed=500)}
         for character in CHARACTERS:
@@ -681,7 +684,7 @@ class GatedCompactTests(unittest.TestCase):
                                          rows=4, steps=120, seed=900)
         self.assertEqual(evidence["play"]["max_rows"]["permanent_cards"], 96)
         self.assertEqual(evidence["play"]["max_rows"]["relics"], 32)
-        (WORK / "compact-identical-outputs.json").write_text(json.dumps(evidence, sort_keys=True) + "\n")
+        (WORK / ("compact-identical-outputs.json" if self.revision == GYM_1_2_0 else f"compact-identical-outputs-{self.revision[:8]}.json")).write_text(json.dumps(evidence, sort_keys=True) + "\n")
 
     def test_capacity_overflow_is_a_driver_fault(self):
         """The play preset holds 96 permanent cards; a 120-card deck overflows at reset: an error, not a loss."""

@@ -145,7 +145,8 @@ def _toml(document: Mapping[str, object]) -> str:
 
 
 def _preparation(recipe_path: Path, destination: Path, *, arm: str, split: str,
-                 shard_index: int, template: Path | None = None) -> tuple[dict[str, bytes], dict[str, object]]:
+                 shard_index: int, template: Path | None = None,
+                 allow_experimental_trim_compute: bool = False) -> tuple[dict[str, bytes], dict[str, object]]:
     destination = Path(destination).absolute()
     if destination.exists() or destination.is_symlink():
         raise ValueError('destination must be absent')
@@ -157,9 +158,19 @@ def _preparation(recipe_path: Path, destination: Path, *, arm: str, split: str,
         raise ValueError('preparation supports train/selection; final remains frozen')
     if type(shard_index) is not int or not 0 <= shard_index < 2**24 - 1:
         raise ValueError('shard_index must have a representable successor')
-    if is_standard_recipe_file(recipe_path):
+    standard = is_standard_recipe_file(recipe_path)
+    if standard and template is None:
+        raise ValueError('Standard preparation requires an explicit standard-standalone template')
+    # The template supplies runtime, model and rollout settings; scenarios come from the recipe.
+    document = tomllib.loads(Path(template if template is not None else _CONFIGS / 'pilot.toml').read_text())
+    from .config import _validate_experimental_trim_compute
+    model = document.get('model')
+    if isinstance(model, dict):
+        _validate_experimental_trim_compute(model, operation='train' if split == 'train' else 'evaluate',
+                                            allow_experimental_trim_compute=allow_experimental_trim_compute)
+    if standard:
         return _standard_preparation(recipe_path, destination, arm=arm, split=split,
-                                     shard_index=shard_index, template=template)
+                                     shard_index=shard_index, document=document)
     recipe = load_scenario_recipe(recipe_path)
     source_recipe = Path(recipe_path).read_bytes()
     source_support = (Path(recipe_path).resolve().parent /
@@ -193,8 +204,6 @@ def _preparation(recipe_path: Path, destination: Path, *, arm: str, split: str,
     put('development-panel.json', panel)
     put('development.json', panel['manifest'])
     put('pilot-plan.json', pilot_plan(recipe))
-    # The template supplies runtime, model and rollout settings; scenarios come from the recipe.
-    document = tomllib.loads(Path(template if template is not None else _CONFIGS / 'pilot.toml').read_text())
     document.update(manifest_path=f'shard-{shard_index}.json', output_root='runs',
                     operation='train' if split == 'train' else 'evaluate', split=split, partition=split)
     if split == 'train':
@@ -228,7 +237,7 @@ def _preparation(recipe_path: Path, destination: Path, *, arm: str, split: str,
 
 
 def _standard_preparation(recipe_path: Path, destination: Path, *, arm: str, split: str, shard_index: int,
-                          template: Path | None) -> tuple[dict[str, bytes], dict[str, object]]:
+                          document: dict) -> tuple[dict[str, bytes], dict[str, object]]:
     """One baalorlord-standard-v1 training segment: its shard, catalog, annotations and config.
 
     The caller has already checked the destination and shard index. Only training is
@@ -238,12 +247,9 @@ def _standard_preparation(recipe_path: Path, destination: Path, *, arm: str, spl
     """
     if split != 'train':
         raise ValueError('Standard preparation supports train only; panels come from build_panel')
-    if template is None:
-        raise ValueError('Standard preparation requires an explicit standard-standalone template')
     recipe = load_recipe(recipe_path)
     source_recipe = Path(recipe_path).read_bytes()
     table_path = (Path(recipe_path).resolve().parent / json.loads(source_recipe)['states_table']['path']).resolve()
-    document = tomllib.loads(Path(template).read_text())
     if document.get('mode') != 'standard-standalone':
         raise ValueError('a Standard recipe needs a standard-standalone template')
     require_recipe_revision(recipe, document['environment']['gym_revision'])  # before any Gym call
@@ -291,17 +297,20 @@ def _standard_preparation(recipe_path: Path, destination: Path, *, arm: str, spl
 
 
 def prepare_stream(recipe_path: Path, destination: Path, *, arm: str, split: str,
-                   shard_index: int, template: Path | None = None) -> Mapping[str, object]:
+                   shard_index: int, template: Path | None = None,
+                   allow_experimental_trim_compute: bool = False) -> Mapping[str, object]:
     """Exclusively publish bounded preparation under an absent artifact destination."""
     from .config import load_neural_config
     files, result = _preparation(recipe_path, destination, arm=arm, split=split,
-                                 shard_index=shard_index, template=template)
+                                 shard_index=shard_index, template=template,
+                                 allow_experimental_trim_compute=allow_experimental_trim_compute)
     destination = Path(destination).absolute()
     destination.mkdir()
     for name, data in files.items():
         with (destination / name).open('xb') as stream:
             stream.write(data)
-    config = load_neural_config(destination / 'config.toml')
+    config = load_neural_config(destination / 'config.toml',
+                                allow_experimental_trim_compute=allow_experimental_trim_compute)
     if (config.config_sha256 != result['config_sha256'] or
             config.manifest_sha256 != result['manifest_sha256']):
         raise ValueError('prepared loader roundtrip changed identity')
@@ -313,13 +322,16 @@ def prepare_stream(recipe_path: Path, destination: Path, *, arm: str, split: str
 
 def run_stream_segment(config: NeuralConfig, *, purpose: str, checkpoint: Path | None,
                        operation_limits: RuntimeOperationLimits,
-                       dependencies: Mapping[str, object] | None = None) -> object:
+                       dependencies: Mapping[str, object] | None = None,
+                       allow_experimental_trim_compute: bool = False) -> object:
     """Execute exactly once; offer a successor only from healthy published evidence."""
     from .config import NeuralConfig
     from .runner import NeuralReport, RuntimeOperationLimits, _checkpoint_recovery
     from .stream_resume import stream_identity
     if not isinstance(config, NeuralConfig):
         raise TypeError('config must be NeuralConfig')
+    if config.experimental_trim_compute is not None and not allow_experimental_trim_compute:
+        raise ValueError("model.experimental_trim_compute is restricted to profile_entry training")
     stream_identity(config)
     if purpose not in ('train', 'resume', 'warm_start'):
         raise ValueError('segment purpose must be train/resume/warm_start')
@@ -366,7 +378,10 @@ def run_stream_segment(config: NeuralConfig, *, purpose: str, checkpoint: Path |
     if report.run_dir is None or Path(publication['checkpoint_path']) != report.run_dir / 'checkpoint-final':
         raise ValueError('checkpoint publication does not belong to actual run')
     from .checkpoint import preflight_checkpoint
-    saved = preflight_checkpoint(Path(publication['checkpoint_path']), config.accepted_identities[0], purpose='resume')
+    saved = preflight_checkpoint(
+        Path(publication['checkpoint_path']), config.accepted_identities[0], purpose='resume',
+        experimental_trim_compute=config.experimental_trim_compute is True,
+    )
     metadata = saved.metadata
     _, prefix = _checkpoint_recovery(saved, config)
     state = metadata['run_metadata']['scenario_stream']

@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import random
 import struct
+import tempfile
 import sys
 import unittest
 from types import SimpleNamespace
@@ -220,7 +221,7 @@ def _patch_runtime_assembly(
         events.append("make_driver")
         return selected_driver
 
-    def build_policy(schema, model_config, *, seed, device):
+    def build_policy(schema, model_config, *, seed, device, **options):
         events.append(("build_policy", seed, device))
         if policy_factory is not None:
             return policy_factory(schema, model_config, seed=seed, device=device)
@@ -1426,6 +1427,86 @@ class NeuralRunnerTests(unittest.TestCase):
                 self.assertEqual(summary["runtime_device_report"], runtime.device_report)
                 runtime.close()
         self.assertEqual(driver.close_calls, 1)
+
+    def test_profile_checkpoint_admission_and_provenance(self):
+        import hashlib
+        import json
+
+        from scripts.neural.profile_entry import _default_dependencies
+        from spire_learn.neural import runner
+        from spire_learn.neural.checkpoint import CheckpointCompatibilityError, preflight_checkpoint
+        from spire_learn.neural.config import _canonical_hash
+        from tests.unit.test_neural_checkpoint import _metadata, _write_archive
+
+        exact = replace(self.train_config, trim_padding=True)
+        experimental = replace(exact, experimental_trim_compute=True)
+        identity = runner._selected_identity(exact)
+        profile_runtime = _default_dependencies()["create_runtime"]
+        metadata, loaded, *_ = _resume_bundle(experimental, {
+            "runtime_device": "cpu", "policy_rng_backend": "cpu", "runtime_gpu_uuid": None,
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory)
+            saved = _metadata(identity=identity, training=True)
+            saved["training_state"].update(metadata["training_state"],
+                                           hyperparameter_id=identity.config_hashes["ppo"],
+                                           saved_inflight_record_count=0)
+            saved["run_metadata"] = metadata["run_metadata"]
+            for name in saved["payload_inventory"]:
+                path = checkpoint / name
+                _write_archive(path)
+                payload = path.read_bytes()
+                saved["payload_inventory"][name] = {
+                    "size_bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest(),
+                }
+            metadata_path = checkpoint / "metadata.json"
+            metadata_path.write_text(json.dumps(saved))
+            with self.assertRaisesRegex(CheckpointCompatibilityError, "experimental_trim_compute"):
+                profile_runtime(experimental, purpose="resume", checkpoint=checkpoint)
+
+            preflight_checkpoint(checkpoint, identity, purpose="warm_start",
+                                 experimental_trim_compute=True)
+            saved["run_metadata"]["experimental_trim_compute"] = True
+            metadata_path.write_text(json.dumps(saved))
+            for purpose, config in (
+                ("resume", exact), ("warm_start", exact), ("evaluate", self.selection_config),
+            ):
+                with self.subTest(purpose=purpose), self.assertRaisesRegex(
+                    CheckpointCompatibilityError, "experimental_trim_compute"
+                ):
+                    runner.create_runtime(config, purpose=purpose, checkpoint=checkpoint)
+            with self.assertRaisesRegex(ValueError, "restricted to profile_entry"):
+                profile_runtime(replace(self.selection_config, trim_padding=True,
+                                        experimental_trim_compute=True),
+                                purpose="evaluate", checkpoint=checkpoint)
+            with self.assertRaisesRegex(CheckpointCompatibilityError, "experimental_trim_compute"):
+                preflight_checkpoint(checkpoint, identity, purpose="evaluate",
+                                     experimental_trim_compute=True)
+
+            def load(path, identity, *, purpose, device, **options):
+                preflight_checkpoint(path, identity, purpose=purpose, **options)
+                return loaded
+
+            events = []
+            with _patch_runtime_assembly(events, torch_module=_AssemblyTorch(events), loader=load):
+                runtime = profile_runtime(experimental, purpose="resume", checkpoint=checkpoint)
+                self.addCleanup(runtime.close)
+                projections = []
+                for config in (exact, experimental):
+                    runtime.config = config
+                    with patch.object(runner, "save_checkpoint") as save, patch.object(
+                        runtime, "_latest_counters", return_value=metadata["training_state"]["counters"]
+                    ):
+                        runtime.save(checkpoint, "resume")
+                    manifest = runner._manifest_projection(
+                        config, runtime, policy_kind="checkpoint",
+                        action_selection="seeded-sampling", allow_final=False,
+                    )
+                    projections.append((save.call_args.kwargs["metadata"]["run_metadata"], manifest))
+                for unflagged, flagged in zip(*projections, strict=True):
+                    self.assertNotIn("experimental_trim_compute", unflagged)
+                    self.assertIs(flagged.pop("experimental_trim_compute"), True)
+                    self.assertEqual(_canonical_hash(unflagged), _canonical_hash(flagged))
 
     def test_resume_device_mismatch_rejects_before_torch_gate_or_driver(self):
         from spire_learn.neural import runner

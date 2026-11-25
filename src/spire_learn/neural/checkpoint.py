@@ -306,8 +306,9 @@ def _mode_families(mappings: Mapping[str, object]) -> frozenset[str]:
 
 def validate_checkpoint_metadata(
     metadata: Mapping[str, object], expected: NeuralIdentity, *, purpose: str,
+    experimental_trim_compute: bool = False,
 ) -> dict[str, object]:
-    """Validate checkpoint identity and state requirements without tensor imports."""
+    """Validate identity, state and the destination's experimental trim mode without tensor imports."""
     if purpose not in _PURPOSES:
         raise ValueError("purpose must be evaluate, warm_start, or resume")
     if not isinstance(expected, NeuralIdentity):
@@ -327,6 +328,14 @@ def validate_checkpoint_metadata(
     run_metadata = safe["run_metadata"]
     if not isinstance(run_metadata, dict):
         raise ValueError("run_metadata must be a strict JSON object")
+    saved_experimental = "experimental_trim_compute" in run_metadata
+    if saved_experimental and run_metadata["experimental_trim_compute"] is not True:
+        raise ValueError("checkpoint experimental_trim_compute marker must be true")
+    if ((saved_experimental and (not experimental_trim_compute or purpose == "evaluate"))
+            or (purpose == "resume" and experimental_trim_compute and not saved_experimental)):
+        raise CheckpointCompatibilityError(
+            "checkpoint experimental_trim_compute requires a matching profile training destination"
+        )
     parent = safe["parent_checkpoint"]
     if parent is not None and not isinstance(parent, dict):
         raise ValueError("parent_checkpoint must be an object or null")
@@ -428,6 +437,7 @@ def _archive_uncompressed_bytes(path: Path) -> int:
 
 def preflight_checkpoint(
     path: Path, expected: NeuralIdentity, *, purpose: str,
+    experimental_trim_compute: bool = False,
 ) -> CheckpointPreflight:
     """Verify strict metadata, identity, payload hashes and archive bounds."""
     checkpoint_path = Path(path)
@@ -447,7 +457,8 @@ def preflight_checkpoint(
         )
     except (UnicodeError, json.JSONDecodeError) as error:
         raise ValueError("checkpoint metadata.json is not strict UTF-8 JSON") from error
-    metadata = validate_checkpoint_metadata(raw_metadata, expected, purpose=purpose)
+    metadata = validate_checkpoint_metadata(raw_metadata, expected, purpose=purpose,
+                                            experimental_trim_compute=experimental_trim_compute)
     tensor_inventory = metadata["model_tensors"]
     assert isinstance(tensor_inventory, list)
     logical_tensor_bytes = sum(
@@ -733,6 +744,8 @@ def save_checkpoint(
     if not isinstance(base, dict) or set(base) != input_keys:
         raise ValueError("checkpoint save metadata has an invalid field set")
     identity = _checkpoint_identity(base["identity"])
+    if not isinstance(base["run_metadata"], dict):
+        raise ValueError("run_metadata must be a strict JSON object")
     training_state = _validate_training_state(base["training_state"], has_training_payload=True)
     if training_state is None:
         raise ValueError("training checkpoint save requires explicit training metadata")
@@ -830,8 +843,9 @@ def save_checkpoint(
             "run_metadata": base["run_metadata"],
             "parent_checkpoint": base["parent_checkpoint"],
         }
+        experimental = full_metadata["run_metadata"].get("experimental_trim_compute") is True
         validated_metadata = validate_checkpoint_metadata(
-            full_metadata, identity, purpose="resume"
+            full_metadata, identity, purpose="resume", experimental_trim_compute=experimental,
         )
         metadata_bytes = json.dumps(
             validated_metadata,
@@ -848,7 +862,7 @@ def save_checkpoint(
             stream.flush()
             os.fsync(stream.fileno())
         (temporary / "metadata.json").chmod(0o600)
-        preflight_checkpoint(temporary, identity, purpose="resume")
+        preflight_checkpoint(temporary, identity, purpose="resume", experimental_trim_compute=experimental)
         _fsync_directory(temporary)
         _rename_directory_noreplace(temporary, destination)
         _fsync_directory(parent)
@@ -866,11 +880,13 @@ def load_checkpoint(
     *,
     purpose: str,
     device: str,
+    experimental_trim_compute: bool = False,
 ) -> LoadedCheckpoint:
     """Preflight first, then load restricted tensor state on CPU without applying it."""
     if device != "cpu":
         raise ValueError("Task 6 checkpoint loading currently supports only device='cpu'")
-    preflight = preflight_checkpoint(path, expected, purpose=purpose)
+    preflight = preflight_checkpoint(path, expected, purpose=purpose,
+                                     experimental_trim_compute=experimental_trim_compute)
 
     import torch
 

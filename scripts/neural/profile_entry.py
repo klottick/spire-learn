@@ -31,12 +31,18 @@ DEFAULT_SYNCHRONIZED = (True, True, False)
 
 
 def _default_dependencies() -> dict[str, Callable]:
+    from functools import partial
+
     from scripts.neural.baseline_entry import load_plan
     from spire_learn.neural.config import load_neural_config
     from spire_learn.neural.runner import create_runtime, train
     from spire_learn.neural.stream_runner import prepare_stream, run_stream_segment
-    return dict(load_plan=load_plan, prepare_stream=prepare_stream, load_config=load_neural_config,
-                create_runtime=create_runtime, train=train, run_stream_segment=run_stream_segment)
+    return dict(load_plan=load_plan,
+                prepare_stream=partial(prepare_stream, allow_experimental_trim_compute=True),
+                load_config=partial(load_neural_config, allow_experimental_trim_compute=True),
+                create_runtime=partial(create_runtime, allow_experimental_trim_compute=True),
+                train=train,
+                run_stream_segment=partial(run_stream_segment, allow_experimental_trim_compute=True))
 
 
 def _gpu_wait(plan: Mapping, config, deps: Mapping, clock: Callable[[], float], profile: dict,

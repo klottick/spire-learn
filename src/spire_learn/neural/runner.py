@@ -340,6 +340,8 @@ def _config_projection(config: NeuralConfig) -> dict[str, object]:
             "hidden_width": config.model.hidden_width,
             "max_parameters": config.model.max_parameters,
             **({"trim_padding": config.trim_padding} if config.trim_padding is not None else {}),
+            **({"experimental_trim_compute": config.experimental_trim_compute}
+               if config.experimental_trim_compute is not None else {}),
         },
         "ppo": {
             "learning_rate": config.ppo.learning_rate,
@@ -422,6 +424,8 @@ def _manifest_projection(
         **({"trim_padding": config.trim_padding} if config.trim_padding is not None else {}),
         **({"validation_stride": config.budgets.validation_stride}
            if config.budgets.validation_stride is not None else {}),
+        **({"experimental_trim_compute": True}
+           if getattr(config, "experimental_trim_compute", None) is True else {}),
         "schema_descriptor_digest": getattr(schema, "descriptor_digest", None),
         "learner_identity": identity_payload(_selected_identity(config)),
         "policy_kind": policy_kind,
@@ -2000,6 +2004,8 @@ class _NeuralTrainingRuntime:
             "policy_kind": "checkpoint",
             "controller_id": self.controller_id,
         }
+        if getattr(self.config, "experimental_trim_compute", None) is True:
+            run_metadata["experimental_trim_compute"] = True
         if self.config.scenario_stream is not None:
             from .stream_resume import stream_checkpoint_state
             if self.stream_transition is not None:
@@ -2107,10 +2113,14 @@ def create_runtime(
     checkpoint: Path | None = None,
     policy_kind: str = "checkpoint",
     action_selection: str = "seeded-sampling",
+    allow_experimental_trim_compute: bool = False,
 ) -> TrainingRuntime:
     """Lazily assemble the selected device, model and training runtime."""
     if not isinstance(config, NeuralConfig):
         raise TypeError("config must be a NeuralConfig")
+    if config.experimental_trim_compute is not None and (
+            not allow_experimental_trim_compute or purpose == "evaluate"):
+        raise ValueError("model.experimental_trim_compute is restricted to profile_entry training")
     if purpose not in {"train", "resume", "warm_start", "evaluate"}:
         raise ValueError("purpose must be train, resume, warm_start, or evaluate")
     if purpose in {"train", "resume", "warm_start"} and (config.operation != "train" or config.split != "train"):
@@ -2151,10 +2161,13 @@ def create_runtime(
     recovery = None
     recovered_progress: dict[str, object] = {}
     load_purpose = None
+    trim_checkpoint_options = (
+        {"experimental_trim_compute": True} if config.experimental_trim_compute is True else {}
+    )
     if checkpoint is not None:
         load_purpose = "resume" if purpose == "resume" else "warm_start" if purpose == "warm_start" else "evaluate"
         preflight = preflight_checkpoint(
-            Path(checkpoint), selected_identity, purpose=load_purpose,
+            Path(checkpoint), selected_identity, purpose=load_purpose, **trim_checkpoint_options,
         )
         if purpose == "resume":
             run_metadata = preflight.metadata.get("run_metadata")
@@ -2177,7 +2190,8 @@ def create_runtime(
 
     if checkpoint is not None:
         assert load_purpose is not None
-        loaded = load_checkpoint(Path(checkpoint), selected_identity, purpose=load_purpose, device="cpu")
+        loaded = load_checkpoint(Path(checkpoint), selected_identity, purpose=load_purpose,
+                                 device="cpu", **trim_checkpoint_options)
         if purpose == "resume":
             loaded_metadata = getattr(loaded, "metadata", None)
             if not isinstance(loaded_metadata, Mapping):
@@ -2244,6 +2258,8 @@ def create_runtime(
                                         features_id=selected_identity.features_id)
             if config.trim_padding is not None:
                 objective_kwargs["trim_padding"] = config.trim_padding
+            if config.experimental_trim_compute is not None:
+                objective_kwargs["experimental_trim_compute"] = config.experimental_trim_compute
             policy = build_policy(
                 driver.schema, config.model, seed=config.seed_streams.policy,
                 device=device_plan.device, **objective_kwargs,

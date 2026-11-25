@@ -21,10 +21,11 @@ from tests.unit.test_neural_checkpoint import _metadata
 from tests.unit.test_neural_standard_compact import COMPACT_TEMPLATE, compact_text, load_text
 
 
-def standard_policy(schema, config, *, trim_padding):
+def standard_policy(schema, config, *, trim_padding, experimental_trim_compute=False):
     model_id, features_id = STANDARD_LEARNER_IDENTITY_IDS[:2]
     return build_policy(schema, config.model, seed=1103, device="cpu", model_id=model_id,
-                        features_id=features_id, trim_padding=trim_padding)
+                        features_id=features_id, trim_padding=trim_padding,
+                        experimental_trim_compute=experimental_trim_compute)
 
 
 class PaddingConfigTests(unittest.TestCase):
@@ -154,6 +155,51 @@ class PaddingTensorTests(unittest.TestCase):
                 return policy.act(frames, generator=torch.Generator().manual_seed(7),
                                   deterministic=deterministic)
             self.assertEqual(choices(full), choices(trim))
+
+    def test_experimental_trim_cpu_one_update(self):
+        import torch
+
+        frames = tuple(self.frame(i % 8) for i in range(64))
+        batch = encode_frames(frames, self.schema, device="cpu", trim_padding=True)
+        exact, experimental = (
+            standard_policy(self.schema, self.config, trim_padding=True, experimental_trim_compute=flag)
+            for flag in (False, True)
+        )
+
+        def update(policy):
+            optimizer = torch.optim.Adam(policy.parameters(), lr=self.config.ppo.learning_rate,
+                                         eps=self.config.ppo.adam_eps)
+            output = policy(batch)
+            legal_logits = output.logits[batch.action_mask]
+            loss = (legal_logits - 0.25).square().mean() + (output.values + 0.5).square().mean()
+            loss.backward()
+            optimizer.step()
+            return output
+
+        before = tuple(update(policy) for policy in (exact, experimental))
+        different_grads = sum(
+            left.grad is None or right.grad is None or not torch.equal(left.grad, right.grad)
+            for left, right in zip(exact.parameters(), experimental.parameters(), strict=True)
+            if left.grad is not None or right.grad is not None
+        )
+        with torch.no_grad():
+            after = exact(batch), experimental(batch)
+        max_logit, max_value = 0.0, 0.0
+        for left, right in (before, after):
+            logit_diff = (left.logits[batch.action_mask] - right.logits[batch.action_mask]).abs().max().item()
+            value_diff = (left.values - right.values).abs().max().item()
+            max_logit = max(max_logit, logit_diff)
+            max_value = max(max_value, value_diff)
+        metrics = (f"64 frames, one Adam update: max legal logit diff={max_logit:.9g}, "
+                   f"max value diff={max_value:.9g}, gradient tensors differing={different_grads}")
+        print(metrics, flush=True)
+        self.assertLessEqual(max_logit, 1e-5, metrics)
+        self.assertLessEqual(max_value, 1e-5, metrics)
+        for left, right in (before, after):
+            self.assertTrue(torch.equal(
+                left.logits.masked_fill(~batch.action_mask, -torch.inf).argmax(dim=1),
+                right.logits.masked_fill(~batch.action_mask, -torch.inf).argmax(dim=1),
+            ), metrics)
 
     def test_trimmed_training_segment_is_byte_identical(self):
         import torch

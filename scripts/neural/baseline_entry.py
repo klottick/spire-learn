@@ -160,7 +160,10 @@ _OVERFLOWING_PRESETS = frozenset({'standard-combat-compact-play-v1'})
 
 def _refuse_overflowing_preset(template: Path) -> None:
     import tomllib
-    environment = tomllib.loads(Path(template).read_text()).get('environment', {})
+    document = tomllib.loads(Path(template).read_text())
+    if 'experimental_trim_compute' in document.get('model', {}):
+        raise ValueError('baseline plans refuse model.experimental_trim_compute')
+    environment = document.get('environment', {})
     if environment.get('standard_view_preset') in _OVERFLOWING_PRESETS:
         raise ValueError('baseline training and panels refuse the play compact preset; '
                          'use standard-combat-compact-v1 (sized to the entry bounds)')

@@ -8,8 +8,10 @@ import tempfile
 import tomllib
 import unittest
 
-from scripts.neural.baseline_entry import load_plan
+from scripts.neural.baseline_entry import _refuse_overflowing_preset, load_plan
 from spire_learn.neural.config import load_neural_config
+from spire_learn.neural.runner import create_runtime
+from spire_learn.neural.stream_resume import _stable_document
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,7 +30,7 @@ SEEDS = {
 
 
 class StandardBaselineConfigTests(unittest.TestCase):
-    def _load_template(self, template_path: Path):
+    def _load_template(self, template_path: Path, **options):
         """Validate the authored template against the existing static Standard fixture."""
         text = template_path.read_text()
         manifest = ROOT / "configs/cases/neural/standard-standalone-train.json"
@@ -42,7 +44,7 @@ class StandardBaselineConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "template.toml"
             path.write_text(text)
-            return load_neural_config(path)
+            return load_neural_config(path, **options)
 
     def test_r1_and_r2_plans_and_templates_bind_standard_baseline(self):
         plans = {}
@@ -136,6 +138,65 @@ class StandardBaselineConfigTests(unittest.TestCase):
                 self.assertEqual(config.standard_view_layout, "compact")
                 self.assertEqual(config.standard_view_preset, COMPACT_PRESET)
                 self.assertEqual(tuple(config.seed_streams.__dict__.values()), seeds)
+
+    def test_stage_one_profiles_change_only_the_named_settings(self):
+        directory = CONFIGS / "profile-standard-1.2.0"
+        variants = {
+            "compact": (),
+            "compact-fast": (("model", "trim_padding", True), ("budgets", "validation_stride", 16)),
+            "compact-w8": (("environment", "workers", 8),),
+            "compact-fast-w8": (("model", "trim_padding", True), ("budgets", "validation_stride", 16),
+                                ("environment", "workers", 8)),
+            "compact-fast-inexact": (("model", "trim_padding", True), ("budgets", "validation_stride", 16),
+                                     ("model", "experimental_trim_compute", True)),
+        }
+        for rows in (16, 64):
+            source = load_plan(directory / f"plan-{rows}-compact.json")
+            for variant, changes in variants.items():
+                with self.subTest(rows=rows, variant=variant):
+                    plan = load_plan(directory / f"plan-{rows}-{variant}.json")
+                    expected_plan = dict(source, template=source["template"].replace("compact", variant),
+                                         baseline_id=source["baseline_id"].replace("compact", variant))
+                    self.assertEqual(plan, expected_plan)
+                    expected = tomllib.loads((ROOT / source["template"]).read_text())
+                    for section, key, value in changes:
+                        expected[section][key] = value
+                    template = ROOT / plan["template"]
+                    self.assertEqual(tomllib.loads(template.read_text()), expected)
+                    experimental = variant.endswith("-inexact")
+                    config = self._load_template(template, allow_experimental_trim_compute=experimental)
+                    self.assertEqual(config.workers, expected["environment"]["workers"])
+                    self.assertEqual(config.rollout_rows, rows)
+                    self.assertIs(config.trim_padding, expected["model"].get("trim_padding"))
+                    self.assertEqual(config.effective_validation_stride,
+                                     expected["budgets"].get("validation_stride", 1))
+                    self.assertIs(config.experimental_trim_compute, True if experimental else None)
+                    if experimental:
+                        exact = self._load_template(directory / f"template-{rows}-compact-fast.toml")
+                        self.assertEqual(config.accepted_identities, exact.accepted_identities)
+                        self.assertNotEqual(config.config_sha256, exact.config_sha256)
+                        with self.assertRaisesRegex(ValueError, "restricted to profile_entry"):
+                            self._load_template(template)
+                        with self.assertRaisesRegex(ValueError, "restricted to profile_entry"):
+                            create_runtime(config, purpose="train")
+                        with self.assertRaisesRegex(ValueError, "baseline plans refuse"):
+                            _refuse_overflowing_preset(template)
+
+    def test_experimental_trim_requires_trim_padding_and_is_outside_stream_identity(self):
+        template = CONFIGS / "profile-standard-1.2.0/template-16-compact-fast-inexact.toml"
+        text = template.read_text()
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "template.toml"
+            path.write_text(text.replace("trim_padding = true", "trim_padding = false"))
+            with self.assertRaisesRegex(ValueError, "requires model.trim_padding"):
+                self._load_template(path, allow_experimental_trim_compute=True)
+
+        document = tomllib.loads(text)
+        document["scenario_stream"] = dict(schema="spire-learn-scenario-stream-v1", recipe_path="recipe.json",
+                                           arm="mixed", shard_index=0, distribution_sha256="a" * 64)
+        experimental = _stable_document(document)
+        del document["model"]["experimental_trim_compute"]
+        self.assertEqual(_stable_document(document), experimental)
 
     def test_recipe_schedule_uses_training_quartiles_in_shard_units(self):
         recipe_path = CONFIGS / "baalorlord-standard-v1/recipe.json"

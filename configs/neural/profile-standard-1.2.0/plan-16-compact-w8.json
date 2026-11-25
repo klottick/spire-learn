@@ -1,0 +1,50 @@
+{
+  "arm": "mixed",
+  "baseline_id": "profile-standard-1.2.0-rows16-compact-w8-20261123",
+  "evaluation": {
+    "action_selection": "deterministic",
+    "case_actions": 256,
+    "case_seconds": 30
+  },
+  "gpu_wait": {
+    "max_total_seconds": 21600,
+    "min_free_bytes": 13958643712,
+    "poll_seconds": 30
+  },
+  "gym_revision": "4d198064b3b568b6f0d08d6e3937d236fbc48e9b",
+  "max_new_output_bytes": 12884901888,
+  "notes": [
+    "Throughput profile only (scripts/neural/profile_entry.py): three Standard stream segments; not a training result",
+    "16 rows x 32 steps on the compact view, preset standard-combat-compact-v1 (the stream's); model, PPO, seeds and segment allowance as profile-standard-1.1.1",
+    "gpu_wait is honoured by profile_entry before each segment (a busy GPU waits, never faults)"
+  ],
+  "qualification": {
+    "max_environment_actions": 512,
+    "max_updates": 1
+  },
+  "qualifications": [
+    "RNG-001",
+    "TIME-001",
+    "standard-standalone Ironclad only",
+    "one replicate",
+    "simulator only; no original-game transfer claim",
+    "timings only; not a training or panel result"
+  ],
+  "recipe": "configs/neural/baalorlord-standard-gym-1.2.0/recipe.json",
+  "retain_near_decisions": [
+    135168,
+    270336
+  ],
+  "runner_timeout_seconds": 37800,
+  "schema": "spire-learn-baseline-plan-v1",
+  "segment": {
+    "max_environment_actions": 4096,
+    "max_updates": 8
+  },
+  "target_learned_decisions": 405504,
+  "template": "configs/neural/profile-standard-1.2.0/template-16-compact-w8.toml",
+  "wall_seconds": {
+    "total": 14400,
+    "training": 12600
+  }
+}

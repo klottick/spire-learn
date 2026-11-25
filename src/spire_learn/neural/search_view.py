@@ -37,6 +37,20 @@ class View:
         return mine - enemy_hp / enemy_max
 
 
+def summary_balance(result, index: int) -> float:
+    """``View.balance`` evaluated on one row of a native playout HP summary.
+
+    Alive enemies are the rows ``enemy_present`` marks; enemy HP is clipped at zero.
+    """
+    present = result['enemy_present'][index]
+    hp, maximum = result['enemy_hp'][index], result['enemy_max_hp'][index]
+    rows = [column for column in range(len(present)) if present[column]]
+    enemy_hp = float(sum(max(int(hp[column]), 0) for column in rows))
+    enemy_max = float(sum(int(maximum[column]) for column in rows)) or 1.0
+    mine = float(max(int(result['player_hp'][index]), 0)) / float(max(int(result['player_max_hp'][index]), 1))
+    return mine - enemy_hp / enemy_max
+
+
 def _native_errors():
     """Gym's typed errors: (unsupported boundary, state, fault)."""
     from spire_lab import _native

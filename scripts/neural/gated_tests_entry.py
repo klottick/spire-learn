@@ -183,6 +183,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--search-one-move": "tests.integration.test_search_one_move_native",
         "--search-teacher": "tests.integration.test_search_teacher_native",
         "--search-teacher-entry": "tests.integration.test_search_teacher_entry_native",
+        "--standard-boss-panel": (
+            "tests.unit.test_standard_boss_panel.PinnedSelectionPanelTests.test_selection_panel_identity_unchanged"
+        ),
         "--padding-trim": "tests.integration.test_padding_trim_native",
         "--sampled-validation": "tests.integration.test_sampled_validation_native",
     }

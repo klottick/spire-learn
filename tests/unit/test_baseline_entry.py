@@ -1089,6 +1089,15 @@ class ReevaluateTests(unittest.TestCase):
                                               "--root", str(ROOT), "--reevaluate", str(prior)])
             self.assertEqual(status, 0)
             self.assertEqual(run_baseline.call_args.kwargs["reevaluate"], prior)
+            self.assertEqual(run_baseline.call_args.kwargs["panel"], "selection")
+            with patch.dict(os.environ, env), \
+                 patch.object(baseline_entry, "run_baseline", return_value=result) as run_baseline:
+                status = baseline_entry.main(["--plan", str(PLAN), "--output", str(output),
+                                              "--root", str(ROOT), "--reevaluate", str(prior),
+                                              "--panel", "boss"])
+            self.assertEqual(status, 0)
+            self.assertEqual(run_baseline.call_args.kwargs["reevaluate"], prior)
+            self.assertEqual(run_baseline.call_args.kwargs["panel"], "boss")
             stderr = io.StringIO()
             with patch.dict(os.environ, env), redirect_stderr(stderr), \
                  patch.object(baseline_entry, "run_baseline", return_value=result) as run_baseline:

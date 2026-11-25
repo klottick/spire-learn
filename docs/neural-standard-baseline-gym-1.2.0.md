@@ -469,3 +469,32 @@ fight processes using compact branches and one worker per search. Within-search
 workers lower the latency of a search at a higher CPU cost. Each configuration
 ran once on a shared host. The measurements characterize simulator workloads
 under RNG-001 and TIME-001.
+
+
+## Boss panel
+
+The boss panel draws 256 Ironclad A20 cases from the selection split. Each of the
+four fuzz levels (0, 1, 2 and 4) contains 40 boss and 24 elite cases, with
+distinct base states and act quotas proportional to availability within each
+room kind. Its own identity seeds case selection and fuzzing. The panel may
+share base states with the primary selection panel.
+
+Validated in the pinned Gym v1.2.0 runtime (controller container check,
+2026-11-25, exit 0, learner unchanged):
+
+| Field | Value |
+| --- | --- |
+| Boss panel SHA-256 | `8533cb6f5d7f7d4cd74dd598718be4781548393ec921c97a49d94344f26ea6ea` |
+| Boss manifest SHA-256 | `69cfd781210f0563b1f1321fd6e38f93be98f698319a82b1f301d9173e822267` |
+| Base states shared with the selection panel | 35 distinct `(run_id, floor)` pairs |
+
+The same check confirmed the selection panel is unchanged: identity
+`2247fe2b…` and manifest `eb4a50d8…`. The boss panel's identity hash was not
+printed by that check and is recorded in each run's provenance. These values
+are for Gym v1.2.0; the v1.2.3 re-pin rebuilds the panel under a new identity.
+
+Use `baseline_entry.py --reevaluate PRIOR --panel boss` with the compatible
+baseline plan to score its recorded checkpoints. The v1.2.0 baseline plans set
+1,024 actions per fight and 500 per turn. Boss re-evaluation uses the overall
+run deadline. Search uses `search_teacher_entry.py --panel boss` with the same
+recipe.

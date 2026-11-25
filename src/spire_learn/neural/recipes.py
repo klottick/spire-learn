@@ -26,7 +26,7 @@ from .scenario_support import json_value, read_json
 from .standard_catalog import Validate, bind_gym
 from .standard_stream import (
     DEFAULT_ALIASES, DEFAULT_ENTRY_RESOURCES, GENERATOR as STANDARD_GENERATOR, PANEL_SCHEMA as STANDARD_PANEL_SCHEMA, StandardRecipe,
-    build_standard_panel, generate_standard_shard, levels_for_shard, load_standard_recipe,
+    build_boss_panel, build_standard_panel, generate_standard_shard, levels_for_shard, load_standard_recipe,
 )
 
 Recipe = ScenarioRecipe | StandardRecipe
@@ -148,12 +148,15 @@ def generate_shard(recipe: Recipe, *, split: str, shard_index: int, arm: str) ->
     return generate_scenario_shard(recipe, split=split, shard_index=shard_index, arm=arm)
 
 
-def build_panel(recipe: Recipe, split: str = "selection") -> Mapping[str, object]:
-    """The evaluation panel: M10's 64-case development panel, or a Standard selection/final panel."""
+def build_panel(recipe: Recipe, split: str = "selection", *, kind: str = "selection") -> Mapping[str, object]:
+    """Build a development, Standard proportional, or Standard boss panel."""
+    if kind not in ("selection", "boss"):
+        raise ValueError(f"unknown panel kind {kind!r}")
     if isinstance(recipe, StandardRecipe):
         # Plain JSON values, like the development panel, so callers can serialize and slice it.
-        return json_value(build_standard_panel(recipe, split, validate=gym_validator("panels", recipe)))
-    if split != "selection":
+        builder = build_boss_panel if kind == "boss" else build_standard_panel
+        return json_value(builder(recipe, split, validate=gym_validator("panels", recipe)))
+    if split != "selection" or kind != "selection":
         raise ValueError("M10 recipes have only the selection development panel")
     from .stream_runner import build_development_panel
     return build_development_panel(recipe)

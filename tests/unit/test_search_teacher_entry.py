@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -298,3 +299,20 @@ class SearchFightParityTests(unittest.TestCase):
         self.vector.close.assert_called_once_with()
         self.vector.reset.assert_not_called()
         self.standalone.public_search.assert_not_called()
+
+
+class BossPanelEntryTest(unittest.TestCase):
+    def test_boss_cli_uses_selection_split_boss_panel(self):
+        revision = entry.GYM_V1_2_0_CONTRACT.source_revision
+        recipe = Mock(spec=entry.StandardRecipe, gym_revision=revision)
+        gym = SimpleNamespace(_native=SimpleNamespace(build_info=lambda: {"revision": revision}))
+        stop = RuntimeError("dispatched panel")
+        output = entry._ROOT / "artifacts" / "unused-boss-test-output"
+        with patch.dict(sys.modules, {"spire_lab": gym}), patch.dict(os.environ, {"SPIRE_LEARN_RUNNER_OUTPUT": ""}), \
+             patch.object(entry, "_teacher", return_value=(None, None, True)), \
+             patch.object(entry, "load_recipe", return_value=recipe), \
+             patch.object(entry, "build_panel", side_effect=stop) as build:
+            with self.assertRaisesRegex(RuntimeError, "dispatched panel"):
+                entry.main(["--recipe", "recipe.json", "--panel", "boss", "--teacher", "current",
+                            "--teachers", "teachers.json", "--seed", "1", "--output", str(output)])
+        build.assert_called_once_with(recipe, "selection", kind="boss")

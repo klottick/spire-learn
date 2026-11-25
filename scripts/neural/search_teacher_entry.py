@@ -292,13 +292,6 @@ def _teacher(path, name, panel):
     return teacher, config_sha256(teacher), calibrated
 
 
-def _panel(recipe, name):
-    # Task 8 can supply another panel builder here.
-    if name == "selection":
-        return build_panel(recipe, "selection")
-    raise ValueError(f"Unknown panel {name!r}")
-
-
 def _run(args, output):
     teacher, teacher_sha, calibrated = _teacher(args.teachers, args.teacher, args.panel)
 
@@ -312,7 +305,7 @@ def _run(args, output):
 
     if args.panel:
         split = "selection"
-        panel = _panel(recipe, args.panel)
+        panel = build_panel(recipe, split, kind=args.panel)
         cases = panel["manifest"]["cases"]
         identity = {key: panel[key] for key in ("panel_identity", "panel_sha256", "manifest_sha256")}
     else:
@@ -385,7 +378,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recipe", type=Path, required=True)
     scope = parser.add_mutually_exclusive_group(required=True)
-    scope.add_argument("--panel", choices=("selection",))
+    scope.add_argument("--panel", choices=("selection", "boss"))
     scope.add_argument("--train-sample", type=_positive, metavar="N")
     parser.add_argument("--teacher", choices=("current", "tree-1x", "tree-3x", "tree-10x"), required=True)
     parser.add_argument("--teachers", type=Path, required=True)

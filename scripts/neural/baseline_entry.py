@@ -137,11 +137,14 @@ def _json(value: object) -> object:
 class _Journal:
     """Append-only progress record; one JSON object per line, flushed per event."""
 
-    def __init__(self, path: Path, clock: Callable[[], float], started: float):
+    def __init__(self, path: Path, clock: Callable[[], float], started: float, *, panel: str | None = None):
         self._path, self._clock, self._started = path, clock, started
+        self._panel = panel
 
     def write(self, event: str, **fields: object) -> None:
         row = {'event': event, 'elapsed_seconds': round(self._clock() - self._started, 3), **fields}
+        if self._panel is not None:
+            row.setdefault('panel', self._panel)
         with self._path.open('a') as stream:
             stream.write(json.dumps(_json(row), sort_keys=True) + '\n')
             stream.flush()
@@ -373,8 +376,12 @@ def load_prior(prior: Path, plan: Mapping, output: Path) -> tuple[dict, str]:
 def run_baseline(root: Path, plan_path: Path, output: Path, *,
                  dependencies: Mapping[str, Callable] | None = None,
                  clock: Callable[[], float] = time.monotonic,
-                 reevaluate: Path | None = None) -> dict:
+                 reevaluate: Path | None = None, panel: str = "selection") -> dict:
     """Train and evaluate; with ``reevaluate``, only evaluate that prior run's checkpoints."""
+    if panel not in ('selection', 'boss'):
+        raise ValueError(f'unknown panel {panel!r}')
+    if panel == 'boss' and reevaluate is None:
+        raise ValueError('--panel boss requires --reevaluate')
     deps = dict(_default_dependencies() if dependencies is None else dependencies)
     root, output = Path(root), Path(output)
     if not root.is_absolute():
@@ -391,7 +398,7 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
     started = clock()
     budget = _Budget(training=started + plan['wall_seconds']['training'],
                      total=started + plan['wall_seconds']['total'])
-    journal = _Journal(output / 'progress.jsonl', clock, started)
+    journal = _Journal(output / 'progress.jsonl', clock, started, panel=panel if panel == 'boss' else None)
     gate = _GpuGate(plan, deps, clock, journal, budget)
     template = root / plan['template']
     _refuse_overflowing_preset(template)
@@ -400,6 +407,8 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
     summary: dict = {'schema': SUMMARY_SCHEMA, 'plan': plan, 'stop_reason': None,
                      'checkpoints': [], 'segments': 0, 'learned_decisions': 0, 'evaluations': {},
                      'result': 'incomplete'}
+    if panel == 'boss':
+        summary['panel'] = panel
     if previous is not None:
         for key in _TRAINING_RECORD:
             if key in previous:
@@ -441,7 +450,7 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
             fresh_path = _reevaluation_preflight(summary, deps, plan, prepare, storage_stop, journal)
         if fresh_path is not None and summary['stop_reason'] in _EVALUABLE_STOPS:
             _evaluate_all(summary, deps, plan, root, template, recipe_path, output, budget, gate, clock,
-                          journal, storage_stop)
+                          journal, storage_stop, panel_kind=panel)
         else:
             summary['evaluation_skipped'] = ('reevaluation_refused' if 'reevaluation_refused' in summary
                                              else summary['stop_reason'])
@@ -509,11 +518,11 @@ def _reevaluation_preflight(summary, deps, plan, prepare, storage_stop, journal)
 
 
 def _evaluate_all(summary, deps, plan, root, template, recipe_path, output, budget, gate, clock,
-                  journal, storage_stop) -> None:
+                  journal, storage_stop, *, panel_kind="selection") -> None:
     """Primary panel for every label, then each additional panel for final and fresh-initial."""
     try:
         _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, clock,
-                  journal, storage_stop)
+                  journal, storage_stop, panel_kind=panel_kind)
     except Exception as error:
         # An evaluation fault never rewrites training results; it is reported, not retried.
         summary['evaluation_fault'] = {'type': type(error).__name__, 'message': str(error)[:2000]}
@@ -522,6 +531,8 @@ def _evaluate_all(summary, deps, plan, root, template, recipe_path, output, budg
             if evaluation.get('status') == 'running':
                 evaluation['status'] = 'fault'  # partial rows kept; panel not complete
     summary['additional_panels'] = {}
+    if panel_kind == 'boss':
+        return
     # Extra panels follow all primary labels and share the same total wall budget.
     for index, (extra_recipe, evaluation) in enumerate(_additional_panels(plan)):
         panel_result = {'evaluations': {}}
@@ -545,11 +556,11 @@ def _result(summary, plan) -> str:
             and 'evaluation_fault' not in summary and 'reevaluation_refused' not in summary
             and all(evaluated.get(row['label'], {}).get('status') == 'complete'
                     for row in summary['checkpoints'])
-            and all(
+            and (summary.get('panel') == 'boss' or all(
                 summary.get('additional_panels', {}).get(recipe, {}).get('evaluations', {})
                 .get(label, {}).get('status') == 'complete'
                 for recipe, _ in _additional_panels(plan)
-                for label in ('final', 'fresh-initial'))
+                for label in ('final', 'fresh-initial')))
             else 'incomplete')
 
 
@@ -702,7 +713,7 @@ def _paired(fresh: Mapping[str, str], final: Mapping[str, str], *, total: int,
 
 def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, clock, journal,
               storage_stop, *, result_container=None, labels=None,
-              panel_id='primary', evaluation=None) -> None:
+              panel_id='primary', evaluation=None, panel_kind='selection') -> None:
     result_container = summary if result_container is None else result_container
     labels = _evaluation_order(plan) if labels is None else labels
     settings = plan['evaluation'] if evaluation is None else evaluation
@@ -713,8 +724,20 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, 
     if recipe_revision is not None and recipe_revision != plan['gym_revision']:
         raise ValueError(f"panel recipe {recipe_path} is for Gym {recipe_revision}, "
                          f"but the plan is for Gym {plan['gym_revision']}")
-    panel = deps['build_panel'](recipe)
-    with (output / 'development-panel.json').open('x') as stream:
+    if panel_kind == 'boss':
+        panel = deps['build_panel'](recipe, 'selection', kind='boss')
+        result_container.update(panel_sha256=panel['panel_sha256'], manifest_sha256=panel['manifest_sha256'])
+        # The runner config requires a finite wall budget. The run's total budget
+        # bounds every boss evaluation without adding a shorter per-case deadline.
+        boss_case_seconds = plan['wall_seconds']['total']
+        settings = {**settings, 'case_seconds': boss_case_seconds}
+        result_container['boss_case_seconds'] = boss_case_seconds
+        panel_id = 'boss'
+        panel_filename = 'boss-panel.json'
+    else:
+        panel = deps['build_panel'](recipe)
+        panel_filename = 'development-panel.json'
+    with (output / panel_filename).open('x') as stream:
         stream.write(json.dumps(_json(panel), sort_keys=True) + '\n')
     rows = _panel_configs(panel, template, output / 'panel', plan, settings)
     labelled = {row['label']: row for row in summary['checkpoints']}
@@ -811,7 +834,10 @@ def main(argv=None) -> int:
     parser.add_argument('--reevaluate', type=Path, metavar='PRIOR_OUTPUT',
                         help='evaluate-only: re-run panel evaluation on a prior run\'s recorded '
                              'checkpoints, writing only to --output')
+    parser.add_argument('--panel', choices=('selection', 'boss'), default='selection')
     arguments = parser.parse_args(argv)
+    if arguments.panel == 'boss' and arguments.reevaluate is None:
+        parser.error('--panel boss requires --reevaluate')
     if not arguments.root.is_absolute():
         print('--root must be an absolute path', file=sys.stderr)
         return 2
@@ -828,7 +854,7 @@ def main(argv=None) -> int:
         print(str(error), file=sys.stderr)
         return 2
     summary = run_baseline(arguments.root, arguments.plan, arguments.output,
-                           reevaluate=arguments.reevaluate)
+                           reevaluate=arguments.reevaluate, panel=arguments.panel)
     print(json.dumps({'result': summary['result'], 'stop_reason': summary['stop_reason'],
                       'learned_decisions': summary['learned_decisions'],
                       'segments': summary['segments']}, sort_keys=True))

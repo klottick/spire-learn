@@ -41,7 +41,8 @@ def _default_dependencies() -> dict[str, Callable]:
                 prepare_stream=partial(prepare_stream, allow_experimental_trim_compute=True),
                 load_config=partial(load_neural_config, allow_experimental_trim_compute=True),
                 create_runtime=partial(create_runtime, allow_experimental_trim_compute=True),
-                train=train, run_stream_segment=run_stream_segment)
+                train=train,
+                run_stream_segment=partial(run_stream_segment, allow_experimental_trim_compute=True))
 
 
 def _gpu_wait(plan: Mapping, config, deps: Mapping, clock: Callable[[], float], profile: dict,

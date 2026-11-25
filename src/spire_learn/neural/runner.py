@@ -424,6 +424,8 @@ def _manifest_projection(
         **({"trim_padding": config.trim_padding} if config.trim_padding is not None else {}),
         **({"validation_stride": config.budgets.validation_stride}
            if config.budgets.validation_stride is not None else {}),
+        **({"experimental_trim_compute": True}
+           if getattr(config, "experimental_trim_compute", None) is True else {}),
         "schema_descriptor_digest": getattr(schema, "descriptor_digest", None),
         "learner_identity": identity_payload(_selected_identity(config)),
         "policy_kind": policy_kind,
@@ -2002,6 +2004,8 @@ class _NeuralTrainingRuntime:
             "policy_kind": "checkpoint",
             "controller_id": self.controller_id,
         }
+        if getattr(self.config, "experimental_trim_compute", None) is True:
+            run_metadata["experimental_trim_compute"] = True
         if self.config.scenario_stream is not None:
             from .stream_resume import stream_checkpoint_state
             if self.stream_transition is not None:
@@ -2157,10 +2161,13 @@ def create_runtime(
     recovery = None
     recovered_progress: dict[str, object] = {}
     load_purpose = None
+    trim_checkpoint_options = (
+        {"experimental_trim_compute": True} if config.experimental_trim_compute is True else {}
+    )
     if checkpoint is not None:
         load_purpose = "resume" if purpose == "resume" else "warm_start" if purpose == "warm_start" else "evaluate"
         preflight = preflight_checkpoint(
-            Path(checkpoint), selected_identity, purpose=load_purpose,
+            Path(checkpoint), selected_identity, purpose=load_purpose, **trim_checkpoint_options,
         )
         if purpose == "resume":
             run_metadata = preflight.metadata.get("run_metadata")
@@ -2183,7 +2190,8 @@ def create_runtime(
 
     if checkpoint is not None:
         assert load_purpose is not None
-        loaded = load_checkpoint(Path(checkpoint), selected_identity, purpose=load_purpose, device="cpu")
+        loaded = load_checkpoint(Path(checkpoint), selected_identity, purpose=load_purpose,
+                                 device="cpu", **trim_checkpoint_options)
         if purpose == "resume":
             loaded_metadata = getattr(loaded, "metadata", None)
             if not isinstance(loaded_metadata, Mapping):

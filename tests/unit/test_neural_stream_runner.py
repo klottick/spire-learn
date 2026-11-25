@@ -58,6 +58,22 @@ class PreparationTests(unittest.TestCase):
                 prepare_stream(RECIPE, Path(temporary) / 'absent', arm='fixed', split='train', shard_index=0)
             self.assertFalse((Path(temporary) / 'absent').exists())
 
+    def test_experimental_trim_refusal_leaves_no_prepared_directory(self):
+        from spire_learn.neural.stream_runner import prepare_stream
+
+        with tempfile.TemporaryDirectory(dir=ARTIFACTS) as temporary:
+            root = Path(temporary)
+            template = root / "template.toml"
+            source = (ROOT / "configs/neural/standalone.toml").read_text()
+            template.write_text(source.replace(
+                "[model]", "[model]\ntrim_padding = true\nexperimental_trim_compute = true",
+            ))
+            destination = root / "prepared"
+            with self.assertRaisesRegex(ValueError, "restricted to profile_entry"):
+                prepare_stream(RECIPE, destination, arm="mixed", split="train",
+                               shard_index=0, template=template)
+            self.assertFalse(destination.exists())
+
     def test_fixed_control_and_selection_configs_use_the_real_loader(self):
         from spire_learn.neural.stream_runner import prepare_stream
         with tempfile.TemporaryDirectory(dir=ARTIFACTS) as temporary:

@@ -312,6 +312,18 @@ def mode_family(mode: str) -> str:
         raise ValueError("mode must be standalone, run, standard-standalone, or standard-run") from None
 
 
+def _validate_experimental_trim_compute(model: Mapping[str, object], *, operation: str,
+                                        allow_experimental_trim_compute: bool) -> None:
+    if "experimental_trim_compute" not in model:
+        return
+    if type(model["experimental_trim_compute"]) is not bool:
+        raise ValueError("model.experimental_trim_compute must be a boolean")
+    if model.get("trim_padding") is not True:
+        raise ValueError("model.experimental_trim_compute requires model.trim_padding = true")
+    if not allow_experimental_trim_compute or operation != "train":
+        raise ValueError("model.experimental_trim_compute is restricted to profile_entry training")
+
+
 def load_neural_config(path: Path, *, allow_experimental_trim_compute: bool = False) -> NeuralConfig:
     """Parse a strict TOML config and its case manifest without runtime side effects."""
     source = Path(path).resolve()
@@ -476,17 +488,12 @@ def load_neural_config(path: Path, *, allow_experimental_trim_compute: bool = Fa
     if isinstance(raw["model"], dict):
         model_fields.update(raw["model"].keys() & {"trim_padding", "experimental_trim_compute"})
     model_raw = dict(_exact_keys(raw["model"], model_fields, "model"))
+    _validate_experimental_trim_compute(model_raw, operation=raw["operation"],
+                                        allow_experimental_trim_compute=allow_experimental_trim_compute)
     trim_padding = model_raw.pop("trim_padding", None)
     if trim_padding is not None and type(trim_padding) is not bool:
         raise ValueError("model.trim_padding must be a boolean")
     experimental_trim_compute = model_raw.pop("experimental_trim_compute", None)
-    if experimental_trim_compute is not None:
-        if type(experimental_trim_compute) is not bool:
-            raise ValueError("model.experimental_trim_compute must be a boolean")
-        if trim_padding is not True:
-            raise ValueError("model.experimental_trim_compute requires model.trim_padding = true")
-        if not allow_experimental_trim_compute or raw["operation"] != "train":
-            raise ValueError("model.experimental_trim_compute is restricted to profile_entry training")
     model = ModelConfig(**model_raw)
 
     ppo_required = {

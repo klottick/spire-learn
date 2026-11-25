@@ -1,4 +1,7 @@
+import json
 import os
+from pathlib import Path
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -160,12 +163,24 @@ class TeacherEntryTests(unittest.TestCase):
         arena.close.assert_called_once()
 
     def test_uncalibrated_tree_is_allowed_only_for_training_sample(self):
-        configs = entry._ROOT / "configs/neural/search-teacher-gym-1.2.0/teachers.json"
-        with self.assertRaisesRegex(ValueError, "uncalibrated"):
-            entry._teacher(configs, "tree-1x", "selection")
-        teacher, digest, calibrated = entry._teacher(configs, "tree-1x", None)
+        real = entry._ROOT / "configs/neural/search-teacher-gym-1.2.0/teachers.json"
+        data = json.loads(real.read_text())
+        data["teachers"]["tree-1x"]["calibrated"] = False
+        with tempfile.TemporaryDirectory() as directory:
+            configs = Path(directory) / "teachers.json"
+            configs.write_text(json.dumps(data))
+            with self.assertRaisesRegex(ValueError, "uncalibrated"):
+                entry._teacher(configs, "tree-1x", "selection")
+            teacher, digest, calibrated = entry._teacher(configs, "tree-1x", None)
         self.assertFalse(calibrated)
         self.assertEqual(digest, entry.config_sha256(teacher))
+
+    def test_committed_tree_teachers_are_calibrated_with_spec_root_visits(self):
+        configs = entry._ROOT / "configs/neural/search-teacher-gym-1.2.0/teachers.json"
+        for name in ("tree-1x", "tree-3x", "tree-10x"):
+            teacher, _, calibrated = entry._teacher(configs, name, "selection")
+            self.assertTrue(calibrated)
+            self.assertEqual(teacher.min_root_visits, 8)
 
     def test_parallel_workers_emit_identical_rows_in_case_order(self):
         jobs = list(range(8))

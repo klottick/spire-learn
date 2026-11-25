@@ -325,6 +325,7 @@ class PerActionTeacherEntryTests(unittest.TestCase):
         configs = entry._ROOT / "configs/neural/search-teacher-gym-1.2.4/teachers.json"
         for name, k in (("tree-1x", 22), ("tree-3x", 66), ("tree-10x", 220)):
             teacher, _, calibrated = entry._teacher(configs, name, None)
-            self.assertFalse(calibrated)
+            self.assertTrue(calibrated)
+            self.assertEqual(teacher.min_root_visits, 8)
             self.assertEqual((teacher.simulations, teacher.simulations_per_action), (None, k))
             self.assertEqual(teacher.decision_simulations(5), 5 * k)

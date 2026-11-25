@@ -3,6 +3,7 @@
   "teachers": {
     "current": {
       "kind": "one-move",
+      "calibrated": false,
       "samples": 32,
       "playout_steps": 80,
       "playout_backend": "native"

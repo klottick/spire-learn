@@ -276,14 +276,29 @@ def _teacher(path, name, panel):
     row = json.loads(path.read_text())["teachers"][name]
     if name == "current":
         current = {"samples": 32, "playout_steps": 80}
-        if row.get("playout_backend") == "native":
-            current["playout_backend"] = "native"
-        if row != {"kind": "one-move", **current}:
+        expected = {"kind": "one-move", **current}
+        extra = {key: row[key] for key in ("calibrated",) if key in row}
+        backend = row.get("playout_backend", "python")
+        if backend not in ("python", "native"):
+            raise ValueError("current playout_backend must be python or native")
+        if backend == "native":
+            current["playout_backend"] = expected["playout_backend"] = "native"
+        elif "playout_backend" in row:
+            expected["playout_backend"] = "python"
+        if extra:
+            expected.update(extra)
+        if row != expected:
             raise ValueError("current must use one-move search with 32 samples and 80 playout steps")
-        identity = {**row, "branch_layout": "compact", "workers": 1}
+        calibrated = row.get("calibrated", True) is True
+        if panel and not calibrated:
+            raise ValueError("current is uncalibrated; use --train-sample during calibration")
+        identity = {key: value for key, value in row.items() if key not in ("calibrated",)}
+        if backend == "python":
+            identity.pop("playout_backend", None)
+        identity.update({"branch_layout": "compact", "workers": 1})
         if "playout_backend" in current:
             identity["playout_rule_id"] = PLAYOUT_RULE_ID
-        return current, content_sha256(identity), True
+        return current, content_sha256(identity), calibrated
     calibrated = row["calibrated"] is True
     if panel and not calibrated:
         raise ValueError(f"{name} is uncalibrated; use --train-sample during calibration")

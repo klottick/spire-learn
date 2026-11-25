@@ -183,8 +183,6 @@ class _PlayoutRefused(Exception):
 
 
 def _native_playout(search, branch, observation, view, config, research_seed, world, n):
-    if not config.playout_steps:
-        return 0.5 * view.balance(observation)
     outcome, = playout_branches(search, [branch], max_steps=config.playout_steps,
                                 stream=playout_seed(research_seed, world, n))
     if outcome.refused:

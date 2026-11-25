@@ -259,13 +259,34 @@ class EntryConfigTests(unittest.TestCase):
             self.assertNotEqual(digest, old_digest)
             backend = config["playout_backend"] if name == "current" else config.playout_backend
             self.assertEqual(backend, "native")
-            self.assertEqual(calibrated, name == "current")
+            self.assertFalse(calibrated)
             self.assertTrue(entry._native_backend(config))
-            if name != "current":
-                with self.assertRaisesRegex(ValueError, "uncalibrated"):
-                    entry._teacher(new, name, "selection")
+            with self.assertRaisesRegex(ValueError, "uncalibrated"):
+                entry._teacher(new, name, "selection")
         for name in ("current", "tree-1x"):
             self.assertFalse(entry._native_backend(entry._teacher(old, name, None)[0]))
+
+    def test_current_calibration_flag_and_explicit_python_backend(self):
+        import tempfile
+        from pathlib import Path
+        from scripts.neural import search_teacher_entry as entry
+
+        def load(row):
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "teachers.json"
+                path.write_text(json.dumps({"teachers": {"current": row}}))
+                return entry._teacher(path, "current", "selection")
+
+        base = {"kind": "one-move", "samples": 32, "playout_steps": 80}
+        implicit = load(base)
+        self.assertTrue(implicit[2])
+        explicit = load({**base, "playout_backend": "python"})
+        self.assertEqual(explicit, implicit)
+        with self.assertRaisesRegex(ValueError, "uncalibrated"):
+            load({**base, "calibrated": False})
+        self.assertTrue(load({**base, "calibrated": True})[2])
+        with self.assertRaises(ValueError):
+            load({**base, "playout_backend": "gpu"})
 
 
 if __name__ == "__main__":

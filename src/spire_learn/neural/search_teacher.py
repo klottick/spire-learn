@@ -22,7 +22,10 @@ _MAX_LIVE_BRANCHES = 128
 
 @dataclass(frozen=True, kw_only=True)
 class TeacherConfig:
-    simulations: int
+    # Exactly one of simulations (fixed per decision) and simulations_per_action
+    # (simulations = simulations_per_action * len(legal)) is set.
+    simulations: int | None = None
+    simulations_per_action: int | None = None
     min_root_visits: int = 8
     worlds: int
     ucb_c: float
@@ -35,14 +38,21 @@ class TeacherConfig:
     playout_backend: str = "python"
 
     def __post_init__(self) -> None:
-        for name in ("simulations", "worlds", "max_depth", "workers"):
+        if (self.simulations is None) == (self.simulations_per_action is None):
+            raise ValueError("Set exactly one of simulations and simulations_per_action")
+        for name in ("simulations", "simulations_per_action", "worlds", "max_depth", "workers"):
             value = getattr(self, name)
+            if value is None and name in ("simulations", "simulations_per_action"):
+                continue
             if type(value) is not int or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
         for name in ("min_root_visits", "playout_steps"):
             value = getattr(self, name)
             if type(value) is not int or value < 0:
                 raise ValueError(f"{name} must be a nonnegative integer")
+        if (self.simulations_per_action is not None
+                and self.simulations_per_action < max(1, self.min_root_visits)):
+            raise ValueError("simulations_per_action cannot cover required root visits")
         if self.worlds > 2**64:
             raise ValueError("worlds cannot exceed the u64 sample space")
         if self.branch_layout not in ("compact", "dense") or self.workers > 256:
@@ -55,6 +65,14 @@ class TeacherConfig:
             scale, exponent = self.widening
             if not isfinite(scale) or scale <= 0 or not 0 <= exponent <= 1:
                 raise ValueError("widening requires a positive finite scale and an exponent in [0, 1]")
+
+    def decision_simulations(self, legal_count: int) -> int:
+        """Simulations for a decision with legal_count legal actions."""
+        if self.simulations_per_action is None:
+            return self.simulations
+        if type(legal_count) is not int or legal_count < 1:
+            raise ValueError("legal_count must be a positive integer")
+        return self.simulations_per_action * legal_count
 
 
 @dataclass(frozen=True)
@@ -69,6 +87,10 @@ class TeacherResult:
 def config_identity(config: TeacherConfig) -> dict:
     """Identity fields of a config. Python teachers keep the pre-native fields, so their hashes hold."""
     fields = asdict(config)
+    if config.simulations_per_action is None:
+        del fields["simulations_per_action"]
+    else:
+        del fields["simulations"]
     if config.playout_backend == "python":
         del fields["playout_backend"]
     else:
@@ -81,21 +103,28 @@ def config_sha256(config: TeacherConfig) -> str:
     return sha256(payload.encode()).hexdigest()
 
 
-def search_options(config: TeacherConfig) -> dict:
-    """Build the arena keyword arguments for the caller's env.public_search call."""
+def search_options(config: TeacherConfig, legal_count: int | None = None) -> dict:
+    """Build the arena keyword arguments for the caller's env.public_search call.
+
+    legal_count is required when the config sizes simulations per legal action.
+    """
+    if config.simulations_per_action is not None and legal_count is None:
+        raise ValueError("legal_count is required with simulations_per_action")
+    simulations = config.decision_simulations(legal_count)
+
     def margin(count):
         return count + (count + 9) // 10
 
     path_steps = config.max_depth + config.playout_steps
-    points = config.simulations * (config.max_depth - 1)
+    points = simulations * (config.max_depth - 1)
     options = {
         "observation": config.branch_layout,
         "workers": config.workers,
         "limits": {
             "max_live_branches": min(_MAX_LIVE_BRANCHES, margin(1 + points)),
-            "max_branches": margin(config.simulations + points),
+            "max_branches": margin(simulations + points),
             "max_steps_per_branch": margin(path_steps),
-            "max_total_steps": margin(config.simulations * path_steps),
+            "max_total_steps": margin(simulations * path_steps),
         },
     }
     if config.branch_layout == "compact":
@@ -281,7 +310,8 @@ def teach(search, legal: Sequence[int], view: View, config: TeacherConfig, *,
     legal = tuple(sorted(legal))
     if not legal or len(set(legal)) != len(legal):
         raise ValueError("Expected a nonempty sequence of distinct legal actions")
-    if config.simulations < len(legal) * max(1, config.min_root_visits):
+    simulations = config.decision_simulations(len(legal))
+    if simulations < len(legal) * max(1, config.min_root_visits):
         raise ValueError("Simulation budget cannot cover required root visits")
 
     unsupported, _, _ = search_view._native_errors()
@@ -290,10 +320,10 @@ def teach(search, legal: Sequence[int], view: View, config: TeacherConfig, *,
     points = OrderedDict()
     available = search.limits()["max_live_branches"] - search.counters()["live_branches"]
     capacity = max(0, min(available, _MAX_LIVE_BRANCHES) - 1)
-    uniform = config.max_depth == 1 and config.simulations == config.worlds * len(legal)
+    uniform = config.max_depth == 1 and simulations == config.worlds * len(legal)
     refused = 0
     try:
-        for index in range(config.simulations):
+        for index in range(simulations):
             world = index % config.worlds
             action = legal[index // config.worlds] if uniform else _select(root, config, root=True)
             path = []
@@ -325,4 +355,4 @@ def teach(search, legal: Sequence[int], view: View, config: TeacherConfig, *,
     stats = {action: ActionStat(data.total / data.visits, data.visits, data.refused)
              for action, data in root.actions.items()}
     choice = max(legal, key=lambda action: stats[action].mean)
-    return TeacherResult(choice, stats, config.simulations, refused, process_time() - start)
+    return TeacherResult(choice, stats, simulations, refused, process_time() - start)

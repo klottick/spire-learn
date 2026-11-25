@@ -85,14 +85,14 @@ class NativePlayoutTests(unittest.TestCase):
                 legal = view.legal(observation)
                 if len(legal) < 2:
                     continue
-                config = TeacherConfig(simulations=3 * len(legal) + 8, min_root_visits=2, worlds=4,
+                config = TeacherConfig(simulations_per_action=4, min_root_visits=2, worlds=4,
                                        ucb_c=1.0, max_depth=3, widening=None, playout_steps=40,
                                        branch_layout="compact", playout_backend="native")
                 research_seed = seed * 1009
                 results = []
                 try:
                     for _ in range(2):
-                        arena = env.public_search(research_seed, **search_options(config))
+                        arena = env.public_search(research_seed, **search_options(config, len(legal)))
                         real_playout = arena.playout_many
 
                         def spy_playout(*args, _real=real_playout, **kwargs):
@@ -118,7 +118,7 @@ class NativePlayoutTests(unittest.TestCase):
                 self.assertEqual(first.choice, second.choice)
                 self.assertEqual(first.refused, second.refused)
                 self.assertEqual(set(first.stats), set(legal))
-                self.assertEqual(sum(stat.visits for stat in first.stats.values()), config.simulations)
+                self.assertEqual(sum(stat.visits for stat in first.stats.values()), 4 * len(legal))
                 for stat in first.stats.values():
                     self.assertGreaterEqual(stat.visits, config.min_root_visits)
                     self.assertTrue(-1 <= stat.mean <= 1)

@@ -228,7 +228,7 @@ class IdentityTests(unittest.TestCase):
     def test_python_hash_is_unchanged_and_native_is_distinct(self):
         python, native = tt.config(), tt.config(playout_backend="native")
         fields = asdict(python)
-        del fields["playout_backend"]
+        del fields["playout_backend"], fields["simulations_per_action"]
         legacy = sha256(json.dumps(fields, sort_keys=True, separators=(",", ":"), allow_nan=False).encode())
         self.assertEqual(teacher.config_sha256(python), legacy.hexdigest())
         self.assertNotEqual(teacher.config_sha256(python), teacher.config_sha256(native))
@@ -287,6 +287,26 @@ class EntryConfigTests(unittest.TestCase):
         self.assertTrue(load({**base, "calibrated": True})[2])
         with self.assertRaises(ValueError):
             load({**base, "playout_backend": "gpu"})
+
+
+class NativePerActionTests(unittest.TestCase):
+    script = staticmethod(TeacherNativeTests.script)
+
+    def setUp(self):
+        self.view = tt.WorldView()
+        patcher = patch.object(teacher.search_view, "_native_errors",
+                               return_value=(tt.Unsupported, ValueError, tt.Fault))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_native_backend_scales_simulations_with_legal_count(self):
+        results = lambda world, call: summary(end_reason="victory", reward=1, terminated=True)
+        search = NativeTeacherSearch(self.script, results)
+        cfg = tt.config(simulations=None, simulations_per_action=8, playout_steps=4, playout_backend="native")
+        result = teacher.teach(search, [0, 1, 2], self.view, cfg, research_seed=17)
+        self.assertEqual(result.simulations, 24)
+        self.assertEqual([stat.visits for stat in result.stats.values()], [8, 8, 8])
+        self.assertEqual(len(search.playouts), 24)
 
 
 if __name__ == "__main__":

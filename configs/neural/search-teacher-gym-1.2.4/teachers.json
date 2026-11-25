@@ -1,5 +1,5 @@
 {
-  "note": "Gym v1.2.4 teachers use native playouts (PublicSearch.playout_many under spire-gym-public-playout-v1). Simulation counts are copied from the Gym v1.2.0 calibration as placeholders and are NOT calibrated for native playouts; Task 3 recalibrates them. Uncalibrated teachers run only with --train-sample.",
+  "note": "Gym v1.2.4 teachers use native playouts (PublicSearch.playout_many under spire-gym-public-playout-v1). Tree budgets are simulations_per_action (simulations = k x legal actions); k = 22, 66 and 220 are placeholders for 1x, 3x and 10x the current teacher and are NOT calibrated for native playouts; Task 3 recalibrates them. Uncalibrated teachers run only with --train-sample.",
   "teachers": {
     "current": {
       "kind": "one-move",
@@ -12,7 +12,7 @@
       "calibrated": false,
       "target_cost_multiple": 1,
       "config": {
-        "simulations": 412,
+        "simulations_per_action": 22,
         "min_root_visits": 8,
         "worlds": 8,
         "ucb_c": 1.0,
@@ -31,7 +31,7 @@
       "calibrated": false,
       "target_cost_multiple": 3,
       "config": {
-        "simulations": 1237,
+        "simulations_per_action": 66,
         "min_root_visits": 8,
         "worlds": 8,
         "ucb_c": 1.0,
@@ -50,7 +50,7 @@
       "calibrated": false,
       "target_cost_multiple": 10,
       "config": {
-        "simulations": 4124,
+        "simulations_per_action": 220,
         "min_root_visits": 8,
         "worlds": 8,
         "ucb_c": 1.0,

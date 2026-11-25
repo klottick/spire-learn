@@ -159,10 +159,10 @@ def _fight_env(case, split):
 
 def _decision(env, observation, legal, view, teacher, rng, research_seed):
     if len(legal) == 1:
-        return "single_legal", legal[0], None, None, 0
+        return "single_legal", legal[0], None, None, 0, None
 
     if isinstance(teacher, TeacherConfig):
-        options = search_options(teacher)
+        options = search_options(teacher, len(legal))
     else:
         width = teacher["samples"] * len(legal)
         depth = teacher["playout_steps"] + 2
@@ -178,14 +178,15 @@ def _decision(env, observation, legal, view, teacher, rng, research_seed):
     try:
         arena = env.public_search(research_seed, **options)
     except (unsupported, state_error) as error:
-        return refusal_class(error), view.heuristic_choice(observation, rng), None, None, 0
+        return refusal_class(error), view.heuristic_choice(observation, rng), None, None, 0, None
 
     try:
         branch_view = View(arena.observation_spec())
         if isinstance(teacher, TeacherConfig):
             result = teach(arena, legal, branch_view, teacher, research_seed=research_seed)
-            choice, stats = result.choice, result.stats
+            choice, stats, simulations = result.choice, result.stats, result.simulations
         else:
+            simulations = teacher["samples"] * len(legal)
             stats = {}
             for group in batched(legal, _CURRENT_ACTION_BATCH):
                 stats.update(one_move_values(arena, group, branch_view, **teacher, research_seed=research_seed))
@@ -194,7 +195,7 @@ def _decision(env, observation, legal, view, teacher, rng, research_seed):
     finally:
         arena.close()
     return ("searched", choice, {str(action): [stat.mean, stat.visits] for action, stat in stats.items()},
-            process_time() - start, sum(stat.refused for stat in stats.values()))
+            process_time() - start, sum(stat.refused for stat in stats.values()), simulations)
 
 
 def _public_turn(observation, turn_column):
@@ -222,13 +223,13 @@ def play_fight(env, case, view, turn_column, teacher, *, research_seed,
         if not legal:
             raise RuntimeError(f"Live fight has no legal action at step {step}")
         seed = (research_seed * max_steps + step) % (1 << 64)
-        root, action, values, cpu_seconds, refusals = _decision(
+        root, action, values, cpu_seconds, refusals, simulations = _decision(
             env, observation, legal, view, teacher, rng, seed)
         observation, reward, done, truncated, info = env.step(action)
         decisions.append({
             "case_id": case["case_id"], "step": step, "action_prefix_length": step,
             "root": root, "values": values, "choice": action, "cpu_seconds": cpu_seconds,
-            "research_seed": seed, "branch_refusals": refusals,
+            "research_seed": seed, "branch_refusals": refusals, "simulations": simulations,
         })
         if truncated:
             raise RuntimeError("Unexpected native Standalone combat truncation")

@@ -126,7 +126,7 @@ class TeacherEntryTests(unittest.TestCase):
                                        "hp_after_cleanup", "cpu_seconds", "wall_seconds"})
         self.assertEqual(set(records[0]), {"case_id", "step", "action_prefix_length", "root",
                                            "values", "choice", "cpu_seconds", "research_seed",
-                                           "branch_refusals"})
+                                           "branch_refusals", "simulations"})
 
     def test_compact_preflight_fails_before_fights_on_capacity_fault(self):
         vector = Mock()
@@ -158,6 +158,7 @@ class TeacherEntryTests(unittest.TestCase):
         self.assertEqual(row["values"], {"0": [0.5, 32], "1": [1.0, 32]})
         self.assertGreater(row["cpu_seconds"], 0)
         self.assertEqual(row["branch_refusals"], 3)
+        self.assertEqual(row["simulations"], 64)
         self.assertEqual(search.call_args.kwargs["research_seed"], row["research_seed"])
         self.assertEqual(fight.public_search.call_args.kwargs["workers"], 1)
         self.assertEqual(fight.public_search.call_args.kwargs["capacity_preset"],
@@ -317,3 +318,13 @@ class BossPanelEntryTest(unittest.TestCase):
                 entry.main(["--recipe", "recipe.json", "--panel", "boss", "--teacher", "current",
                             "--teachers", "teachers.json", "--seed", "1", "--output", str(output)])
         build.assert_called_once_with(recipe, "selection", kind="boss")
+
+
+class PerActionTeacherEntryTests(unittest.TestCase):
+    def test_gym_1_2_4_tree_teachers_use_per_action_budgets(self):
+        configs = entry._ROOT / "configs/neural/search-teacher-gym-1.2.4/teachers.json"
+        for name, k in (("tree-1x", 22), ("tree-3x", 66), ("tree-10x", 220)):
+            teacher, _, calibrated = entry._teacher(configs, name, None)
+            self.assertFalse(calibrated)
+            self.assertEqual((teacher.simulations, teacher.simulations_per_action), (None, k))
+            self.assertEqual(teacher.decision_simulations(5), 5 * k)

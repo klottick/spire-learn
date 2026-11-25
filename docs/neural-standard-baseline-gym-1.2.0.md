@@ -427,3 +427,45 @@ r1 trained without the cap, so stalling in r1's training cannot be measured from
 ### Series separation
 
 The v1.2.0 and v1.1.1 series are separate and are not paired. The cases, panel and rules differ (the Standard rules version and the turn cap), so differences between the series cannot be read as a Gym-release effect. For orientation only, the v1.1.1 finals were 186 (r1) and 181 (r2) wins of 256 on their own panel, against 166 and 168 here. Gym v1.2.1 now exists and changes the rules id, so adopting it would be a later re-pin with its own baselines.
+
+## Search reference cost
+
+All four batched runs reproduced **221 of 256 wins** on the v1.2.0 selection
+panel, with 5,977 searched decisions per run. Each used 32 samples per action,
+80 playout steps, a 1,200-step fight cap, seed 20261117 and a four-CPU allocation.
+The compact branches used `standard-combat-compact-v1`. The native parity
+test also matched the dense sequential values bit for bit on 200 training-split
+roots across the four characters, using both layouts and both worker counts.
+
+| Branch layout | Workers | Wins | CPU s per searched decision | Wall s per searched decision | `step_many` wall share | `step_many` calls |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Dense | 1 | 221/256 | 1.034 | 1.034 | 89.8% | 207,964 |
+| Dense | 4 | 221/256 | 1.163 | 0.682 | 83.2% | 207,964 |
+| Compact | 1 | 221/256 | 0.821 | 0.822 | 90.4% | 207,964 |
+| Compact | 4 | 221/256 | 0.924 | 0.524 | 84.6% | 207,964 |
+
+CPU and wall times are sums from individual searched decisions divided by
+5,977. The wall share divides total time inside the `step_many` facade by
+total searched-decision wall time. The earlier sequential run took 4,046 s
+wall for 5,977 searched decisions in one process, about **0.68 s per searched
+decision**, including the rest of the run. Sequential CPU time per decision
+was not measured directly. If that run was single-threaded, its 0.68 s wall is
+also a ceiling on its CPU per decision, below every batched configuration
+(compact with one worker is 0.82 s). On wall time, dense with four workers
+(0.682 s) only matches the sequential run; only compact with four workers
+(0.524 s) beats it.
+
+Compact cuts CPU by about 20% at either worker count, and wall time by 20% with one worker and 23% with four. Four
+workers use about 12–13% more CPU per decision while cutting wall time by
+34–36%. About 83–90% of searched-decision wall time falls inside
+`step_many`. The savings from the smaller observations at the same call count
+show that the observation-size-dependent part of that time is large (about
+a fifth of the total); how the remainder splits between native stepping and
+Python round trips is not measured. The inclusive spans do not separate
+encoding, native stepping and Python work.
+
+For CPU-bound labelling across many cores, these results favor independent
+fight processes using compact branches and one worker per search. Within-search
+workers lower the latency of a search at a higher CPU cost. Each configuration
+ran once on a shared host. The measurements characterize simulator workloads
+under RNG-001 and TIME-001.

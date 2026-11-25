@@ -23,6 +23,10 @@ if __package__ in (None, ''):
     _repo = Path(__file__).resolve().parents[2]
     sys.path[:0] = [str(_repo / 'src'), str(_repo)]
 
+from spire_learn.neural import search_view
+from spire_learn.neural.search_one_move import one_move_values
+from spire_learn.neural.search_view import View, refusal_class
+
 _ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = 'spire-learn-boss-winnability-v1'
 PLAYERS = ('random', 'heuristic', 'search')
@@ -67,70 +71,25 @@ def select_scenarios(recipe_path: Path, *, shards: range, tiers: set[str], per_t
 
 # ---------------------------------------------------------------- policies
 
-class View:
-    """Column lookups in the Standard combat view, resolved once from the descriptor."""
-
-    def __init__(self, descriptor: dict):
-        tensors = {tensor['key']: tensor for tensor in descriptor['tensors']}
-        def column(key, field):
-            return [c['field'] for c in tensors[key]['columns']].index(field)
-        self.player_hp, self.player_max = column('player', 'hp'), column('player', 'max_hp')
-        self.enemy_hp, self.enemy_max = column('enemies', 'hp'), column('enemies', 'max_hp')
-        self.verb = column('actions', 'verb')
-        verbs = descriptor['vocabularies']['verb']
-        self.end_turn, self.discard = verbs.index('end_turn'), verbs.index('discard_potion')
-
-    def legal(self, observation) -> list[int]:
-        return [int(i) for i in observation['action_mask'].nonzero()[0]]
-
-    def heuristic_choice(self, observation, rng: random.Random) -> int:
-        legal = self.legal(observation)
-        verbs = observation['actions'][legal, self.verb]
-        preferred = [i for i, v in zip(legal, verbs) if v not in (self.end_turn, self.discard)]
-        return rng.choice(preferred or legal)
-
-    def balance(self, observation) -> float:
-        """HP balance in [-1, 1]: player HP fraction minus remaining enemy HP fraction."""
-        player = observation['player']
-        enemies = observation['enemies']
-        alive = enemies[:, self.enemy_max] > 0
-        enemy_hp = float(enemies[alive, self.enemy_hp].clip(min=0).sum())
-        enemy_max = float(enemies[alive, self.enemy_max].sum()) or 1.0
-        mine = float(max(player[self.player_hp], 0)) / float(max(player[self.player_max], 1))
-        return mine - enemy_hp / enemy_max
-
-
-def _native_errors():
-    """Gym's typed errors: (unsupported boundary, state, fault)."""
-    from spire_lab import _native
-    return _native.RunUnsupportedBoundaryError, _native.RunStateError, _native.RunFaultError
-
-
-def refusal_class(error: Exception) -> str:
-    """The class of a root refusal: the Gym's reason text (it names a class of reason, never a value).
-
-    A refusal that is not an ``UnsupportedBoundary`` (a state error) is prefixed ``state: ``.
-    """
-    unsupported, _, _ = _native_errors()
-    text = str(error)[:80]
-    return text if isinstance(error, unsupported) else f'state: {text}'
-
-
 def search_choice(env, view: View, observation, *, samples: int, playout_steps: int,
-                  rng: random.Random, research_seed: int, stats: Counter, roots: Counter | None = None) -> int:
+                  rng: random.Random, research_seed: int, stats: Counter, roots: Counter | None = None,
+                  workers: int = 1, branch_layout: str = "dense", timing: dict | None = None) -> int:
     """Pick the legal action with the best mean playout value over shared sampled worlds.
 
     ``roots``, when given, tallies the root outcome of every decision: ``searched``, ``single_legal``
     (no root is taken) or the refusal class of an unavailable root.
     """
-    unsupported, state_error, fault = _native_errors()
+    unsupported, state_error, fault = search_view._native_errors()
     legal = view.legal(observation)
     if len(legal) == 1:
         if roots is not None:
             roots['single_legal'] += 1
         return legal[0]
+    options = {'workers': workers} if workers != 1 else {}
+    if branch_layout == 'compact':
+        options.update(observation='compact', capacity_preset='standard-combat-compact-v1')
     try:
-        search = env.public_search(research_seed, limits={
+        search = env.public_search(research_seed, **options, limits={
             'max_live_branches': samples * len(legal) + 8, 'max_branches': samples * len(legal) + 8,
             'max_steps_per_branch': playout_steps + 2, 'max_total_steps': samples * len(legal) * (playout_steps + 2)})
     except (unsupported, state_error) as error:
@@ -142,52 +101,50 @@ def search_choice(env, view: View, observation, *, samples: int, playout_steps: 
     if roots is not None:
         roots['searched'] += 1
     try:
-        values = {}
-        for action in legal:
-            total = 0.0
-            for sample in range(samples):
-                # Common random numbers: sample k is the same world and the same playout
-                # stream for every action, so actions differ only by the action itself.
-                branch = search.branch(sample)
-                playout_rng = random.Random(research_seed * 1_000_003 + sample)
-                try:
-                    total += _playout(branch, action, view, playout_steps, playout_rng)
-                except unsupported:
-                    stats['branch_refused'] += 1
-                    total -= 1.0
-                except fault:
-                    stats['branch_fault'] += 1
-                    raise
-                finally:
-                    try:
-                        branch.close()
-                    except Exception:
-                        pass
-            values[action] = total / samples
+        branch_policy_view = View(search.observation_spec()) if branch_layout == 'compact' else view
+        dispatch = _TimedSearch(search, timing) if timing is not None else search
+        try:
+            stats_by_action = one_move_values(dispatch, legal, branch_policy_view, samples=samples,
+                                              playout_steps=playout_steps, research_seed=research_seed)
+        except fault:
+            stats['branch_fault'] += 1
+            raise
+        # Refusal totals cover completed searches. A fault aborts the decision before its tally is available.
+        refused = sum(item.refused for item in stats_by_action.values())
+        if refused:
+            stats['branch_refused'] += refused
         stats['searched_decisions'] += 1
-        best = max(values.values())
-        return rng.choice([action for action, value in values.items() if value == best])
+        best = max(item.mean for item in stats_by_action.values())
+        return rng.choice([action for action, item in stats_by_action.items() if item.mean == best])
     finally:
         search.close()
 
 
-def _playout(branch, action: int, view: View, steps: int, rng: random.Random) -> float:
-    observation, reward, terminated, truncated, _ = branch.step(action, view='full')
-    for _ in range(steps):
-        if terminated or truncated:
-            break
-        observation, reward, terminated, truncated, _ = branch.step(
-            view.heuristic_choice(observation, rng), view='full')
-    if terminated:
-        return float(reward)  # +1 victory, -1 death, 0 escape
-    return 0.5 * view.balance(observation)
+class _TimedSearch:
+    def __init__(self, search, timing: dict):
+        self.search = search
+        self.timing = timing
+        timing.update(step_many_calls=0, step_many_wall_seconds=0.0, step_many_cpu_seconds=0.0)
+
+    def branch(self, sample):
+        return self.search.branch(sample)
+
+    def step_many(self, branches, actions, *, view):
+        wall, cpu = time.perf_counter(), time.process_time()
+        try:
+            return self.search.step_many(branches, actions, view=view)
+        finally:
+            self.timing['step_many_cpu_seconds'] += time.process_time() - cpu
+            self.timing['step_many_wall_seconds'] += time.perf_counter() - wall
+            self.timing['step_many_calls'] += 1
 
 
 # ---------------------------------------------------------------- driver
 
 def play(catalog: dict, case: dict, player: str, view: View, *, seed: int, samples: int,
          playout_steps: int, max_steps: int, stats: Counter, roots: Counter | None = None,
-         records: list | None = None) -> dict:
+         records: list | None = None, workers: int = 1, branch_layout: str = 'dense',
+         measure_search: bool = False) -> dict:
     from spire_lab.gymnasium import StandardCombatEnv
     env = StandardCombatEnv(catalog)
     rng = random.Random(seed)
@@ -201,13 +158,25 @@ def play(catalog: dict, case: dict, player: str, view: View, *, seed: int, sampl
                 action = view.heuristic_choice(observation, rng)
             else:
                 decision_roots = Counter() if records is not None else roots
+                timing = {} if measure_search else None
+                if timing is not None:
+                    wall, cpu = time.perf_counter(), time.process_time()
                 action = search_choice(env, view, observation, samples=samples, playout_steps=playout_steps,
-                                       rng=rng, research_seed=seed * 1009 + step, stats=stats, roots=decision_roots)
+                                       rng=rng, research_seed=seed * 1009 + step, stats=stats, roots=decision_roots,
+                                       workers=workers, branch_layout=branch_layout, timing=timing)
+                if timing:
+                    timing['cpu_seconds'] = time.process_time() - cpu
+                    timing['wall_seconds'] = time.perf_counter() - wall
+                    for clock in ('cpu', 'wall'):
+                        timing[f'other_{clock}_seconds'] = timing[f'{clock}_seconds'] - timing[f'step_many_{clock}_seconds']
                 if records is not None:
                     (outcome,) = decision_roots
                     if roots is not None:
                         roots.update(decision_roots)
-                    records.append({'step': step, 'root_outcome': outcome})
+                    record = {'step': step, 'root_outcome': outcome}
+                    if timing:
+                        record['search_timing'] = timing
+                    records.append(record)
             observation, reward, terminated, truncated, info = env.step(action)
             if terminated or truncated:
                 return {'outcome': info.get('outcome') or ('victory' if reward > 0 else 'death' if reward < 0 else 'escaped'),
@@ -321,8 +290,30 @@ def _build_standard_panel(recipe_path: Path, split: str = 'selection') -> dict:
     return build_panel(load_recipe(recipe_path), split)
 
 
+def _search_measurement_provenance(recipe: Path, descriptor: dict, branch_layout: str) -> dict:
+    from hashlib import sha256
+
+    from spire_lab import _native
+    from spire_learn.neural.gym_contracts import GYM_V1_2_0_CONTRACT, STANDARD_COMPACT_PRESET
+
+    data = recipe.read_bytes()
+    return {
+        'gym_build': dict(_native.build_info()),
+        'recipe_sha256': sha256(data).hexdigest(),
+        'states_table_sha256': json.loads(data)['states_table']['sha256'],
+        'live_observation_fingerprint': descriptor['fingerprint'],
+        'branch_observation_fingerprint': (
+            GYM_V1_2_0_CONTRACT.standard_compact_fingerprints[STANDARD_COMPACT_PRESET]
+            if branch_layout == 'compact' else descriptor['fingerprint']),
+        'profile': descriptor['profile_id'],
+        'terminal_rewards': {'victory': 1.0, 'death': -1.0, 'escape': 0.0},
+        'nonterminal_value': 'half_hp_balance',
+    }
+
+
 def standard_panel_winnability(output: Path, *, recipe: Path, samples: int, playout_steps: int, max_steps: int,
-                               seed: int, limit: int | None) -> dict:
+                               seed: int, limit: int | None, workers: int = 1,
+                               branch_layout: str = 'dense', measure_search: bool = False) -> dict:
     """Search-only play of a Standard selection panel's entries, passed to Gym as they are.
 
     ``limit`` plays an evenly strided subset (a pilot). Rows carry run id and floor for local joins only.
@@ -335,11 +326,13 @@ def standard_panel_winnability(output: Path, *, recipe: Path, samples: int, play
     if limit is not None:
         cases = cases[::max(1, len(cases) // limit)][:limit]
     catalog = _catalog(cases, native=True)
-    view, _ = _view_for(catalog)
+    view, descriptor = _view_for(catalog)
+    provenance = _search_measurement_provenance(recipe, descriptor, branch_layout) if measure_search else None
     output.mkdir(parents=True, exist_ok=True)
     stats: Counter = Counter()
     by_cell: dict[str, Counter] = defaultdict(Counter)
     by_root: dict[str, Counter] = defaultdict(Counter)
+    timing_totals: Counter = Counter()
     path = output / 'standard_panel.jsonl'
     path.write_text('')
     for index, case in enumerate(cases):
@@ -347,7 +340,13 @@ def standard_panel_winnability(output: Path, *, recipe: Path, samples: int, play
         roots: Counter = Counter()
         records = []
         outcome = play(catalog, case, 'search', view, seed=seed + index, samples=samples,
-                       playout_steps=playout_steps, max_steps=max_steps, stats=stats, roots=roots, records=records)
+                       playout_steps=playout_steps, max_steps=max_steps, stats=stats, roots=roots, records=records,
+                       workers=workers, branch_layout=branch_layout, measure_search=measure_search)
+        if measure_search:
+            for record in records:
+                if 'search_timing' in record:
+                    timing_totals.update(record['search_timing'])
+                    timing_totals['decisions'] += 1
         row = {'case_id': case['case_id'], 'run_id': note['run_id'], 'floor': note['floor'], 'act': note['act'],
                'room_kind': note['room_kind'], 'level': note['level'], 'search': outcome, 'roots': dict(roots), 'root_decisions': records}
         by_cell[f"{note['act']}:{note['room_kind']}:{note['level']}"][outcome['outcome']] += 1
@@ -362,6 +361,23 @@ def standard_panel_winnability(output: Path, *, recipe: Path, samples: int, play
               'search_stats': dict(stats),
               'root_outcomes': {key: dict(value) for key, value in sorted(by_root.items())},
               'by_stratum_level': {key: dict(value) for key, value in sorted(by_cell.items())}}
+    if measure_search:
+        result['search_provenance'] = provenance
+        decisions = timing_totals['decisions']
+        result['search_timing'] = {
+            'branch_layout': branch_layout,
+            'workers': workers,
+            'searched_decisions': decisions,
+            'step_many_calls': timing_totals['step_many_calls'],
+        }
+        for clock in ('cpu', 'wall'):
+            total = timing_totals[f'{clock}_seconds']
+            result['search_timing'][f'{clock}_seconds_per_searched_decision'] = total / decisions if decisions else None
+            for span in ('step_many', 'other'):
+                result['search_timing'][f'{span}_{clock}_share'] = (
+                    timing_totals[f'{span}_{clock}_seconds'] / total if total else None)
+    elif workers != 1 or branch_layout != 'dense':
+        result.update(workers=workers, branch_layout=branch_layout)
     (output / 'standard_panel.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
     return result
 
@@ -401,7 +417,7 @@ def _combat_env(catalog: dict):
 
 def root_outcome(env, research_seed: int) -> str:
     """``root`` if a public root exists at the current decision, else its refusal class. No search is run."""
-    unsupported, state_error, _ = _native_errors()
+    unsupported, state_error, _ = search_view._native_errors()
     try:
         search = env.public_search(research_seed, limits={
             'max_live_branches': 1, 'max_branches': 1, 'max_steps_per_branch': 1, 'max_total_steps': 1})
@@ -594,6 +610,12 @@ def main(argv=None) -> int:
                         help="play the recipe's 64-case development panel with the search player only")
     parser.add_argument('--standard-panel', type=Path, metavar='RECIPE',
                         help="play a Standard recipe's selection panel entries directly with the search player")
+    parser.add_argument('--branch-layout', choices=['dense', 'compact'],
+                        help='branch observation layout for --standard-panel (default: dense)')
+    parser.add_argument('--workers', type=int,
+                        help='Gym search workers for --standard-panel (default: 1)')
+    parser.add_argument('--measure-search', action='store_true',
+                        help='record per-decision wall and CPU timings for --standard-panel')
     parser.add_argument('--limit', type=int, help='with --standard-panel or --root-availability: play only this '
                                                   'many evenly strided cases')
     parser.add_argument('--root-availability', type=Path, metavar='RECIPE',
@@ -607,6 +629,11 @@ def main(argv=None) -> int:
                              "nothing is played")
     parser.add_argument('--trace-tier', help='also write trace.json for the first sampled case of this tier')
     arguments = parser.parse_args(argv)
+    if arguments.standard_panel is None and (
+            arguments.branch_layout is not None or arguments.workers is not None or arguments.measure_search):
+        parser.error('--branch-layout, --workers and --measure-search require --standard-panel')
+    if arguments.workers is not None and not 1 <= arguments.workers <= 256:
+        parser.error('--workers must be in 1..=256')
     if arguments.root_availability is not None and arguments.max_steps is not None:
         parser.error('--max-steps cannot be used with --root-availability')
     max_steps = 600 if arguments.max_steps is None else arguments.max_steps
@@ -634,7 +661,10 @@ def main(argv=None) -> int:
         standard = arguments.standard_panel if arguments.standard_panel.is_absolute() else _ROOT / arguments.standard_panel
         result = standard_panel_winnability(arguments.output, recipe=standard, samples=arguments.samples,
                                             playout_steps=arguments.playout_steps, max_steps=max_steps,
-                                            seed=arguments.seed, limit=arguments.limit)
+                                            seed=arguments.seed, limit=arguments.limit,
+                                            workers=arguments.workers or 1,
+                                            branch_layout=arguments.branch_layout or 'dense',
+                                            measure_search=arguments.measure_search)
         print(json.dumps(result, sort_keys=True))
         return 0
     if arguments.panel:

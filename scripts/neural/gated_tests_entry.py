@@ -180,6 +180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     native_suites = {
         "--standard-turncap": "tests.integration.test_standard_turncap",
+        "--search-one-move": "tests.integration.test_search_one_move_native",
         "--padding-trim": "tests.integration.test_padding_trim_native",
         "--sampled-validation": "tests.integration.test_sampled_validation_native",
     }
@@ -193,7 +194,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         description=__doc__,
-        epilog="Use one of --standard-turncap, --padding-trim, or --sampled-validation alone for a native check.")
+        epilog=f"Use one of {', '.join(native_suites)} alone for a native check.")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--ledger", required=True, type=Path)
     parser.add_argument("--evidence", required=True, type=Path,

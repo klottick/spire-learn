@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build and audit a public-information tree-search teacher on Gym v1.2.0, with a faster training path, a boss panel and gate G1. Then stop at the design's re-pin checkpoint, before any labelling.
+**Goal:** Build a public-information tree-search teacher on Gym v1.2.0 with a faster training path and a boss panel. Re-pin to Gym v1.2.3 after Task 8, audit the teacher and run gate G1 on v1.2.3, then stop before labelling.
 
 **Architecture:**
 - The teacher is a Learn-side Monte Carlo tree search over the Gym's `PublicSearch` sampled worlds. Its nodes are keyed by public view, and it records a per-action value and visit count at the root.
@@ -12,14 +12,14 @@
 
 **Tech Stack:** Python 3.12, PyTorch (already pinned in the runtime profile), the Spire Gym v1.2.0 Python API (`StandardCombatEnv`, `StandardCombatVectorEnv`, `PublicSearch`), `unittest`, and the offline runtime container (`scripts/neural/runtime_container.py`).
 
-**Spec:** `docs/superpowers/specs/2026-11-21-search-distillation-design.md`. This plan covers the spec's Throughput section, Gym feature audit, Part 1 (the teacher) and Part 2 (audit and panels), plus gate G1 and the teacher-selection rule. Parts 3–5 (dataset, students, PPO arm) and gates G2–G4 get their own plans after the re-pin checkpoint, because their inputs depend on its outcome.
+**Spec:** `docs/superpowers/specs/2026-11-21-search-distillation-design.md`. This plan covers the spec's Throughput section, Gym feature audit, Part 1 (the teacher) and Part 2 (audit and panels), plus gate G1 and the teacher-selection rule. Parts 3–5 (dataset, students, PPO arm) and gates G2–G4 get their own plans after the Stage 1 audit.
 
 ## Global Constraints
 
-- Gym v1.2.0: revision `4d198064b3b568b6f0d08d6e3937d236fbc48e9b`, runtime profile `configs/neural/gym-1.2.0/runtime.json`, rules epoch `gym-1.2.0`, Standard rules, Ironclad, ascension 20. The training layout is the compact view, preset `standard-combat-compact-v1`.
+- Tasks 1–8 use Gym v1.2.0: revision `4d198064b3b568b6f0d08d6e3937d236fbc48e9b`, runtime profile `configs/neural/gym-1.2.0/runtime.json`, rules epoch `gym-1.2.0`, Standard rules, Ironclad, ascension 20. The training layout is the compact view, preset `standard-combat-compact-v1`.
 - The search uses only the Gym's `PublicSearch` roots and branches (`env.public_search(...)`, `search.branch(k)`, `branch.step`, `branch.fork`, `search.step_many`). It never uses exact checkpoints, forks of the live session, seeds, records or any other privileged surface. Research seeds and search statistics are labels and provenance, never network inputs.
 - Networks receive only public observations and legal-action masks.
-- Gym faults (`RunFaultError`, `BatchFaultError`, and typed capacity faults) are errors. The fault contract is v1.2.0's: v1.2.2's typed `bound` faults are not adopted and become relevant only at the re-pin checkpoint (adjustment 3 from the Task 1 audit note). Faults are never scored as losses and never silently retried. A branch refusal inside a simulation counts against that simulation and is reported.
+- Gym faults (`RunFaultError`, `BatchFaultError`, and typed capacity faults) are errors. Tasks 1–8 use the v1.2.0 fault contract. The separate re-pin plan establishes the v1.2.3 fault contract for Tasks 9–10. Faults are never scored as losses and never silently retried. A branch refusal inside a simulation counts against that simulation and is reported.
 - Fights cap at 1,024 decisions with no per-case wall-clock cap; a capped fight is censored. The per-turn action budget is `max_turn_actions = 500`: censored in evaluation, truncated in training.
 - Selection-split and final-split states are never labelled for training. The final panel stays unscored.
 - Search constants (the upper-confidence constant, depth limit, progressive widening and world count) are tuned on training-split fights only.
@@ -143,18 +143,19 @@
 
 **Interfaces:**
 - Produces: `View(descriptor: Mapping)` with the same methods as today, and `refusal_class(error: BaseException) -> str`.
-- Produces: `one_move_values(search, legal: Sequence[int], view: View, *, samples: int, playout_steps: int, research_seed: int, workers: int, branch_view: str = "full") -> dict[int, ActionStat]`.
+- Produces: `one_move_values(search, legal: Sequence[int], view: View, *, samples: int, playout_steps: int, research_seed: int, branch_view: str = "full") -> dict[int, ActionStat]`.
   - `ActionStat` is a frozen dataclass with `mean: float`, `visits: int` and `refused: int`.
   - It uses common random numbers: sample `k` is `search.branch(k)`, and its playout RNG is `random.Random(research_seed * 1_000_003 + k)`, exactly as today.
   - It steps all `samples × len(legal)` playouts together through `search.step_many`, one lock-step heuristic move per call.
 - Produces: `boss_winnability.search_choice` now calls `one_move_values`. Its choice and statistics are unchanged.
-- Produces: `step_branches(search, branches, actions, *, view: str, workers: int) -> list[StepOutcome]`, the shared wrapper over `search.step_many` that Task 6 also uses (adjustment 1 from the Task 1 audit note).
+- Produces: `step_branches(search, branches, actions, *, view: str) -> list[StepOutcome]`, the shared wrapper over `search.step_many` that Task 6 also uses (adjustment 1 from the Task 1 audit note).
+  - Gym sets the worker count when the caller opens the arena.
   - If the whole call is refused for an unsupported boundary, the Gym names no entry. The wrapper then re-issues each entry with `branch.step` to find which entries are refused. Each refused entry is a per-branch refusal, scored −1 for its simulation and reported.
   - Any other whole-call preflight error (`RunInputError`, `RunStateError` or `RunBudgetError`) is a Learn defect and raises.
   - A per-entry fault in the results raises after every handle is closed. Its zero-filled row is never read as an observation.
 
 - [ ] **Step 1: Write the failing tests:**
-  - `test_batched_values_equal_sequential_values`. With a fake `PublicSearch` with deterministic scripted worlds, assert `one_move_values` equals the current sequential per-action means exactly, for both `workers=1` and `workers=4`.
+  - `test_batched_values_equal_sequential_values`. With a fake `PublicSearch` with deterministic scripted worlds, assert `one_move_values` equals the sequential per-action means exactly. The native parity test covers both worker counts.
   - `test_branch_refusal_counts_minus_one_and_is_reported`.
   - `test_fault_in_one_branch_raises_and_closes_all_handles`. The fake records `close()` calls; assert that every branch and the search are closed.
   - `test_whole_call_unsupported_refusal_is_attributed_per_entry`. The fake `step_many` refuses the whole call; assert the wrapper re-steps entries one by one, scores only the refusing entry −1, and reports one refusal.
@@ -187,7 +188,7 @@
   - `max_depth: int`;
   - `widening: tuple[float, float] | None`;
   - `playout_steps: int = 80`;
-  - `branch_view: str = "full"`;
+  - `branch_layout: str = "compact"`, selecting the search-arena layout with preset `standard-combat-compact-v1` (named as in `boss_winnability.py --branch-layout`; distinct from the per-step `view` argument). Branch steps request `view="full"` to supply the heuristic with action rows;
   - `workers: int = 1`.
 
   `config_sha256(TeacherConfig) -> str` is its provenance hash.
@@ -203,9 +204,10 @@
   - Selection uses UCB1 with constant `ucb_c`. Expansion is one node per simulation, up to `max_depth`. The leaf value is the heuristic playout value (terminal reward, else `0.5 * view.balance`) with `playout_steps`.
   - Every legal root action gets at least `min_root_visits` simulations before UCB selection at the root. Successive halving over the remaining root budget is allowed.
   - The root choice is the highest mean, with ties broken by the lowest action index, so the choice is deterministic.
-  - Re-descending a node reached in a branch uses `branch.fork()` from the deepest stored fork point, or a fresh `branch(k)` replay. The builder chooses; either way it uses public calls only.
+  - Re-descending a node reached in a branch uses `branch.fork()` from the deepest stored fork point, or a fresh `branch(k)` replay. Use the cheaper method from the pre-implementation measurement. Both methods use public calls only.
   - `PublicSearch` limits are sized from `config` with a 10% margin. A `RunBudgetError` raises.
 
+- [ ] **Before tree descent implementation, measure the best case first (user rule, 2026-11-25).** On 50 real training-split roots using compact branches and one worker, measure CPU cost per simulation for `fork()` from a stored node and for creating `branch(k)` and re-stepping the same public action prefix. Compare equivalent node positions and record the costs and the cheaper method in the task report. Implement tree descent with that method. Run labelling fights in parallel processes, with one worker per search by default.
 - [ ] **Step 1: Write the failing tests** with a fake search whose worlds are scripted:
   - `test_same_public_view_from_two_worlds_shares_a_node`. Two worlds differ in a hidden draw but produce identical observations after action 0. Assert one child node with visits from both worlds.
   - `test_different_public_views_never_share_a_node`.
@@ -260,11 +262,11 @@
   - `test_train_sample_uses_train_split_only`. Every sampled state's run is a train run, per `boss_winnability._is_train`.
   - `test_outputs_have_no_hidden_state`. The JSON keys come from an allow-list.
 - [ ] **Step 2: Run them to verify they fail,** then implement, then run them to verify they pass. Commit `feat: search teacher fight entry`.
-- [ ] **Step 3: Measure the cost unit (controller).** Run `current` on `--train-sample 200` with the Task 5 best layout and workers. Record the mean CPU seconds per searched decision. That is the 1× budget.
-- [ ] **Step 4: Calibrate and tune (controller).**
-  - On `--train-sample 200`, with a different sample seed from Step 3, tune `ucb_c`, `max_depth`, `widening` and `worlds` for the 3× tree. Use a small grid: `ucb_c` in {0.5, 1.0, 2.0} and `max_depth` in {2, 4, 8}. Score each by train-sample wins.
-  - Then set each tree config's `simulations` so its mean CPU per searched decision is within ±15% of 1×, 3× and 10× the cost unit.
-  - Record the grid and the chosen values in `teachers.json` with a `"tuned_on": "train-sample-200 seed …"` note.
+- [ ] **Step 3: Measure the cost unit (controller).** Run `current` on `--train-sample 200` using compact branches (`standard-combat-compact-v1`) and one worker. Record the mean CPU seconds per searched decision. That is the 1× budget.
+- [ ] **Step 4: Calibrate and tune (controller, user ruling 2026-11-25).**
+  - On `--train-sample 100`, with a different sample seed from Step 3, score the four combinations of `ucb_c` in {1.0, 2.0} and `max_depth` in {4, 8} by train-sample wins for the 3× tree. Hold widening and world count fixed across the grid.
+  - Calibrate each tree config on 100 training-split cases too. Set `simulations` so its mean CPU per searched decision is within ±15% of 1×, 3× and 10× the cost unit. The smaller grid and sample reach G1 sooner.
+  - Record the grid and the chosen values in `teachers.json` with a `"tuned_on": "train-sample-100 seed …"` note.
   - Commit `configs: calibrated search teacher budgets`, after the runs end.
 
 ### Task 8: Boss panel
@@ -293,16 +295,23 @@
 - [ ] **Step 3: Build the panel (controller).** Build it in the container against the live Gym validator, and record its identity and manifest hash in `docs/neural-standard-baseline-gym-1.2.0.md` under "Boss panel". Say whether its cases share base states with the selection panel, and how many.
 - [ ] **Step 4: Commit.** `feat: Standard boss panel and boss-panel re-evaluation`
 
+### Gym v1.2.3 re-pin between Tasks 8 and 9
+
+The user ruled on 2026-11-25 to re-pin to Gym v1.2.3 after Task 8. The re-pin
+gets its own plan, including how to qualify the runtime and establish the
+compatible PPO checkpoints, search reference, recipes and panels. Run Tasks
+9–10 on the v1.2.3 pins established by that plan.
+
 ### Task 9: Teacher and baseline runs on both panels (controller)
 
 **Files:**
-- No code. Run outputs go under `artifacts/development/neural-combat/runs/gym-1.2.0/teacher/`.
+- No code. Run outputs go under `artifacts/development/neural-combat/runs/gym-1.2.3/teacher/`.
 
 **Interfaces:**
 - Consumes: Tasks 7 and 8.
 - Produces: `fights.jsonl`, `decisions.jsonl` and `summary.json` for:
   - teachers `current`, `tree-1x`, `tree-3x` and `tree-10x` on the selection panel and the boss panel;
-  - the PPO baselines r1 and r2, re-evaluated on the boss panel. `--reevaluate` reads r1's checkpoints from its training output `standard-baseline` and r2's from `standard-baseline-r2`, under the v1.2.0 plans with the turn cap.
+  - the PPO baselines r1 and r2, re-evaluated on the boss panel using the v1.2.3 plans and compatible checkpoints established by the re-pin. Keep the turn cap.
 
 - [ ] **Step 1: Launch the runs.** Run all ten as one detached chain: `setsid nohup`, at most 24 cores in total, `nice`, and `gpu_wait` for the PPO evaluations. Each run starts only if the previous one exits 0 with `learner_changed` false. The repo is untouched until the chain ends.
 - [ ] **Step 2: Check each output.**
@@ -315,7 +324,7 @@
 
 **Files:**
 - Create: `scripts/neural/teacher_audit.py`.
-- Create: `docs/neural-search-teacher-gym-1.2.0.md`.
+- Create: `docs/neural-search-teacher-gym-1.2.3.md`.
 - Test: `tests/unit/test_teacher_audit.py`.
 
 **Interfaces:**
@@ -344,7 +353,7 @@
   - `test_audit_sample_is_selection_split_and_deterministic`.
 - [ ] **Step 2: Run them to verify they fail,** then implement, then run them to verify they pass. Commit `feat: teacher audit and gate G1`.
 - [ ] **Step 3: Run the consistency audit (controller),** in the container on the `tree-3x` selection decisions.
-- [ ] **Step 4: Write `docs/neural-search-teacher-gym-1.2.0.md`.** It contains:
+- [ ] **Step 4: Write `docs/neural-search-teacher-gym-1.2.3.md`.** It contains:
   - each teacher's config and calibration;
   - the strength-against-budget table for both panels, with PPO r1 and r2 and Baalorlord's level-0 outcomes on the boss panel;
   - the self-consistency ceiling;
@@ -354,11 +363,5 @@
   - the chosen teacher;
   - the note that differences below about 4–5 points read as no difference.
 
-  Aggregates only. Commit `docs: search teacher audit and gate G1 on Gym v1.2.0`.
-- [ ] **Step 5: Stop at the re-pin checkpoint (controller).** Report to the user:
-  - the stop-rule result;
-  - G1;
-  - the chosen teacher;
-  - whether to adopt Gym v1.2.2 before labelling. Adopting it means re-running the two PPO baselines and the search reference first.
-
-  The plan for Parts 3–5 (dataset, students, PPO arm, gates G2–G4) is written after this decision.
+  Aggregates only. Commit `docs: search teacher audit and gate G1 on Gym v1.2.3`.
+- [ ] **Step 5: Report the results and stop (controller).** Report the stop-rule result, G1 and the chosen teacher to the user. Then stop for the Parts 3–5 plan (dataset, students, PPO arm, gates G2–G4).

@@ -318,3 +318,62 @@ class SearchTeacherTests(unittest.TestCase):
         self.assertEqual(options["workers"], 1)
         self.assertEqual(options["limits"]["max_total_steps"], 18)
         self.assertNotEqual(teacher.config_sha256(cfg), teacher.config_sha256(config(workers=2)))
+
+
+class PerActionBudgetTests(unittest.TestCase):
+    def setUp(self):
+        self.view = WorldView()
+        patcher = patch.object(teacher.search_view, "_native_errors", return_value=(Unsupported, ValueError, Fault))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def per_action(**overrides):
+        return config(**{"simulations": None, "simulations_per_action": 4, **overrides})
+
+    def test_simulations_equal_k_times_legal(self):
+        for width in (2, 5):
+            search = Search(finish, width)
+            result = teacher.teach(search, self.view.legal(search.root), self.view, self.per_action(),
+                                   research_seed=17)
+            self.assertEqual(result.simulations, 4 * width)
+            self.assertEqual(sum(stat.visits for stat in result.stats.values()), 4 * width)
+
+    def test_root_quota_holds_at_k8_with_wide_decision(self):
+        search = Search(finish, 20)
+        cfg = self.per_action(min_root_visits=8, simulations_per_action=8)
+        result = teacher.teach(search, self.view.legal(search.root), self.view, cfg, research_seed=3)
+        self.assertEqual([stat.visits for stat in result.stats.values()], [8] * 20)
+        self.assertEqual(result.simulations, 160)
+
+    def test_absent_field_keeps_hashes_and_identity(self):
+        cfg = teacher.TeacherConfig(
+            simulations=1237, min_root_visits=8, worlds=8, ucb_c=1.0, max_depth=4, widening=(2.0, 0.5),
+            playout_steps=80, branch_layout="compact", workers=1)
+        self.assertEqual(teacher.config_sha256(cfg),
+                         "16fc490aee64513ecc8937ac3b1511ac024fe0fdf0cd3f6b20533ce7add57de6")
+        self.assertNotIn("simulations_per_action", teacher.config_identity(cfg))
+        identity = teacher.config_identity(self.per_action())
+        self.assertEqual(identity["simulations_per_action"], 4)
+        self.assertNotIn("simulations", identity)
+        self.assertNotEqual(teacher.config_sha256(self.per_action()),
+                            teacher.config_sha256(self.per_action(simulations_per_action=5)))
+
+    def test_invalid_budget_fields_are_refused(self):
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            config(simulations_per_action=4)
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            config(simulations=None)
+        with self.assertRaisesRegex(ValueError, "root visits"):
+            self.per_action(min_root_visits=8)
+        with self.assertRaises(ValueError):
+            self.per_action(simulations_per_action=0)
+
+    def test_search_options_size_limits_from_decision_simulations(self):
+        cfg = self.per_action()
+        with self.assertRaises(ValueError):
+            teacher.search_options(cfg)
+        fixed = teacher.search_options(config(simulations=12))
+        self.assertEqual(teacher.search_options(cfg, 3), fixed)
+        self.assertGreater(teacher.search_options(cfg, 6)["limits"]["max_total_steps"],
+                           fixed["limits"]["max_total_steps"])

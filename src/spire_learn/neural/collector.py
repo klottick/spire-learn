@@ -884,9 +884,11 @@ class Collector:
         operation_slots = 0
         known = 0
         uncertain = 0
+        bound = ()
         phase = self._phase
         if isinstance(error, DriverFault) and evidence is not None:
             phase = evidence.phase
+            bound = getattr(evidence, "bound", ())
             operation_slots = min(self._batch_size, max(0, evidence.operation_slots))
             known = min(operation_slots, max(0, evidence.known_current_delivery_slots))
             uncertain = min(operation_slots, max(0, evidence.uncertain_current_slots))
@@ -905,6 +907,7 @@ class Collector:
             operation_slots=operation_slots,
             known_accepted_slots=known,
             uncertain_slots=uncertain,
+            bound=bound,
         )
 
     def _diagnostics(self, *, stop_reason: str | None = None) -> CollectionDiagnostics:

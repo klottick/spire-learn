@@ -540,10 +540,16 @@ class CollectionFault:
     operation_slots: int = 0
     known_accepted_slots: int = 0
     uncertain_slots: int = 0
+    # The Gym's public engine-bound values (counter, limit, attempted, optional power_id).
+    bound: tuple[tuple[str, int | str], ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("phase", "exception_type"):
             _identifier(getattr(self, name), f"CollectionFault {name}")
+        if type(self.bound) is not tuple or len(self.bound) > 4 or any(
+                type(item) is not tuple or len(item) != 2 or type(item[0]) is not str
+                or type(item[1]) not in (int, str) for item in self.bound):
+            raise ContractError("CollectionFault bound must be up to four (name, int-or-text) pairs")
         if not isinstance(self.message, str) or len(self.message) > 512:
             raise ContractError("CollectionFault message must be at most 512 characters")
         for name in ("operation_slots", "known_accepted_slots", "uncertain_slots"):

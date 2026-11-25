@@ -33,6 +33,7 @@ WORK = Path(os.environ.get("SPIRE_LEARN_RUNNER_OUTPUT") or ARTIFACTS)
 FIXTURES = ROOT / "tests/fixtures/neural"
 GYM_1_1_1 = "e3c13836bd1458be8a87b93160f5c350f78fcd80"
 GYM_1_2_0 = "4d198064b3b568b6f0d08d6e3937d236fbc48e9b"
+GYM_1_2_4 = "673eb8f220023b0c95401bbf96bec814a359457b"
 DENSE = "5d8147e13ded030c7faa501a8202eb2588915c2e1330b30cac5b06afc9f9916e"
 COMPACT = "49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8"
 COMPACT_PLAY = "fbfade07003bd64ad6071243ec3a52e23413c88c5758ca702a515945935439ae"
@@ -70,6 +71,13 @@ def _fixture(name: str) -> dict:
     return json.loads((FIXTURES / name).read_text())
 
 
+def _retarget(text: str, revision: str) -> str:
+    """The v1.2.0 template text for a later release (same compact view; revision, epoch and output)."""
+    if revision != GYM_1_2_4:
+        return text
+    return text.replace(GYM_1_2_0, GYM_1_2_4).replace("+gym-1.2.0", "+gym-1.2.4")
+
+
 def compact_text(*, preset="standard-combat-compact-v1", fingerprint=COMPACT, mapping=COMPACT_MAPPING,
                  revision=GYM_1_2_0, rows=None) -> str:
     """The shipped compact v1.2.0 template, self-contained (absolute manifest and output paths)."""
@@ -83,19 +91,20 @@ def compact_text(*, preset="standard-combat-compact-v1", fingerprint=COMPACT, ma
                         f'output_root = "{ARTIFACTS / "runs/test-compact"}"')
     if rows is not None:
         text = text.replace("rows = 4\n", f"rows = {rows}\n")
-    return text
+    return _retarget(text, revision)
 
 
 def dense_text(**kwargs) -> str:
     """The same template on the dense layout (the v1.2.0 dense identity, both Standard modes)."""
-    text = compact_text(**kwargs)
+    revision = kwargs.get("revision", GYM_1_2_0)
+    text = compact_text(**{**kwargs, "revision": GYM_1_2_0 if revision == GYM_1_2_4 else revision})
     lines = [line for line in text.splitlines()
              if not line.startswith(("standard_view_layout", "standard_view_preset"))]
     text = "\n".join(lines) + "\n"
     text = text.replace(f'"{COMPACT}"', f'"{DENSE}"').replace(
         f'standard-standalone = "{COMPACT_MAPPING}"',
         f'standard-standalone = "{DENSE_120_MAPPING}"\nstandard-run = "{DENSE_120_RUN_MAPPING}"')
-    return text
+    return _retarget(text, revision)
 
 
 def load_text(text: str):
@@ -532,8 +541,9 @@ class GatedCompactTests(unittest.TestCase):
 
     def setUp(self):
         from spire_lab import _native
-        if _native.build_info().get("revision") != GYM_1_2_0:
-            self.skipTest("the compact view needs the Gym v1.2.0 runtime")
+        self.revision = _native.build_info().get("revision")
+        if self.revision not in (GYM_1_2_0, GYM_1_2_4):
+            self.skipTest("the compact view needs the Gym v1.2.0 or v1.2.4 runtime")
         self._tmp = tempfile.TemporaryDirectory(dir=WORK)
         self.addCleanup(self._tmp.cleanup)
         self.dir = Path(self._tmp.name)
@@ -543,8 +553,9 @@ class GatedCompactTests(unittest.TestCase):
         manifest = _cases_manifest(self.dir, entries)
         fingerprint, mapping = ((COMPACT, COMPACT_MAPPING) if preset == "standard-combat-compact-v1"
                                 else (COMPACT_PLAY, COMPACT_PLAY_MAPPING))
-        texts = {"dense": dense_text(rows=rows),
-                 "compact": compact_text(rows=rows, preset=preset, fingerprint=fingerprint, mapping=mapping)}
+        texts = {"dense": dense_text(rows=rows, revision=self.revision),
+                 "compact": compact_text(rows=rows, preset=preset, fingerprint=fingerprint, mapping=mapping,
+                                         revision=self.revision)}
         configs = {}
         for name, text in texts.items():
             path = self.dir / f"{name}-{preset}.toml"
@@ -653,8 +664,8 @@ class GatedCompactTests(unittest.TestCase):
 
     def test_compact_and_dense_give_identical_policy_outputs(self):
         """Real v1.2.0 entries for all four characters: features and policy outputs byte-identical on CPU."""
-        if not TABLE_1_2_0.is_file():
-            self.skipTest("the local v1.2.0 run-states table is absent")
+        if self.revision != GYM_1_2_0 or not TABLE_1_2_0.is_file():
+            self.skipTest("the local v1.2.0 run-states table is absent (or this is not the v1.2.0 runtime)")
         states = _table_states()
         evidence = {"bounds": self._compare(diverse_entries(states), preset="standard-combat-compact-v1",
                                             rows=self.ROWS, steps=300, seed=500)}

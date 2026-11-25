@@ -81,6 +81,8 @@ class DriverFaultEvidence:
     fault_slots_truncated: bool = False
     fault_slot_statuses: tuple[tuple[int, str], ...] = ()
     close_error: str | None = None
+    # The Gym's public engine bound (counter, limit, attempted, optional power_id), values only.
+    bound: tuple[tuple[str, int | str], ...] = ()
 
 
 class DriverFault(RuntimeError):
@@ -423,11 +425,16 @@ class _StandardNativeChainTruncated(_StandardNativeError):
 
 
 class _StandardNativeFault(_StandardNativeError):
-    """Redacted Standard native fault retaining only the original class name."""
+    """Redacted Standard native fault retaining only the original class name.
 
-    def __init__(self, native_type: str):
+    ``bound`` holds the Gym's public engine-bound values (see ``_public_bound``), never text.
+    """
+
+    def __init__(self, native_type: str, bound: tuple[tuple[str, int | str], ...] = ()):
         super().__init__(native_type)
         self.args = ("Spire Gym Standard combat fault; native details omitted",)
+        if bound:
+            self.bound = bound
 
 
 class _StandardNativeProcessControl(BaseException):
@@ -448,6 +455,53 @@ def _safe_exception_class_name(error_type: type) -> str:
     except BaseException:
         pass
     return "UnknownError"
+
+
+# The Gym's typed engine bound (v1.2.2+, standard-run-api.md "Engine bounds"): a values-only dict.
+_BOUND_KEYS = ("counter", "limit", "attempted", "power_id")
+_BOUND_TEXT = re.compile(r"[A-Za-z0-9_.:-]{1,64}\Z", re.ASCII)
+
+
+def _bound_from_mapping(value: object) -> tuple[tuple[str, int | str], ...]:
+    """Copy allow-listed scalar fields (exact ints, short identifier strings); never native text."""
+    if type(value) is not dict:
+        return ()
+    fields: dict[str, int | str] = {}
+    for key in _BOUND_KEYS:
+        item = dict.get(value, key)
+        if type(item) is int or (type(item) is str and _BOUND_TEXT.fullmatch(item) is not None):
+            fields[key] = item
+    return tuple(fields.items())
+
+
+def _public_bound(error: BaseException) -> tuple[tuple[str, int | str], ...]:
+    """The public ``bound`` of a native fault (or of its first batch fault record), else ()."""
+    try:
+        found = _bound_from_mapping(getattr(error, "bound", None))
+        if found:
+            return found
+        for name in ("slots", "faults"):
+            records = getattr(error, name, None)
+            if isinstance(records, Sequence) and not isinstance(records, (str, bytes, bytearray)):
+                for record in records[:64]:
+                    if isinstance(record, Mapping):
+                        found = _bound_from_mapping(record.get("bound"))
+                        if found:
+                            return found
+    except BaseException:
+        pass
+    return ()
+
+
+def _recorded_bound(error: BaseException) -> tuple[tuple[str, int | str], ...]:
+    """The bound a redacted fault retained, or a plain native error's public bound."""
+    if issubclass(type(error), _StandardNativeError):
+        try:
+            value = dict.get(BaseException.__getattribute__(error, "__dict__"), "bound")
+        except BaseException:
+            return ()
+        return value if type(value) is tuple else ()
+    return _public_bound(error)
 
 
 def _standard_error_type(error: BaseException) -> str:
@@ -979,7 +1033,9 @@ class CombatDriver:
                             _safe_exception_class_name(current_type)
                         )
                     if issubclass(current_type, self._provider.fault_errors):
-                        return _StandardNativeFault(_safe_exception_class_name(current_type))
+                        return _StandardNativeFault(
+                            _safe_exception_class_name(current_type), _public_bound(current)
+                        )
                 except BaseException as classification_error:
                     return _StandardNativeError(
                         _safe_exception_class_name(type(classification_error))
@@ -1192,6 +1248,7 @@ class CombatDriver:
             fault_slots_truncated=fault_slots_truncated,
             fault_slot_statuses=fault_slot_statuses,
             close_error=close_error,
+            bound=_recorded_bound(error),
         )
         return DriverFault(evidence)
 

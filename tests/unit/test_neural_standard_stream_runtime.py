@@ -26,7 +26,7 @@ from spire_learn.neural.scenario_stream import ScenarioRecipe, generate_scenario
 from spire_learn.neural.scenario_support import canonical_bytes, content_sha256, json_value
 from spire_learn.neural.standard_catalog import CatalogRejected
 from tests.unit.test_neural_standard_stream import (
-    GYM_1_1_1, GYM_1_2_0, recipe_document, synthetic_states, write_table,
+    GYM_1_1_1, GYM_1_2_0, GYM_1_2_4, recipe_document, synthetic_states, write_table,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,6 +37,7 @@ V1 = ROOT / "configs/neural/curriculum-v1/recipe.json"
 STANDARD_TEMPLATE = ROOT / "configs/neural/gym-1.1.1/standard-standalone.toml"
 STANDARD_STREAM_TEMPLATE = ROOT / "configs/neural/gym-1.1.1/standard-stream.toml"
 STANDARD_STREAM_TEMPLATE_1_2_0 = ROOT / "configs/neural/gym-1.2.0/standard-stream.toml"
+STANDARD_STREAM_TEMPLATE_1_2_4 = ROOT / "configs/neural/gym-1.2.4/standard-stream.toml"
 _RUN_NATIVE = os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") == "1"
 
 # The unmodified M10 pins (tests/unit/test_neural_scenario_stream_v2.py).
@@ -683,6 +684,18 @@ class StandardStreamSmokeTest(unittest.TestCase):
             "steps = 32", "steps = 8").replace("max_wall_seconds = 900.0", "max_wall_seconds = 1200.0")
         self.assertIn('standard_view_layout = "compact"', template_text)
         evidence = self._smoke(GYM_1_2_0, template_text)
+        self.assertEqual(evidence["standard_view"], {
+            "layout": "compact", "preset": "standard-combat-compact-v1",
+            "fingerprint": "49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8"})
+
+    def test_standard_stream_smoke_gym_1_2_4(self):
+        """The v1.2.4 smoke: a synthetic v1.2.4 table (pinned entry-resource descriptor), compact view."""
+        if _live_gym_revision() != GYM_1_2_4:
+            self.skipTest("the v1.2.4 smoke needs the Gym v1.2.4 runtime")
+        template_text = STANDARD_STREAM_TEMPLATE_1_2_4.read_text().replace(
+            "steps = 32", "steps = 8").replace("max_wall_seconds = 900.0", "max_wall_seconds = 1200.0")
+        self.assertIn('standard_view_layout = "compact"', template_text)
+        evidence = self._smoke(GYM_1_2_4, template_text)
         self.assertEqual(evidence["standard_view"], {
             "layout": "compact", "preset": "standard-combat-compact-v1",
             "fingerprint": "49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8"})

@@ -1,0 +1,38 @@
+{
+  "schema": "spire-learn-gym-runtime-profile-v2",
+  "gym_revision": "673eb8f220023b0c95401bbf96bec814a359457b",
+  "native_sha256": "c2b1d5352b95a95c246d5992850300b06bb520e858db9b335d640668f3c6e828",
+  "wheel_sha256": "5726443b35543f378fdaa6857d6d518132ab460157c1d98e2b0ee3b2a41ce317",
+  "wheel_path": "artifacts/development/neural-combat/gym-1.2.4/inputs/spire_lab-1.2.4-cp312-cp312-manylinux_2_34_x86_64.whl",
+  "package_overlay": "artifacts/development/neural-combat/gym-1.2.4/site",
+  "dependency_venv": "artifacts/development/neural-combat/task-8/runtime-output/cuda-setup-20261028-a/install-work/venv-cuda",
+  "dependency_lock_sha256": "92022c4b8f68dd7c5bad091b558744ffb30c627292135b7ab18a179f2fd65b45",
+  "delivery_manifest_sha256": "0ffd08a6d8e284409a89307ee48643c53233029a4a4ae863338a77ae3dab8c64",
+  "common_view_fingerprint": "4c73f7de04d7b2875f473f8034c1cbacf984ea2d52d0a9428289c30cf1dff463",
+  "run_observation_fingerprint": "28d92d89c437eea7fdc260240585bca466dee1fd74b9b3eb38513d2b34b0be64",
+  "qualification_report": null,
+  "qualification_scope": null,
+  "historical_controls": "Existing one-use campaign controls remain pinned to their original runtime. These templates and this profile grant no execution authority.",
+  "card_metadata_fingerprint": "effbb810d345e906f6e20b47bd972e35d72ef48141378d54bd28b54afac5f406",
+  "checkpoint_policy": "fresh weights required; no legacy vocabulary checkpoint evaluation, warm start or resume",
+  "qualification_process": null,
+  "qualification_tool_exit": null,
+  "standard_fingerprints": {
+    "combat": "5d8147e13ded030c7faa501a8202eb2588915c2e1330b30cac5b06afc9f9916e",
+    "run": "bf8e1d111bbf2171594231b99d8d6b701244249abfbb90a11e86c4b4a405f7ae",
+    "combat_compact": "49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8",
+    "combat_compact_play": "fbfade07003bd64ad6071243ec3a52e23413c88c5758ca702a515945935439ae"
+  },
+  "build_identity": {
+    "dirty": false,
+    "extension": "spire-python",
+    "features": [
+      "spire-python/extension"
+    ],
+    "file_digest": "934fcd6a297196d493e63ea8ae0bf5f0e5f021de877e9ee646cc5e181a611dfb",
+    "profile": "release",
+    "revision": "673eb8f220023b0c95401bbf96bec814a359457b",
+    "rust_version": "1.99.0",
+    "source_digest": "194a901c8bff91a5176eb994f5e1b52c70473c3af74ea0cf1c2672cd679f3757"
+  }
+}

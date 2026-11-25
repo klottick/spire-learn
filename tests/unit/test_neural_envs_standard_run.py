@@ -295,6 +295,49 @@ class StandardRunEnvTests(unittest.TestCase):
         with self.assertRaises(envs.DriverStateError):
             driver.step([5])
 
+    def test_bound_fields_recorded_without_native_text(self):
+        from spire_learn.neural.contracts import CollectionDiagnostics, CollectionFault
+        from spire_learn.neural.runner import _diagnostic_projection
+        driver, fake = self._factory()
+        driver.reset(seeds=[3], entry_ids=[None])
+        fault = _secret_error(FakeRunFaultError, "bound fault")
+        fault.bound = {"counter": "slow", "limit": 2_147_483_647, "attempted": 2_147_483_648,
+                       "power_id": "giant_head", "secret": "SECRET extra key", "native": object()}
+        fake.next_error = fault
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([5])
+
+        assert_driver_fault_redacted(self, caught, "FakeRunFaultError")
+        expected = (("counter", "slow"), ("limit", 2_147_483_647), ("attempted", 2_147_483_648),
+                    ("power_id", "giant_head"))
+        self.assertEqual(caught.exception.evidence.bound, expected)
+        self.assertEqual(caught.exception.__cause__.bound, expected)
+        self.assertNotIn("SECRET", repr(caught.exception.evidence))
+        # The Learn fault record carries the same values and still no native text.
+        record = CollectionFault(
+            phase="step", exception_type="DriverFault", message="driver frozen", bound=caught.exception.evidence.bound)
+        projection = _diagnostic_projection(CollectionDiagnostics(fault=record))
+        self.assertEqual(projection["fault"]["bound"], dict(expected))
+        self.assertNotIn("SECRET", repr(projection))
+        # Faults without a bound keep the old record shape.
+        self.assertNotIn("bound", _diagnostic_projection(CollectionDiagnostics(
+            fault=CollectionFault(phase="step", exception_type="DriverFault", message="m")))["fault"])
+
+    def test_bound_values_must_be_scalars_from_the_allow_list(self):
+        for bad in ({"counter": ["slow"], "limit": True, "attempted": 1.5, "power_id": "SECRET text!"},
+                    {"counter": "slow secret"}, {"other": 1}, [("counter", "slow")], "SECRET"):
+            with self.subTest(bad=bad):
+                driver, fake = self._factory()
+                driver.reset(seeds=[3], entry_ids=[None])
+                fault = _secret_error(FakeRunFaultError, "bad bound")
+                fault.bound = bad
+                fake.next_error = fault
+                with self.assertRaises(envs.DriverFault) as caught:
+                    driver.step([5])
+                self.assertEqual(caught.exception.evidence.bound, ())
+                self.assertNotIn("SECRET", repr(caught.exception.evidence))
+
     def test_standard_run_reset_fault_is_redacted(self):
         driver, fake = self._factory()
         fake.next_error = _secret_error(FakeRunFaultError, "reset fault")

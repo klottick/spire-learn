@@ -221,11 +221,40 @@ GYM_V1_2_0_CONTRACT = GymContract(
         "tests.unit.test_neural_standard_compact.GatedCompactTests.test_capacity_overflow_is_a_driver_fault",
     ),
 )
+GYM_V1_2_4_CONTRACT = GymContract(
+    "673eb8f220023b0c95401bbf96bec814a359457b",
+    ("673eb8f220023b0c95401bbf96bec814a359457b",),
+    "4c73f7de04d7b2875f473f8034c1cbacf984ea2d52d0a9428289c30cf1dff463",
+    "28d92d89c437eea7fdc260240585bca466dee1fd74b9b3eb38513d2b34b0be64",
+    "effbb810d345e906f6e20b47bd972e35d72ef48141378d54bd28b54afac5f406",
+    BuildIdentity(
+        "673eb8f220023b0c95401bbf96bec814a359457b",
+        "194a901c8bff91a5176eb994f5e1b52c70473c3af74ea0cf1c2672cd679f3757",
+        "934fcd6a297196d493e63ea8ae0bf5f0e5f021de877e9ee646cc5e181a611dfb",
+        "release",
+        ("spire-python/extension",),
+    ),
+    standard_combat_fingerprint="5d8147e13ded030c7faa501a8202eb2588915c2e1330b30cac5b06afc9f9916e",
+    standard_run_fingerprint="bf8e1d111bbf2171594231b99d8d6b701244249abfbb90a11e86c4b4a405f7ae",
+    rules_epoch="gym-1.2.4",
+    m10_rules_id="spire-gym-native-m10-rules-v6",
+    standard_rules_id="spire-gym-native-standard-rules-v9",
+    standard_compact_combat_fingerprint="49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8",
+    standard_compact_combat_play_fingerprint="fbfade07003bd64ad6071243ec3a52e23413c88c5758ca702a515945935439ae",
+    entry_resources_fingerprint="4eafca3b0089e15735fb6aef24d594a084030438daa9738a1ac8cf6eab75dc5a",
+    # Same table schema as v1.2.0; the generation is the table's own recorded revision, so a
+    # v1.2.0 table is refused under this contract and the reverse (tables are regenerated).
+    run_states_table_schemas=(RUN_STATES_TABLE_V1,),
+    standard_stream_smoke_tests=(
+        "tests.unit.test_neural_standard_stream_runtime.StandardStreamSmokeTest.test_standard_stream_smoke_gym_1_2_4",
+        "tests.unit.test_neural_standard_compact.GatedCompactTests.test_capacity_overflow_is_a_driver_fault",
+    ),
+)
 CONTRACTS_BY_REVISION: dict[str, GymContract] = {
     revision: contract
     for contract in (
         LEGACY_CONTRACT, CURRENT_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT,
-        GYM_V1_1_0_CONTRACT, GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT,
+        GYM_V1_1_0_CONTRACT, GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT, GYM_V1_2_4_CONTRACT,
     )
     for revision in contract.runtime_revisions
 }

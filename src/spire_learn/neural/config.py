@@ -414,9 +414,6 @@ def load_neural_config(path: Path, *, allow_experimental_trim_compute: bool = Fa
             "profile_id", "observation_version", "replay_version", "run_observation_fingerprint",
         }
     environment = _exact_keys(environment, expected_environment_keys, "environment")
-    if (not isinstance(environment["gym_revision"], str)
-            or environment["gym_revision"] not in ACCEPTED_RUNTIME_GYM_REVISIONS):
-        raise ValueError("unsupported Gym revision")
     contract = contract_for_revision(environment["gym_revision"])
     common_view_id: str | None = None
     common_view_fingerprint: str | None = None

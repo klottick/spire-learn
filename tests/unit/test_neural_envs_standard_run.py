@@ -280,6 +280,21 @@ class StandardRunEnvTests(unittest.TestCase):
         self.assertEqual(redacted.__cause__.native_type, "RuntimeError")
         assert_no_secret_error_chain(self, redacted)
 
+    def test_typed_bound_fault_is_an_error(self):
+        driver, fake = self._factory()
+        driver.reset(seeds=[3], entry_ids=[None])
+        fault = FakeRunFaultError("engine bound exceeded")
+        fault.bound = {"counter": "turn_actions", "limit": 500, "attempted": 501}
+        fake.next_error = fault
+
+        with self.assertRaises(envs.DriverFault) as caught:
+            driver.step([5])
+
+        self.assertIsInstance(caught.exception.__cause__, envs._StandardNativeFault)
+        self.assertEqual(caught.exception.__cause__.native_type, "FakeRunFaultError")
+        with self.assertRaises(envs.DriverStateError):
+            driver.step([5])
+
     def test_standard_run_reset_fault_is_redacted(self):
         driver, fake = self._factory()
         fake.next_error = _secret_error(FakeRunFaultError, "reset fault")

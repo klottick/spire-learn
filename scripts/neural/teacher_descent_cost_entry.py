@@ -17,12 +17,12 @@ if __package__ in (None, ""):
 
 from scripts.neural import boss_winnability as bw
 from spire_learn.neural import search_view
-from spire_learn.neural.gym_contracts import STANDARD_COMPACT_PRESET
+from spire_learn.neural.gym_contracts import GYM_V1_2_0_CONTRACT, STANDARD_COMPACT_PRESET
 from spire_learn.neural.search_one_move import _close_branch
 
 ROOT = Path(__file__).resolve().parents[2]
 RECIPE = ROOT / "configs/neural/baalorlord-standard-gym-1.2.0/recipe.json"
-REVISION = "4d198064b3b568b6f0d08d6e3937d236fbc48e9b"
+REVISION = GYM_V1_2_0_CONTRACT.source_revision
 DEPTHS = (1, 2, 4, 8)
 ROOTS = 50
 SEED = 20261117

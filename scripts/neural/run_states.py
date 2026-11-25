@@ -30,9 +30,11 @@ if __package__ in (None, ''):
     sys.path[:0] = [str(_repo / 'src'), str(_repo)]
 
 from spire_learn.neural.entry_resources import (  # noqa: E402
-    DEFAULT_SNAPSHOT, EXPECTED_FINGERPRINTS, EntryResources, gym_entry_resources, load_entry_resources,
+    DEFAULT_SNAPSHOT, EntryResources, gym_entry_resources, load_entry_resources,
 )
-from spire_learn.neural.gym_contracts import GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT  # noqa: E402
+from spire_learn.neural.gym_contracts import (  # noqa: E402
+    GYM_V1_1_1_CONTRACT, RUN_STATES_TABLE_V1, contract_for_run_states,
+)
 from spire_learn.neural.run_states import (  # noqa: E402
     DEFAULTED_COUNTER_RELICS, RECORDED_COUNTER_RELICS, Drop, FightState, as_int, fight_floors, run_history, state_at,
     CHARACTERS,
@@ -43,7 +45,7 @@ from spire_learn.neural.standard_catalog import (  # noqa: E402
 )
 from spire_learn.neural.standard_names import NameAliases, load_aliases  # noqa: E402
 
-SCHEMA = 'spire-learn-run-states-v1'
+SCHEMA = RUN_STATES_TABLE_V1
 REPORT_SCHEMA = 'spire-learn-run-states-report-v1'
 GYM_REVISION = GYM_V1_1_1_CONTRACT.source_revision  # the default when no runtime profile is given
 DEFAULT_PROFILE = Path(__file__).resolve().parents[2] / 'configs/neural/gym-1.1.1/runtime.json'
@@ -88,8 +90,10 @@ def burning_kind(run_id: str, floor: int) -> str:
 def profile_revision(path: Path) -> str:
     """The Gym revision a runtime profile pins; the table records this revision."""
     revision = json.loads(Path(path).read_text())['gym_revision']
-    if revision not in (GYM_V1_1_1_CONTRACT.source_revision, GYM_V1_2_0_CONTRACT.source_revision):
-        raise ValueError(f'unsupported Gym revision in {path}: {revision!r}')
+    try:
+        contract_for_run_states(revision, SCHEMA)
+    except ValueError as error:
+        raise ValueError(f'{path}: {error}') from error
     return revision
 
 
@@ -154,11 +158,10 @@ def build(runs: Sequence[dict], names: NameAliases, encounters: Sequence[dict], 
     ``entry_resources`` is the Gym 1.2.0 descriptor: it supplies the potion-slot rule and the relics
     tagged ``relic_counter_defaulted``. Without it the Gym 1.1.1 rules apply.
     """
-    if gym_revision not in (GYM_V1_1_1_CONTRACT.source_revision, GYM_V1_2_0_CONTRACT.source_revision):
-        raise ValueError(f'unsupported Gym revision {gym_revision!r}')
-    if (entry_resources is not None) != (gym_revision == GYM_V1_2_0_CONTRACT.source_revision):
-        raise ValueError('entry_resources are required for Gym 1.2.0 tables and only for them')
-    if entry_resources is not None and entry_resources.fingerprint != EXPECTED_FINGERPRINTS[gym_revision]:
+    contract = contract_for_run_states(gym_revision, SCHEMA)
+    if (entry_resources is not None) != (contract.entry_resources_fingerprint is not None):
+        raise ValueError(f'entry_resources presence does not match the contract for Gym revision {gym_revision!r}')
+    if entry_resources is not None and entry_resources.fingerprint != contract.entry_resources_fingerprint:
         raise ValueError('the entry-resource descriptor is not the one pinned for this Gym revision')
     defaulted = (DEFAULTED_COUNTER_RELICS if entry_resources is None
                  else entry_resources.defaulted_counter_relics(RECORDED_COUNTER_RELICS))
@@ -218,7 +221,7 @@ def build(runs: Sequence[dict], names: NameAliases, encounters: Sequence[dict], 
     if len(ids) != len(set(ids)):
         raise ValueError('state ids are not unique')
     document = {'schema': SCHEMA, 'aliases_sha256': names.sha256, 'gym_revision': gym_revision, 'states': kept}
-    if entry_resources is not None:  # Gym 1.2.0 tables only: the table hash then covers the descriptor
+    if entry_resources is not None:  # the table hash then covers the descriptor
         document['entry_resources_fingerprint'] = entry_resources.fingerprint
     return document, _report(outcomes, run_counts, kept, rejected)
 
@@ -397,7 +400,7 @@ def main(argv: list[str] | None = None) -> int:
     from spire_lab import _native
     require_live_revision(revision, _native.build_info)
     resources = None
-    if revision == GYM_V1_2_0_CONTRACT.source_revision:
+    if contract_for_run_states(revision, SCHEMA).entry_resources_fingerprint is not None:
         resources = load_entry_resources(args.entry_resources)
         if gym_entry_resources() != dict(resources.document):  # the committed snapshot must be the live descriptor
             raise ValueError('the Gym entry-resource descriptor differs from the committed snapshot')

@@ -19,11 +19,6 @@ SCHEMA_ID = "spire-lab-combat-entry-resources-v1"
 FINGERPRINT_PREFIX = b"spire-lab/combat-entry-resources/v1\0"
 PROFILE_ID = "standard-combat-v1"
 CATALOG_SCHEMA_ID = "spire-gym-standard-combat-catalog-v1"
-# The descriptor fingerprint each Gym revision's rules are pinned to. A table, recipe or cache that
-# used any other descriptor content fails closed (``standard_stream.load_standard_recipe``).
-EXPECTED_FINGERPRINTS = {
-    "4d198064b3b568b6f0d08d6e3937d236fbc48e9b": "4eafca3b0089e15735fb6aef24d594a084030438daa9738a1ac8cf6eab75dc5a",
-}
 DEFAULT_SNAPSHOT = Path(__file__).resolve().parents[3] / "configs/neural/standard/entry-resources-gym-1.2.0.json"
 
 

@@ -22,19 +22,20 @@ if __package__ in (None, ''):
     _repo = Path(__file__).resolve().parents[2]
     sys.path[:0] = [str(_repo / 'src'), str(_repo)]
 
-MODULE = 'tests.unit.test_neural_standard_stream_runtime'
-COMPACT = 'tests.unit.test_neural_standard_compact'
-MODULES = (MODULE, COMPACT)
-# The gated tests each Gym release must run (the others skip outside their release's runtime):
-# the release's stream smoke and, on v1.2.0, the compact-view equivalence and overflow tests.
-SMOKES = {
-    'e3c13836bd1458be8a87b93160f5c350f78fcd80': (
-        f'{MODULE}.StandardStreamSmokeTest.test_standard_stream_smoke',),
-    '4d198064b3b568b6f0d08d6e3937d236fbc48e9b': (
-        f'{MODULE}.StandardStreamSmokeTest.test_standard_stream_smoke_gym_1_2_0',
-        f'{COMPACT}.GatedCompactTests.test_compact_and_dense_give_identical_policy_outputs',
-        f'{COMPACT}.GatedCompactTests.test_capacity_overflow_is_a_driver_fault'),
-}
+from spire_learn.neural.gym_contracts import contract_for_revision
+
+MODULES = ('tests.unit.test_neural_standard_stream_runtime', 'tests.unit.test_neural_standard_compact')
+
+
+def smoke_tests_for_revision(revision: str) -> tuple[str, ...]:
+    message = f'no Standard stream smoke for Gym revision {revision!r}'
+    try:
+        contract = contract_for_revision(revision)
+    except ValueError as error:
+        raise ValueError(message) from error
+    if not contract.standard_stream_smoke_tests:
+        raise ValueError(message)
+    return contract.standard_stream_smoke_tests
 
 
 def _test_ids(suite) -> list[str]:
@@ -50,9 +51,10 @@ def main() -> int:
         return 2
     from spire_lab import _native
     revision = _native.build_info().get('revision')
-    smoke = SMOKES.get(revision)
-    if smoke is None:
-        print(f'no Standard stream smoke for Gym revision {revision!r}', file=sys.stderr)
+    try:
+        smoke = smoke_tests_for_revision(revision)
+    except ValueError as error:
+        print(error, file=sys.stderr)
         return 2
     suite = unittest.defaultTestLoader.loadTestsFromNames(MODULES)
     collected = set(_test_ids(suite))

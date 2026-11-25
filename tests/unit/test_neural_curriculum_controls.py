@@ -23,6 +23,19 @@ from tests.unit.test_neural_study_cdi import cdi_facts
 from tests.unit.test_neural_curriculum_integration import blocked_optional
 
 
+def metadata_without_atime(info):
+    return (
+        info.st_mode, info.st_ino, info.st_dev, info.st_nlink, info.st_uid,
+        info.st_gid, info.st_size, info.st_mtime_ns, info.st_ctime_ns,
+    )
+
+
+def directory_state(directory):
+    if directory.exists():
+        # Listing the directory can refresh its access time.
+        return metadata_without_atime(directory.stat()), sorted(path.name for path in directory.iterdir())
+
+
 def patch_artifact_aggregate(api):
     scan = api.low.tree_bytes
     artifacts = ROOT/'artifacts/development/neural-combat'
@@ -542,10 +555,30 @@ print('fresh import/help/stale-validation/discovery: six optional prefixes block
             self.assertEqual(stopped.exception.code, 2)
             self.assertFalse(destination.exists())
 
+    def test_directory_state_ignores_access_time_refresh(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / 'existing').touch()
+            current = directory.stat()
+            os.utime(directory, (current.st_atime - 2 * 86400, current.st_mtime))
+            before = directory.stat()
+            expected = (metadata_without_atime(before), ['existing'])
+            self.assertEqual(directory_state(directory), expected)
+            after = directory.stat()
+            if before.st_atime == after.st_atime:
+                # On noatime mounts, simulate a read that updates only atime.
+                after = os.stat_result(
+                    (*before[:7], before.st_atime + 2 * 86400, *before[8:]),
+                    {'st_mtime_ns': before.st_mtime_ns, 'st_ctime_ns': before.st_ctime_ns},
+                )
+            self.assertNotEqual(after, before)
+            self.assertEqual(metadata_without_atime(after), expected[0])
+            self.assertEqual(directory_state(directory), expected)
+
     def test_actual_owned_launch_proc_access_reaches_only_rejected_static_admission(self):
         api = self.controls()
         runtime = ROOT/api.RUNTIME
-        before = (runtime.stat(), sorted(path.name for path in runtime.iterdir())) if runtime.exists() else None
+        before = directory_state(runtime)
         with tempfile.TemporaryDirectory(dir=ROOT/api.DOMAIN/'task-2') as directory:
             base = Path(directory)
             rejected, result_path = base/'invalid.json', base/'outer.json'
@@ -562,8 +595,7 @@ print('fresh import/help/stale-validation/discovery: six optional prefixes block
             self.assertEqual(result['watchdog_exit_status'], 1)
             self.assertFalse(result['whole_run_complete'])
             self.assertEqual(result['controller_os_exit_status']['availability'], 'unavailable')
-            after = (runtime.stat(), sorted(path.name for path in runtime.iterdir())) if runtime.exists() else None
-            self.assertEqual(after, before)
+            self.assertEqual(directory_state(runtime), before)
 
     def test_supervisor_policy_checks_chain_limits_open_result_and_source_binding(self):
         api = self.controls()

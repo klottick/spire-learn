@@ -479,9 +479,19 @@ distinct base states and act quotas proportional to availability within each
 room kind. Its own identity seeds case selection and fuzzing. The panel may
 share base states with the primary selection panel.
 
-The boss identity SHA-256, manifest SHA-256 and count of shared base states
-are pending live validation in the pinned Gym v1.2.0 runtime. The controller
-check also verifies the primary panel against both recorded hashes.
+Validated in the pinned Gym v1.2.0 runtime (controller container check,
+2026-11-25, exit 0, learner unchanged):
+
+| Field | Value |
+| --- | --- |
+| Boss panel SHA-256 | `8533cb6f5d7f7d4cd74dd598718be4781548393ec921c97a49d94344f26ea6ea` |
+| Boss manifest SHA-256 | `69cfd781210f0563b1f1321fd6e38f93be98f698319a82b1f301d9173e822267` |
+| Base states shared with the selection panel | 35 distinct `(run_id, floor)` pairs |
+
+The same check confirmed the selection panel is unchanged: identity
+`2247fe2b…` and manifest `eb4a50d8…`. The boss panel's identity hash was not
+printed by that check and is recorded in each run's provenance. These values
+are for Gym v1.2.0; the v1.2.3 re-pin rebuilds the panel under a new identity.
 
 Use `baseline_entry.py --reevaluate PRIOR --panel boss` with the compatible
 baseline plan to score its recorded checkpoints. The v1.2.0 baseline plans set

@@ -247,6 +247,7 @@ GYM_V1_2_4_CONTRACT = GymContract(
     run_states_table_schemas=(RUN_STATES_TABLE_V1,),
     standard_stream_smoke_tests=(
         "tests.unit.test_neural_standard_stream_runtime.StandardStreamSmokeTest.test_standard_stream_smoke_gym_1_2_4",
+        "tests.unit.test_neural_standard_compact.GatedCompactTests.test_compact_and_dense_give_identical_policy_outputs",
         "tests.unit.test_neural_standard_compact.GatedCompactTests.test_capacity_overflow_is_a_driver_fault",
     ),
 )

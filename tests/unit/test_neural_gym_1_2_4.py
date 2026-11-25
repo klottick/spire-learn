@@ -57,7 +57,7 @@ class GymV124Tests(unittest.TestCase):
                          f"spire-learn-standard-combat-compact-v1@{COMPACT}+gym-1.2.4")
         for mode in MODES:
             self.assertNotEqual(contract.raw_mode_mappings[mode], GYM_V1_2_0_CONTRACT.raw_mode_mappings[mode])
-        self.assertEqual(len(contract.standard_stream_smoke_tests), 2)
+        self.assertEqual(len(contract.standard_stream_smoke_tests), 3)
         self.assertEqual(contract_for_run_states(REVISION, "spire-learn-run-states-v1"), contract)
 
     def test_v1_2_0_is_unchanged(self):

@@ -3,35 +3,61 @@
 from collections.abc import Mapping, Sequence
 from contextlib import ExitStack, suppress
 from dataclasses import dataclass
+from functools import partial
 from hashlib import sha256
 import random
 
 from . import search_view
-from .search_value import RootContext, ValueRule, cutoff_value, terminal_value
+from .search_value import (
+    REFUSED_VALUE, RootContext, ValueRule, cutoff_value, summary_cutoff_value, summary_terminal_value,
+    terminal_value,
+)
 from .search_view import PLAYOUT_POLICIES, View, summary_balance
 
 PLAYOUT_BACKENDS = ("python", "native")
 # Gym's declared public rule: Learn's View.heuristic_choice excludes these Standard verbs.
 PLAYOUT_RULE_ID = "spire-gym-public-playout-v1"
 PLAYOUT_EXCLUDE_VERBS = ("end_turn", "discard_potion")
+# Gym v1.2.5's tiered rule, which no-potions-v2 maps to with these explicit (default) sets.
+TIERED_PLAYOUT_RULE_ID = "spire-gym-public-playout-tiered-v1"
+PLAYOUT_NEVER_VERBS = ("use_potion", "discard_potion")
+PLAYOUT_LAST_RESORT_VERBS = ("end_turn",)
 _FLAT = ValueRule("flat-v1")
 
 
 def check_value_options(value_rule: ValueRule, playout_policy: str, playout_backend: str,
                         branch_view: str = "full") -> None:
-    """Guards shared by both teachers for the value rule and playout policy."""
+    """Guards shared by both teachers for the value rule and playout policy. Pure and offline.
+
+    The native backend's tiered rule is a live Gym capability, checked by ``require_tiered_playouts``
+    where a live Gym exists.
+    """
     if not isinstance(value_rule, ValueRule):
         raise ValueError("value_rule must be a ValueRule")
     if playout_policy not in PLAYOUT_POLICIES:
         raise ValueError(f"playout_policy must be one of {PLAYOUT_POLICIES}")
-    if playout_backend != "python" and (value_rule.name != "flat-v1" or playout_policy != "uniform-v1"):
-        raise ValueError(f"The native backend plays out under Gym's {PLAYOUT_RULE_ID} rule, which cannot "
-                         "keep potions out; use playout_backend 'python' for "
-                         f"{value_rule.name} with {playout_policy}")
-    if playout_policy != "uniform-v1" and branch_view != "full":
+    if playout_backend == "python" and playout_policy != "uniform-v1" and branch_view != "full":
         raise ValueError(f"playout_policy {playout_policy} requires the full branch view")
+    if value_rule.name == "resource-v2" and branch_view != "full":
+        raise ValueError("value rule resource-v2 requires the full branch view")
     if value_rule.name == "resource-v2" and playout_policy != "no-potions-v2":
         raise ValueError("value rule resource-v2 requires playout_policy no-potions-v2")
+
+
+def playout_rule_id(policy: str) -> str:
+    """The Gym playout rule id a native playout under ``policy`` declares."""
+    if policy == "uniform-v1":
+        return PLAYOUT_RULE_ID
+    if policy == "no-potions-v2":
+        return TIERED_PLAYOUT_RULE_ID
+    raise ValueError(f"playout_policy must be one of {PLAYOUT_POLICIES}")
+
+
+def require_tiered_playouts(contract) -> None:
+    """Refuse a Gym contract that does not declare the tiered playout rule (before Gym v1.2.5)."""
+    if not contract.tiered_playouts:
+        raise ValueError(f"Native playout policy no-potions-v2 needs Gym's {TIERED_PLAYOUT_RULE_ID} rule "
+                         f"(Gym v1.2.5 or later); Gym {contract.source_revision} does not declare it")
 
 
 def terminal_score(rule: ValueRule, root: RootContext, view: View, observation, reward, info) -> float:
@@ -120,30 +146,48 @@ class PlayoutOutcome:
     refused: bool = False
 
 
-def playout_branches(search, branches, *, max_steps: int, stream: int = 0) -> list[PlayoutOutcome]:
-    """Native playouts of distinct live branches, scored as terminal reward, else half the HP balance.
+def playout_branches(search, branches, *, max_steps: int, stream: int = 0, value_rule: ValueRule = _FLAT,
+                     playout_policy: str = "uniform-v1", root: RootContext | None = None) -> list[PlayoutOutcome]:
+    """Native playouts of distinct live branches.
 
-    A refused playout scores -1 and is flagged. A faulted branch raises after
-    the caller's handles close. Branch and arena ownership stay with the caller.
+    ``uniform-v1`` plays out under Gym's v1 rule; ``no-potions-v2`` under its tiered rule, which the
+    live Gym must declare. ``flat-v1`` scores the terminal reward, else half the HP balance;
+    ``resource-v2`` scores the summary rows against ``root``. A refused playout scores -1 and is
+    flagged. A faulted branch raises after the caller's handles close. Branch and arena ownership
+    stay with the caller.
     """
     unsupported, _, _ = search_view._native_errors()
-    options = {"rule": "uniform_exclude_verbs", "exclude_verbs": PLAYOUT_EXCLUDE_VERBS,
-               "max_steps": max_steps, "playout_seed": stream}
+    if playout_policy == "uniform-v1":
+        options = {"rule": "uniform_exclude_verbs", "exclude_verbs": PLAYOUT_EXCLUDE_VERBS,
+                   "max_steps": max_steps, "playout_seed": stream}
+    elif playout_policy == "no-potions-v2":
+        require_tiered_playouts(search_view._native_contract())
+        options = {"rule": "tiered_verbs", "never_verbs": PLAYOUT_NEVER_VERBS,
+                   "last_resort_verbs": PLAYOUT_LAST_RESORT_VERBS, "max_steps": max_steps, "playout_seed": stream}
+    else:
+        raise ValueError(f"playout_policy must be one of {PLAYOUT_POLICIES}")
+    if value_rule.name == "flat-v1":
+        score = _score_playout
+    elif root is None:
+        raise ValueError("resource-v2 needs the root context of the decision")
+    else:
+        score = partial(_score_summary, value_rule, root)
+    rule_id = playout_rule_id(playout_policy)
     try:
-        return _playout_call(search, list(branches), options)
+        return _playout_call(search, list(branches), options, score, rule_id)
     except unsupported:
         # A whole-call preflight refusal leaves all branches untouched without an
         # index. Single-branch calls attribute the refusal.
         outcomes = []
         for branch in branches:
             try:
-                outcomes.extend(_playout_call(search, [branch], options))
+                outcomes.extend(_playout_call(search, [branch], options, score, rule_id))
             except unsupported:
                 outcomes.append(PlayoutOutcome(-1.0, True))
         return outcomes
 
 
-def _playout_call(search, branches, options) -> list[PlayoutOutcome]:
+def _playout_call(search, branches, options, score, rule_id) -> list[PlayoutOutcome]:
     _, _, fault_error = search_view._native_errors()
     result = search.playout_many(branches, **options)
     for index, detail in enumerate(result["fault"]):
@@ -151,7 +195,10 @@ def _playout_call(search, branches, options) -> list[PlayoutOutcome]:
             error = fault_error(f"public search playout branch {index}: {detail}")
             error.detail = detail
             raise error
-    return [_score_playout(result, index) for index in range(len(branches))]
+    # v1 results keep today's unchecked path; a tiered call must come back under the tiered rule.
+    if rule_id != PLAYOUT_RULE_ID and result["rule_id"] != rule_id:
+        raise RuntimeError(f"playout_many returned rule {result['rule_id']!r}, expected {rule_id}")
+    return [score(result, index) for index in range(len(branches))]
 
 
 def _score_playout(result, index: int) -> PlayoutOutcome:
@@ -161,6 +208,15 @@ def _score_playout(result, index: int) -> PlayoutOutcome:
         return PlayoutOutcome(float(result["rewards"][index]))
     # step_limit and max_steps leave the branch live: score the summary.
     return PlayoutOutcome(0.5 * summary_balance(result, index))
+
+
+def _score_summary(rule: ValueRule, root: RootContext, result, index: int) -> PlayoutOutcome:
+    """resource-v2 value of one summary row: terminal from its end reason, else the cut-off."""
+    if result["end_reason"][index] == "refused":
+        return PlayoutOutcome(REFUSED_VALUE, True)
+    if result["terminated"][index]:
+        return PlayoutOutcome(summary_terminal_value(rule, root, result, index))
+    return PlayoutOutcome(summary_cutoff_value(rule, root, result, index))
 
 
 @dataclass
@@ -209,7 +265,8 @@ def one_move_values(search, legal: Sequence[int], view: View, *, samples: int,
             by_action[action] = group
 
         if playout_backend == "native":
-            active = _native_playouts(search, active, view, playout_steps, research_seed, branch_view)
+            active = _native_playouts(search, active, view, playout_steps, research_seed, branch_view,
+                                      value_rule=value_rule, playout_policy=playout_policy, root=root)
         for depth in range(playout_steps + 1):
             if not active:
                 break
@@ -249,26 +306,36 @@ def one_move_values(search, legal: Sequence[int], view: View, *, samples: int,
         return values
 
 
-def _native_playouts(search, active, view, playout_steps, research_seed, branch_view):
+def _native_playouts(search, active, view, playout_steps, research_seed, branch_view, *,
+                     value_rule, playout_policy, root):
     """Take the root action, then score live branches natively. Returns no branches to continue.
 
-    Gym's playout rule and summary serve only flat-v1 with uniform-v1; ``check_value_options`` refuses the rest.
+    Root-step ends are scored as the Python loop scores them; live branches play out under the Gym
+    rule for ``playout_policy`` and are scored from the summary.
     """
+    v2 = value_rule.name == "resource-v2"
     results = step_branches(search, [item.branch for item in active],
                             [item.action for item in active], view=branch_view)
     live = []
     for item, result in zip(active, results, strict=True):
         if result.refused or result.terminated:
-            item.value = result.reward
+            if v2 and not result.refused:
+                item.value = terminal_score(value_rule, root, view, result.observation, result.reward, result.info)
+            else:
+                item.value = result.reward
             item.refused = result.refused
         elif result.truncated or not playout_steps:
-            item.value = 0.5 * view.balance(result.observation)
+            if v2:
+                item.value = cutoff_value(value_rule, root, view, result.observation)
+            else:
+                item.value = 0.5 * view.balance(result.observation)
         else:
             live.append(item)
     results = None
     if live:
         outcomes = playout_branches(search, [item.branch for item in live], max_steps=playout_steps,
-                                    stream=playout_seed(research_seed, 0, 0))
+                                    stream=playout_seed(research_seed, 0, 0), value_rule=value_rule,
+                                    playout_policy=playout_policy, root=root)
         for item, outcome in zip(live, outcomes, strict=True):
             item.value, item.refused = outcome.value, outcome.refused
     return []

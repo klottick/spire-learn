@@ -384,11 +384,14 @@ def v2_teachers(directory, **rows):
     return path
 
 
-def run_entry(directory, teachers, name, *, allow_uncalibrated=False):
-    """``_run`` on one selection fight, with the Gym, recipe and panel replaced by fakes."""
-    revision = GYM_V1_2_4_CONTRACT.source_revision
-    recipe = Mock(spec=entry.StandardRecipe, gym_revision=revision, table_sha256="table",
-                  character="ironclad", ascension=20)
+def run_entry(directory, teachers, name, *, allow_uncalibrated=False,
+              revision=GYM_V1_2_4_CONTRACT.source_revision):
+    """``_run`` on one selection fight, with the Gym, recipe and panel replaced by fakes.
+
+    The recipe is for Gym v1.2.4; ``revision`` is the live Gym's (v1.2.4 or a drop-in in its rules epoch).
+    """
+    recipe = Mock(spec=entry.StandardRecipe, gym_revision=GYM_V1_2_4_CONTRACT.source_revision,
+                  table_sha256="table", character="ironclad", ascension=20)
     gym = SimpleNamespace(_native=SimpleNamespace(build_info=lambda: {"revision": revision}))
     panel = {"manifest": {"cases": [CASE]}, "panel_identity": "panel", "panel_sha256": "p", "manifest_sha256": "m"}
     descriptor = {"profile_id": "profile", "schema_id": "schema", "fingerprint": "fingerprint"}
@@ -433,16 +436,17 @@ class NamedTeacherTests(unittest.TestCase):
 
     def test_v2_rows_reject_invalid_value_options(self):
         tree = json.loads(TEACHERS.read_text())["teachers"]["tree-3x"]
+        # Native v2 rows are valid offline (the live Gym's tiered rule is checked in ``_run``), but
+        # resource-v2 still needs no-potions-v2 on either backend.
         bad = {
-            "native-v2": {"kind": "one-move", "samples": 32, "playout_steps": 80, "playout_backend": "native",
-                          "value_rule": {"name": "resource-v2"}, "playout_policy": POLICY},
+            "native-uniform-v2": {"kind": "one-move", "samples": 32, "playout_steps": 80,
+                                  "playout_backend": "native", "value_rule": {"name": "resource-v2"}},
             "uniform-v2": {"kind": "one-move", "samples": 32, "playout_steps": 80,
                            "value_rule": {"name": "resource-v2"}},
             "extra-field": {"kind": "one-move", "samples": 32, "playout_steps": 80,
                             "value_rule": {"name": "resource-v2", "scale": 2}, "playout_policy": POLICY},
-            "tree-native-v2": {"calibrated": False, "config": {**tree["config"],
-                                                               "value_rule": {"name": "resource-v2"},
-                                                               "playout_policy": POLICY}},
+            "tree-native-uniform-v2": {"calibrated": False, "config": {**tree["config"],
+                                                                       "value_rule": {"name": "resource-v2"}}},
         }
         with tempfile.TemporaryDirectory() as directory:
             configs = v2_teachers(directory, **bad)

@@ -12,7 +12,7 @@ from time import process_time
 from . import search_view
 from .gym_contracts import STANDARD_COMPACT_PRESET
 from .search_one_move import (
-    PLAYOUT_BACKENDS, PLAYOUT_RULE_ID, ActionStat, _close_branch, check_value_options, playout_branches,
+    PLAYOUT_BACKENDS, ActionStat, _close_branch, check_value_options, playout_branches, playout_rule_id,
     playout_seed, terminal_score,
 )
 from .search_value import RootContext, ValueRule, cutoff_value
@@ -110,7 +110,7 @@ def config_identity(config: TeacherConfig) -> dict:
     if config.playout_backend == "python":
         del fields["playout_backend"]
     else:
-        fields["playout_rule_id"] = PLAYOUT_RULE_ID
+        fields["playout_rule_id"] = playout_rule_id(config.playout_policy)
     return fields
 
 
@@ -227,9 +227,10 @@ class _PlayoutRefused(Exception):
     """A native playout stopped at a refusal boundary. Counted like a refused branch."""
 
 
-def _native_playout(search, branch, observation, view, config, research_seed, world, n):
+def _native_playout(search, branch, observation, view, config, research_seed, world, n, context):
     outcome, = playout_branches(search, [branch], max_steps=config.playout_steps,
-                                stream=playout_seed(research_seed, world, n))
+                                stream=playout_seed(research_seed, world, n), value_rule=config.value_rule,
+                                playout_policy=config.playout_policy, root=context)
     if outcome.refused:
         raise _PlayoutRefused
     return outcome.value
@@ -320,7 +321,8 @@ def _simulate(search, world, root, first_action, view, config, nodes, points, ca
                     n = 0 if uniform else node.playouts_by_world.get(world, 0)
                     if not uniform:
                         node.playouts_by_world[world] = n + 1
-                    return _native_playout(search, branch, observation, view, config, research_seed, world, n)
+                    return _native_playout(search, branch, observation, view, config, research_seed, world, n,
+                                           context)
                 rng = _playout_rng(node, research_seed, world, uniform=uniform)
                 return _playout(branch, observation, view, rng, config.playout_steps, config, context)
             action = _select(node, config)

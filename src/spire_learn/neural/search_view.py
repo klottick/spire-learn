@@ -16,6 +16,61 @@ class View:
         self.verb = column('actions', 'verb')
         verbs = descriptor['vocabularies']['verb']
         self.end_turn, self.discard = verbs.index('end_turn'), verbs.index('discard_potion')
+        # Columns read only by the resource value rule; resolved lazily so descriptors without them still load.
+        self._cleanup_hp_column = self._optional_column(tensors, 'player', 'hp_after_cleanup')
+        self._potion_kind_column = self._optional_column(tensors, 'potions', 'potion_kind')
+        self._potion_vocabulary = tuple(descriptor['vocabularies'].get('potion', ()))
+
+    @staticmethod
+    def _optional_column(tensors, key, field):
+        if key not in tensors:
+            return None
+        fields = [c['field'] for c in tensors[key]['columns']]
+        return fields.index(field) if field in fields else None
+
+    def _known_player(self, observation, column: int, name: str) -> int:
+        if not observation['player_known'][column]:
+            raise ValueError(f'player {name} is not known')
+        return int(observation['player'][column])
+
+    def player_hp_now(self, observation) -> int:
+        """Live player HP; raises when unknown."""
+        return self._known_player(observation, self.player_hp, 'hp')
+
+    def player_max_hp(self, observation) -> int:
+        """Player max HP; raises when unknown."""
+        return self._known_player(observation, self.player_max, 'max_hp')
+
+    def cleanup_hp(self, observation) -> int:
+        """Player HP after combat-end hooks; raises when unknown (never falls back to ``hp``)."""
+        if self._cleanup_hp_column is None:
+            raise ValueError('descriptor has no player hp_after_cleanup column')
+        return self._known_player(observation, self._cleanup_hp_column, 'hp_after_cleanup')
+
+    def potion_kinds(self, observation) -> tuple[int, ...]:
+        """Sorted potion-kind ids of the occupied potion rows."""
+        if self._potion_kind_column is None:
+            raise ValueError('descriptor has no potions potion_kind column')
+        occupied = observation['potions_occupied']
+        slots, column = observation['potions'], self._potion_kind_column
+        return tuple(sorted(int(slots[row][column]) for row in range(len(occupied)) if occupied[row]))
+
+    def potion_price_table(self, rule) -> dict[int, float]:
+        """HP price per potion-kind id for ``rule``; raises ``ValueError`` on an unknown override id."""
+        vocabulary = self._potion_vocabulary
+        overrides = dict(rule.potion_overrides)
+        unknown = sorted(set(overrides) - set(vocabulary))
+        if unknown:
+            raise ValueError(f'unknown potion ids in price overrides: {unknown}')
+        return {index: float(overrides.get(name, rule.potion_hp))
+                for index, name in enumerate(vocabulary) if name != 'padding'}
+
+    def enemy_share(self, observation) -> float:
+        """Remaining enemy HP share, the enemy term of ``balance``."""
+        enemies = observation['enemies']
+        alive = enemies[:, self.enemy_max] > 0
+        enemy_hp = float(enemies[alive, self.enemy_hp].clip(min=0).sum())
+        return enemy_hp / (float(enemies[alive, self.enemy_max].sum()) or 1.0)
 
     def legal(self, observation) -> list[int]:
         return [int(i) for i in observation['action_mask'].nonzero()[0]]

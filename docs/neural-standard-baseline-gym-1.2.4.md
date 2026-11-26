@@ -473,7 +473,7 @@ The two finals agree on 205 of 251 paired cases (149 wins by both, 56 losses by 
 
 Between any two trained checkpoints of r1, 30 to 58 paired cases change outcome even where the totals barely move (25% against 50%: 26 cases won only at each). A checkpoint-to-checkpoint difference of a few wins is within this turnover.
 
-One selection case escapes: an act 1 elite at level 2. Both replicates escape it at every trained checkpoint except r2 at 25%. Search won or lost it. Every case that r1 had censored at some checkpoint (five distinct cases) was also censored at some checkpoint of r2, which has seven.
+One selection case escapes: an act 1 elite at level 2. Both replicates escape it at every trained checkpoint except r2 at 25%. Search did not escape it. Every case that r1 had censored at some checkpoint (five distinct cases) was also censored at some checkpoint of r2, which has seven.
 
 ### Final wins by stratum and level
 
@@ -667,7 +667,7 @@ On v1.2.0 both replicates peaked at 25% and declined (r1 190 to 166, r2 183 to 1
 - r2 on the selection panel peaks at 75% (186) and drops to 166.
 - Both boss-panel curves peak at 75% (107 and 108) and drop at the final (102 and 89).
 
-The drops all fall in the final quarter, when level 4 joins the training mixture. The tests below are post hoc, not pre-registered, and are not corrected for multiplicity. The final checkpoint remains the pre-registered comparison point; checkpoint selection is a later decision.
+Every 75%-to-final drop falls in the final quarter, when level 4 joins the training mixture (r1 on the selection panel has none). The tests below are post hoc, not pre-registered, and are not corrected for multiplicity. The final checkpoint remains the pre-registered comparison point; checkpoint selection is a later decision.
 
 | Panel | Comparison | Paired | Both win | Only earlier wins | Only final wins | Neither | Exact p |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -717,15 +717,15 @@ Each eighth holds 6,982 to 8,049 settled fights. The training win rate by fuzz l
 | 7 | 0.721 / 0.682 / 0.684 / 0.648 | 0.703 / 0.670 / 0.686 / 0.625 |
 | 8 | 0.681 / 0.677 / 0.658 / 0.646 | 0.711 / 0.681 / 0.663 / 0.652 |
 
-Entropy falls by 38% in r1 (0.946 to 0.587) and 46% in r2 (0.936 to 0.509). Value loss rises by about a third in both (r1 0.036 to 0.050, r2 0.039 to 0.053). Mean HP on wins stays between 45.4 and 47.9. In the final quarter r1's training win rate falls (0.698 in eighth 6 to 0.665 in eighth 8) while its selection wins hold. r2's rises slightly (0.666 to 0.677) while its selection wins fall by 20. Level-4 training fights are won least often (0.625 to 0.652). Training and evaluation differ: training samples actions while evaluation takes the argmax, and the training mixture changes at each join, so the training win rate is not an evaluation proxy.
+From eighth 1 to eighth 8, entropy falls by 38% in r1 (0.946 to 0.587, with its lowest value, 0.540, in eighth 7) and by 46% in r2 (0.936 to 0.509). Value loss rises by 36 to 39% in both (r1 0.036 to 0.050, r2 0.039 to 0.053). Mean HP on wins stays between 45.4 and 47.9. In the final quarter r1's training win rate falls (0.698 in eighth 6 to 0.665 in eighth 8) while its selection wins hold. r2's rises slightly (0.666 to 0.677) while its selection wins fall by 20. Level-4 training fights are won least often (0.625 to 0.652). Training and evaluation differ: training samples actions while evaluation takes the argmax, and the training mixture changes at each join, so the training win rate is not an evaluation proxy.
 
 What the data support, weaken or leave untested:
 
 - **Final-quarter curriculum shift (level 4 joins). Supported in timing, not in the level breakdown.** Every drop falls in the final quarter, and the two clear drops (r2, p = 0.0054 and 0.0075) both start after the 75% checkpoint, which precedes level 4. In training, level-4 fights have the lowest win rate. But r1's selection curve does not drop at all. r2's losses do not concentrate at level 4: its largest net losses are at level 1 on the selection panel and at levels 0 and 2 on the boss panel. Only r1's small, non-significant boss-panel drop sits at level 4. A shift in the training mixture is consistent with the timing. The level breakdown does not single out level 4.
-- **PPO drift while entropy falls and the critic worsens. Weakened as a sufficient explanation.** On v1.2.0 this was untested and consistent with the data. Here r1 shows the same trends as r2 (entropy down 38%, value loss up by about a third), yet its selection wins are flat from 25% to final. These trends alone do not produce a decline. They could still contribute in r2. That is untested.
+- **PPO drift while entropy falls and the critic worsens. Weakened as a sufficient explanation.** On v1.2.0 this was untested and consistent with the data. Here r1 shows the same trends as r2 (entropy down 38%, value loss up 39%), yet its selection wins are flat from 25% to final. These trends alone do not produce a decline. They could still contribute in r2. That is untested.
 - **Classic overfitting to the training fights. Not excluded.** r2's training win rate rises slightly in the final quarter while its evaluation wins fall, which is the pattern overfitting would produce. The rise is about one point, the training rate uses sampled actions and the mixture changed, so these data cannot test it. r1's training win rate falls while its evaluation holds, so the two do not track each other in either direction.
 - **Turn-cap stalling. Not supported.** Neither replicate hit the turn cap in training. In evaluation, r2's final checkpoint has fewer turn-cap censors than its 75% checkpoint (1 against 3 on the selection panel and 0 against 6 on the boss panel). The lost wins became deaths (31 of 32 and 39 of 39 for r2).
-- **A favourable 75% checkpoint. Possible, untested.** r2's 75% count (186) is the highest of any selection checkpoint of either replicate. Its 50% and final counts (172 and 166) lie on either side of r1's plateau of 176 to 179, and the finals of the two replicates are not distinguishable (p = 0.054). Checkpoint turnover of 30 to 58 cases per pair also limits how much one checkpoint can show. Two replicates cannot separate a real final-quarter regression from a high draw at 75%.
+- **A favourable 75% checkpoint. Possible, untested.** r2's 75% count (186) is the highest of any selection checkpoint of either replicate. Its 50% and final counts (172 and 166) are both below r1's plateau of 176 to 179, so 186 stands out in both replicates, and the finals of the two replicates are not distinguishable (p = 0.054). Checkpoint turnover of 30 to 68 cases per checkpoint pair across the four curves also limits how much one checkpoint can show. Two replicates cannot separate a real final-quarter regression from a high draw at 75%.
 
 Neither the curriculum nor the drift explanation is tested by these runs. A test would need more replicates or a control run without the level-4 join. These analyses do not change the reported results: the finals (179 and 166 on the selection panel, 102 and 89 on the boss panel) are the comparison points.
 

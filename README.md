@@ -153,6 +153,13 @@ the selection and boss panels. It also covers the self-consistency ceiling, gate
 G1 and the teacher choice. G1 fails: neither tree teacher at 1× or 3× beats the
 one-move search, which remains the teacher.
 
+[Teacher value v2](docs/neural-teacher-value-v2.md) changes how the search
+teachers score a playout. A win now scores by the HP left, max HP gained and
+potions spent, with potions priced in HP, instead of a flat +1. The playouts use
+Gym v1.2.5's native no-potions rule. The chosen dataset teacher is `current-v2`.
+It wins as often as before (233 and 180 of 256), keeps 0.62 of max HP on the
+selection panel against 0.38, and cuts pooled resource loss by about a third.
+
 The separately approved fresh-weight campaign on this release has now completed
 its development comparisons. Across 438,272 learned decisions, the final mixed
 combat policy improved from **18/64 to 41/64 development wins**. All eight panels

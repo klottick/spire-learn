@@ -3,6 +3,8 @@
 from collections.abc import Mapping
 import random
 
+PLAYOUT_POLICIES = ('uniform-v1', 'no-potions-v2')
+
 
 class View:
     """Column lookups in the Standard combat view, resolved once from the descriptor."""
@@ -16,6 +18,7 @@ class View:
         self.verb = column('actions', 'verb')
         verbs = descriptor['vocabularies']['verb']
         self.end_turn, self.discard = verbs.index('end_turn'), verbs.index('discard_potion')
+        self.use_potion = verbs.index('use_potion')
         # Columns read only by the resource value rule; resolved lazily so descriptors without them still load.
         self._cleanup_hp_column = self._optional_column(tensors, 'player', 'hp_after_cleanup')
         self._potion_kind_column = self._optional_column(tensors, 'potions', 'potion_kind')
@@ -71,6 +74,23 @@ class View:
         alive = enemies[:, self.enemy_max] > 0
         enemy_hp = float(enemies[alive, self.enemy_hp].clip(min=0).sum())
         return enemy_hp / (float(enemies[alive, self.enemy_max].sum()) or 1.0)
+
+    def playout_choice(self, observation, rng: random.Random, policy: str) -> int:
+        """One playout move under ``policy`` (see ``PLAYOUT_POLICIES``)."""
+        if policy == 'uniform-v1':
+            return self.heuristic_choice(observation, rng)
+        if policy != 'no-potions-v2':
+            raise ValueError(f'unknown playout policy: {policy!r}')
+        legal = self.legal(observation)
+        verbs = [observation['actions'][i][self.verb] for i in legal]
+        barred = (self.use_potion, self.discard, self.end_turn)
+        preferred = [i for i, v in zip(legal, verbs) if v not in barred]
+        if preferred:
+            return rng.choice(preferred)
+        for i, v in zip(legal, verbs):
+            if v == self.end_turn:
+                return i
+        return rng.choice(legal)
 
     def legal(self, observation) -> list[int]:
         return [int(i) for i in observation['action_mask'].nonzero()[0]]

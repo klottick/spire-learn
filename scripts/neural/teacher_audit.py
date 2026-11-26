@@ -21,7 +21,9 @@ report
   Aggregates finished teacher runs (stdlib only, no Gym). Inputs are explicit:
     --run TEACHER:PANEL:DIR      a search_teacher_entry.py output directory
                                  (summary.json, fights.jsonl, decisions.jsonl);
-                                 TEACHER in current, tree-1x, tree-3x, tree-10x;
+                                 TEACHER is any teacher name the run's provenance
+                                 records (v1 teachers current, tree-1x, tree-3x,
+                                 tree-10x sort first, then others alphabetically);
                                  PANEL in selection, boss. Repeat per run.
     --panel PANEL:FILE           the panel document of each panel used
                                  (development-panel.json or boss-panel.json):
@@ -30,9 +32,15 @@ report
                                  evaluation, shown beside the teachers.
     --run-states FILE            optional run-states table; adds Baalorlord's
                                  recorded level-0 outcomes per panel.
-  Selection runs of current, tree-1x and tree-3x are required. Every run must
-  name the panel document's panel and manifest SHA256 and share one Gym
-  revision, rules epoch, recipe, states table and caps.
+    --choose-v2 --v1-control NAME --candidate NAME [--candidate NAME ...]
+                                 optional dataset-teacher choice v2 (below);
+                                 --candidate order is the tie-break order.
+  Selection runs of current, tree-1x and tree-3x are required, except under
+  --choose-v2, where G1, the teacher choice and the stop rule run only when they
+  are present and are left out otherwise. Every run must be calibrated (under
+  --choose-v2, an uncalibrated run is admitted only when its provenance records
+  uncalibrated_allowed), name the panel document's panel and manifest SHA256 and
+  share one Gym revision, rules epoch, recipe, states table and caps.
   It reports strength against budget per teacher and panel (wins, mean HP kept,
   CPU seconds per searched decision); root outcomes by reason, act and room kind;
   label coverage; G1 (tree-1x and tree-3x each against current on the selection
@@ -48,6 +56,22 @@ report
   HP kept is hp_after_cleanup over the case's starting max HP (panel entry), over
   completed fights (wins, deaths and escapes); PPO's figure is its summary's
   mean_hp_retention, over the same fights with end-of-fight max HP.
+  Resources per teacher and panel, signed means over completed fights, from the
+  fight row's resource fields (hp_start, max_hp_start, max_hp_end, potions_start,
+  potions_end, potion_hp_spent; runs recorded before them show -): HP lost
+  (hp_start - hp_after_cleanup) / max_hp_start, a death counting 0 HP after;
+  potion HP spent potion_hp_spent / max_hp_start; resource loss, their sum;
+  potions used per won fight, potions_start - potions_end; and, from the
+  decisions, the share of searched decisions whose top value is tied exactly.
+  Censored fights are counted by reason.
+  Dataset-teacher choice v2: a candidate is ineligible on a panel when it wins 6
+  or more fewer cases than the control, is worse by a one-sided exact McNemar
+  test (p < 0.10, censored counted as not won, a case escaped on either side
+  dropped) or has more than 3 censored cases; among candidates eligible on both
+  panels, the lowest resource loss over all completed fights of both panels
+  (unweighted; the panels share base states, counted by run and floor), ties
+  within 0.01 of the best to the first in --candidate order; with no eligible
+  candidate, the control. The stop rule is also reported for that teacher.
 
 Both write aggregates only (JSON, to --output under artifacts/, never
 overwritten); report also prints Markdown tables. Case ids never appear.
@@ -62,6 +86,7 @@ from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from hashlib import sha256
 import json
+import math
 import multiprocessing
 import os
 from pathlib import Path
@@ -92,6 +117,19 @@ PAIRED_OUTCOME = {"victory": "win", "death": "loss", "escaped": "escaped", "cens
 PPO_OUTCOMES = ("win", "loss", "escaped", "incomplete")
 SHARED_PROVENANCE = ("gym_revision", "rules_epoch", "recipe_sha256", "states_table_sha256",
                      "observation_fingerprint", "max_steps", "max_turn_actions")
+# Fight-row resource fields of search_teacher_entry.py runs; potion_hp_spent is a float, the rest ints.
+RESOURCE_FIELDS = ("hp_start", "max_hp_start", "max_hp_end", "potions_start", "potions_end", "potion_hp_spent")
+# Dataset-teacher choice v2 (pre-registered).
+V2_WIN_FLOOR = 6
+V2_ALPHA = 0.10
+V2_MAX_CENSORED = 3
+V2_TIE_BAND = 0.01
+V2_RULE = ("a candidate is ineligible on a panel if it wins 6 or more fewer cases than the control (censored "
+           "counted as not won), if a one-sided exact McNemar test finds it worse at p < 0.10 (censored counted "
+           "as not won, a case escaped on either side dropped) or if it has more than 3 censored cases; among "
+           "candidates eligible on both panels, the lowest resource loss, an unweighted mean over all completed "
+           "fights of both panels; candidates within 0.01 of the best go to the first in --candidate order; "
+           "with no eligible candidate, the control")
 
 
 class AuditInputError(ValueError):
@@ -150,6 +188,11 @@ def case_decisions(rows):
             if row["step"] != index or row["action_prefix_length"] != index:
                 raise AuditInputError("A case's decision rows are not a contiguous step sequence from 0")
     return dict(by_case)
+
+
+def teacher_order(name):
+    """v1 teachers first in their fixed order, then other teacher names alphabetically."""
+    return (0, TEACHERS.index(name), "") if name in TEACHERS else (1, 0, name)
 
 
 # --- consistency -------------------------------------------------------------------------------
@@ -379,6 +422,76 @@ def stop_rule(boss_roots):
             "threshold": STOP_BOSS_ROOT_SHARE, "verdict": "STOP" if share < STOP_BOSS_ROOT_SHARE else "CONTINUE"}
 
 
+def one_sided_mcnemar(only_control, only_candidate):
+    """Exact one-sided McNemar: P(X >= only_control) for X ~ Binomial(n, 1/2), n the discordant pairs."""
+    n = only_control + only_candidate
+    return sum(math.comb(n, k) for k in range(only_control, n + 1)) / 2 ** n
+
+
+def v2_panel_test(candidate, control):
+    """One panel's v2 eligibility of a candidate's entry outcomes against the control's."""
+    if candidate.keys() != control.keys():
+        raise AuditInputError("v2 choice runs of one panel cover different cases")
+    won = lambda outcome: outcome == "victory"
+    pairs = [(won(control[cid]), won(candidate[cid])) for cid in control
+             if "escaped" not in (control[cid], candidate[cid])]
+    only_control = sum(c and not k for c, k in pairs)
+    only_candidate = sum(k and not c for c, k in pairs)
+    wins = sum(map(won, candidate.values()))
+    control_wins = sum(map(won, control.values()))
+    censored = sum(outcome == "censored" for outcome in candidate.values())
+    p = one_sided_mcnemar(only_control, only_candidate)
+    reasons = []
+    if control_wins - wins >= V2_WIN_FLOOR:
+        reasons.append("win_floor")
+    if only_control > only_candidate and p < V2_ALPHA:
+        reasons.append("mcnemar")
+    if censored > V2_MAX_CENSORED:
+        reasons.append("censored")
+    return {"wins": wins, "control_wins": control_wins, "win_deficit": control_wins - wins,
+            "paired": len(pairs), "escaped_dropped": len(control) - len(pairs),
+            "only_control": only_control, "only_candidate": only_candidate, "p_one_sided": p,
+            "censored": censored, "reasons": reasons, "eligible": not reasons}
+
+
+def _mean(values):
+    return sum(values) / len(values) if values else None
+
+
+def choose_v2(control, candidates, outcomes, losses, shared_base_states=None):
+    """Dataset-teacher choice v2.
+
+    outcomes: (teacher, panel) -> {case_id: entry outcome} for the control and every candidate on both
+    panels; losses: teacher -> per-fight resource losses over both panels' completed fights, or None
+    when its runs lack the resource fields. Candidates are in tie-break order."""
+    candidates = list(candidates)
+    if not candidates or len(set(candidates)) != len(candidates) or control in candidates:
+        raise AuditInputError("v2 choice needs distinct candidates other than the control")
+    for name in (control, *candidates):
+        absent = [kind for kind in PANELS if (name, kind) not in outcomes]
+        if absent:
+            raise AuditInputError(f"v2 choice needs {name} runs on both panels; missing {', '.join(absent)}")
+    rows = {}
+    for name in candidates:
+        fights = losses.get(name)
+        if not fights:
+            raise AuditInputError(f"v2 candidate {name} has no completed fights with resource fields")
+        panels = {kind: v2_panel_test(outcomes[name, kind], outcomes[control, kind]) for kind in PANELS}
+        rows[name] = {"panels": panels, "eligible": all(p["eligible"] for p in panels.values()),
+                      "resource_loss": _mean(fights), "completed_fights": len(fights)}
+    eligible = [name for name in candidates if rows[name]["eligible"]]
+    best = min((rows[name]["resource_loss"] for name in eligible), default=None)
+    band = [name for name in eligible if rows[name]["resource_loss"] <= best + V2_TIE_BAND]
+    note = "resource loss pools every completed fight of both panels with equal weight"
+    if shared_base_states is not None:
+        note += f"; the two panels share {shared_base_states} base states (run and floor), counted on each"
+    return {"control": control, "candidate_order": candidates, "candidates": rows,
+            "control_resource_loss": _mean(losses.get(control) or []),
+            "best_resource_loss": best, "tie_band": V2_TIE_BAND, "within_band": band,
+            "chosen": band[0] if band else control, "fell_back_to_control": not band,
+            "shared_base_states": shared_base_states, "note": note, "rule": V2_RULE}
+
+
 def load_panel(path, kind):
     doc = json.loads(Path(path).read_text(encoding="utf-8"))
     manifest = doc["manifest"]
@@ -401,19 +514,43 @@ def load_panel(path, kind):
             "document_sha256": _file_sha256(path)}
 
 
-def load_run(directory, teacher, kind, panel):
+def _has_resources(what, fight):
+    """Whether a fight row carries the resource fields; a partial or mistyped set is refused."""
+    present = [key for key in RESOURCE_FIELDS if key in fight]
+    if not present:
+        return False
+    if len(present) != len(RESOURCE_FIELDS):
+        raise AuditInputError(f"{what} has a fight with a partial set of resource fields")
+    if any(type(fight[key]) is not int for key in RESOURCE_FIELDS if key != "potion_hp_spent"):
+        raise AuditInputError(f"{what} has a fight with a resource field that is not an int")
+    spent = fight["potion_hp_spent"]
+    if type(spent) is not float or not math.isfinite(spent):
+        raise AuditInputError(f"{what} has a fight whose potion_hp_spent resource field is not a finite float")
+    if fight["max_hp_start"] <= 0:
+        raise AuditInputError(f"{what} has a fight with a resource field max_hp_start that is not positive")
+    return True
+
+
+def load_run(directory, teacher, kind, panel, *, allow_uncalibrated=False):
+    """allow_uncalibrated (--choose-v2) admits calibrated false only when the run records uncalibrated_allowed."""
     what = f"{teacher} {kind} run"
     summary_path = Path(directory) / "summary.json"
     summary = _load_summary(summary_path, what)
     provenance = summary["provenance"]
-    expected = {"teacher": teacher, "panel": kind, "split": "selection", "calibrated": True,
+    calibrated = True
+    if (allow_uncalibrated and provenance.get("calibrated") is False
+            and provenance.get("uncalibrated_allowed") is True):
+        calibrated = False
+    expected = {"teacher": teacher, "panel": kind, "split": "selection", "calibrated": calibrated,
                 "panel_sha256": panel["panel_sha256"], "manifest_sha256": panel["manifest_sha256"]}
     for key, value in expected.items():
         if provenance.get(key) != value:
             raise AuditInputError(f"{what} provenance {key} is {provenance.get(key)!r}, expected {value!r}")
 
     fights = {}
+    resources = set()
     for fight in _jsonl(Path(directory) / "fights.jsonl"):
+        resources.add(_has_resources(what, fight))
         outcome = fight["outcome"]
         if outcome not in PAIRED_OUTCOME:
             raise AuditInputError(f"{what} has a fight with unknown outcome {outcome!r}")
@@ -424,6 +561,8 @@ def load_run(directory, teacher, kind, panel):
         if fight["case_id"] in fights:
             raise AuditInputError(f"{what} has a case played twice")
         fights[fight["case_id"]] = fight
+    if len(resources) > 1:
+        raise AuditInputError(f"{what} mixes fights with and without resource fields")
     if fights.keys() != panel["cases"].keys():
         raise AuditInputError(f"{what} cases differ from the {kind} panel document's cases")
     if (len(fights) != summary["cases"]
@@ -434,7 +573,8 @@ def load_run(directory, teacher, kind, panel):
     decisions = case_decisions(rows)
     check_decisions(what, summary, {cid: fight["steps"] for cid, fight in fights.items()}, rows, decisions)
     return {"teacher": teacher, "panel": kind, "provenance": provenance, "fights": fights,
-            "decisions": decisions, "summary_sha256": _file_sha256(summary_path)}
+            "decisions": decisions, "summary_sha256": _file_sha256(summary_path),
+            "resources": resources == {True}}
 
 
 def load_ppo(path, name, panel):
@@ -477,6 +617,45 @@ def strength_row(run, panel):
     }
 
 
+def fight_losses(run):
+    """Per completed fight: (HP lost, potion HP spent) over the fight row's starting max HP; None without fields."""
+    if not run["resources"]:
+        return None
+    out = []
+    for fight in run["fights"].values():
+        if fight["outcome"] == "censored":
+            continue
+        hp_end = 0 if fight["outcome"] == "death" else fight["hp_after_cleanup"]
+        out.append(((fight["hp_start"] - hp_end) / fight["max_hp_start"],
+                    fight["potion_hp_spent"] / fight["max_hp_start"]))
+    return out
+
+
+def _top_tie(values):
+    means = [float(stat[0]) for stat in values.values()]
+    return means.count(max(means)) > 1
+
+
+def resource_row(run):
+    fights = run["fights"]
+    censored = Counter(f["censor_reason"] for f in fights.values() if f["outcome"] == "censored")
+    completed = [f for f in fights.values() if f["outcome"] != "censored"]
+    searched = [row for items in run["decisions"].values() for row in items if row["root"] == "searched"]
+    losses = fight_losses(run)
+    won = None if losses is None else [f["potions_start"] - f["potions_end"]
+                                       for f in completed if f["outcome"] == "victory"]
+    return {
+        "completed": len(completed), "censored": sum(censored.values()),
+        "censored_by_reason": dict(sorted(censored.items())),
+        "mean_hp_lost": None if losses is None else _mean([hp for hp, _ in losses]),
+        "mean_potion_hp_spent": None if losses is None else _mean([potion for _, potion in losses]),
+        "mean_resource_loss": None if losses is None else _mean([hp + potion for hp, potion in losses]),
+        "potions_used_per_win": None if won is None else _mean(won),
+        "searched_decisions": len(searched),
+        "top_tie_share": _mean([_top_tie(row["values"]) for row in searched]),
+    }
+
+
 def root_groups(run, panel):
     groups = defaultdict(Counter)
     for cid, rows in run["decisions"].items():
@@ -513,7 +692,29 @@ def _shared_provenance(runs):
     return shared
 
 
-def build_report(run_specs, panel_specs, ppo_specs=(), run_states=None):
+def _stop_for(runs, panels, teacher):
+    """The stop rule over one teacher's boss-fight decisions on every panel given."""
+    boss_roots = Counter()
+    panels_used = []
+    for (name, kind), run in runs.items():
+        if name == teacher:
+            panels_used.append(kind)
+            for (_, room_kind), counts in root_groups(run, panels[kind]).items():
+                if room_kind == "boss":
+                    boss_roots.update(counts)
+    return {"teacher": teacher, "panels": sorted(panels_used, key=PANELS.index), **stop_rule(boss_roots)}
+
+
+def shared_base_states(panels):
+    """Base states (run and floor) that both panels draw cases from."""
+    if not all(kind in panels for kind in PANELS):
+        return None
+    states = [{(case["run_id"], case["floor"]) for case in panels[kind]["cases"].values()} for kind in PANELS]
+    return len(states[0] & states[1])
+
+
+def build_report(run_specs, panel_specs, ppo_specs=(), run_states=None, v2=None):
+    """v2: None, or {"control": NAME, "candidates": [NAME, ...]} for the dataset-teacher choice v2."""
     panels = {}
     for kind, path in panel_specs:
         if kind in panels:
@@ -525,63 +726,76 @@ def build_report(run_specs, panel_specs, ppo_specs=(), run_states=None):
             raise AuditInputError(f"Run {teacher}:{kind} given twice")
         if kind not in panels:
             raise AuditInputError(f"Run {teacher}:{kind} needs --panel {kind}:FILE")
-        runs[teacher, kind] = load_run(directory, teacher, kind, panels[kind])
+        runs[teacher, kind] = load_run(directory, teacher, kind, panels[kind], allow_uncalibrated=v2 is not None)
     missing = [name for name in CANDIDATES if (name, "selection") not in runs]
-    if missing:
+    if missing and v2 is None:
         raise AuditInputError(f"Selection runs are required for {', '.join(missing)}")
     shared = _shared_provenance(list(runs.values()))
 
     strength = {kind: {} for kind in panels}
     roots = {kind: {} for kind in panels}
-    for (teacher, kind), run in sorted(runs.items(), key=lambda item: (PANELS.index(item[0][1]), TEACHERS.index(item[0][0]))):
+    resources = {kind: {} for kind in panels}
+    for (teacher, kind), run in sorted(runs.items(), key=lambda item: (PANELS.index(item[0][1]), teacher_order(item[0][0]))):
         strength[kind][teacher] = strength_row(run, panels[kind])
         roots[kind][teacher] = coverage(root_groups(run, panels[kind]))
+        resources[kind][teacher] = resource_row(run)
+    teachers = {teacher for teacher, _ in runs}
     ppo = {}
     for name, kind, path in ppo_specs:
         if kind not in panels:
             raise AuditInputError(f"PPO {name}:{kind} needs --panel {kind}:FILE")
-        if name in TEACHERS or name in strength[kind]:
+        if name in TEACHERS or name in teachers or name in strength[kind]:
             raise AuditInputError(f"PPO name {name} is a teacher name or given twice on {kind}")
         strength[kind][name] = ppo[name, kind] = load_ppo(path, name, panels[kind])
 
     outcomes = {key: {cid: f["outcome"] for cid, f in run["fights"].items()} for key, run in runs.items()}
-    tests = {name: g1_test(outcomes[name, "selection"], outcomes["current", "selection"]) for name in CHALLENGERS}
-    boss = {name: g1_test(outcomes[name, "boss"], outcomes["current", "boss"])
-            for name in CHALLENGERS if (name, "boss") in runs and ("current", "boss") in runs}
-    choice = choose_teacher(strength["selection"])
-    chosen = choice["chosen"]
-    boss_roots = Counter()
-    panels_used = []
-    for (teacher, kind), run in runs.items():
-        if teacher == chosen:
-            panels_used.append(kind)
-            for (_, room_kind), counts in root_groups(run, panels[kind]).items():
-                if room_kind == "boss":
-                    boss_roots.update(counts)
-
-    report = {
-        "schema": REPORT_SCHEMA,
-        "strength": strength,
-        "roots": roots,
-        "g1": {"tests": tests, "verdict": "PASS" if any(t["beats"] for t in tests.values()) else "FAIL",
-               "rule": "tree-1x and tree-3x each against current on the selection panel; exact two-sided McNemar; "
-                       "a case censored or escaped on either side is dropped; beats = more paired wins and p < 0.025",
-               "boss_panel": boss},
-        "teacher_choice": choice,
-        "stop_rule": {"teacher": chosen, "panels": sorted(panels_used, key=PANELS.index), **stop_rule(boss_roots)},
+    report = {"schema": REPORT_SCHEMA, "strength": strength, "roots": roots}
+    if not missing:
+        tests = {name: g1_test(outcomes[name, "selection"], outcomes["current", "selection"]) for name in CHALLENGERS}
+        boss = {name: g1_test(outcomes[name, "boss"], outcomes["current", "boss"])
+                for name in CHALLENGERS if (name, "boss") in runs and ("current", "boss") in runs}
+        choice = choose_teacher(strength["selection"])
+        report.update({
+            "g1": {"tests": tests, "verdict": "PASS" if any(t["beats"] for t in tests.values()) else "FAIL",
+                   "rule": "tree-1x and tree-3x each against current on the selection panel; exact two-sided McNemar; "
+                           "a case censored or escaped on either side is dropped; beats = more paired wins and p < 0.025",
+                   "boss_panel": boss},
+            "teacher_choice": choice,
+            "stop_rule": _stop_for(runs, panels, choice["chosen"]),
+        })
+    report["resources"] = resources
+    if v2 is not None:
+        names = [v2["control"], *v2["candidates"]]
+        losses = {}
+        for name in names:
+            pooled = [fight_losses(runs[name, kind]) for kind in PANELS if (name, kind) in runs]
+            losses[name] = None if None in pooled else [hp + potion for fights in pooled for hp, potion in fights]
+        choice_v2 = choose_v2(v2["control"], v2["candidates"],
+                              {key: value for key, value in outcomes.items() if key[0] in names},
+                              losses, shared_base_states(panels))
+        choice_v2["stop_rule"] = _stop_for(runs, panels, choice_v2["chosen"])
+        report["v2_choice"] = choice_v2
+    report.update({
         "provenance": {
             **shared,
             "panels": {kind: {key: panel[key] for key in ("panel_sha256", "manifest_sha256", "document_sha256")}
                        for kind, panel in panels.items()},
             "runs": {f"{teacher}:{kind}": {"config_sha256": run["provenance"].get("config_sha256"),
                                            "seed": run["provenance"].get("seed"),
-                                           "summary_sha256": run["summary_sha256"]}
+                                           "summary_sha256": run["summary_sha256"],
+                                           "calibrated": run["provenance"].get("calibrated"),
+                                           "uncalibrated_allowed": run["provenance"].get("uncalibrated_allowed") is True}
                      for (teacher, kind), run in runs.items()},
             "ppo": {f"{name}:{kind}": row["summary_sha256"] for (name, kind), row in ppo.items()},
             "hp_kept": "hp_after_cleanup / case starting max HP over completed fights; PPO: summary mean_hp_retention",
+            "resources": "signed means over completed fights, over the fight row's max_hp_start: HP lost "
+                         "(hp_start - hp_after_cleanup, a death counting 0 after), potion HP spent "
+                         "(potion_hp_spent at the entry's reference prices) and their sum, resource loss; "
+                         "potions used per won fight (potions_start - potions_end); top_tie_share of searched "
+                         "decisions; null for runs recorded without the resource fields",
             "claim": "simulator panels of reconstructed public-run states; no original-game transfer claim",
         },
-    }
+    })
     if run_states is not None:
         data = Path(run_states).read_bytes()
         digest = sha256(data).hexdigest()
@@ -607,8 +821,12 @@ def _fmt(value, digits=3):
     return f"{value:.{digits}f}" if isinstance(value, float) else str(value)
 
 
+def _row(cells):
+    return "| " + " | ".join(str(cell) for cell in cells) + " |"
+
+
 def render(report):
-    row = lambda cells: "| " + " | ".join(str(cell) for cell in cells) + " |"
+    row = _row
     out = []
     for kind, rows in report["strength"].items():
         out += [f"Strength against budget, {kind} panel:",
@@ -624,6 +842,18 @@ def render(report):
             level0 = report["baalorlord_level0"][kind]
             out.append(f"Baalorlord recorded level-0 wins: {level0['wins']} of {level0['cases']}.")
         out.append("")
+    for kind, rows in report.get("resources", {}).items():
+        out += [f"Resources, {kind} panel (signed means over completed fights, per starting max HP):",
+                row(["Teacher", "completed", "censored", "HP lost", "potion HP spent", "resource loss",
+                     "potions used / win", "top-tie share"]),
+                row(["---"] * 8)]
+        for name, r in rows.items():
+            reasons = ", ".join(f"{reason} {count}" for reason, count in r["censored_by_reason"].items())
+            out.append(row([name, r["completed"], f"{r['censored']} ({reasons})" if reasons else r["censored"],
+                            _fmt(r["mean_hp_lost"]), _fmt(r["mean_potion_hp_spent"]),
+                            _fmt(r["mean_resource_loss"]), _fmt(r["potions_used_per_win"]),
+                            _fmt(r["top_tie_share"])]))
+        out.append("")
     for kind, teachers in report["roots"].items():
         for teacher, groups in teachers.items():
             table = {tuple(int(p) if p.isdigit() else p for p in key.split(":")): group["counts"]
@@ -635,6 +865,21 @@ def render(report):
             out += [row([key.replace(":", " "), group["decisions"], _fmt(group["labelled_share"])])
                     for key, group in groups.items()]
             out.append("")
+    if "g1" in report:
+        out += render_g1(report)
+    if "v2_choice" in report:
+        out += render_v2(report["v2_choice"])
+    return "\n".join(out)
+
+
+def _stop_line(stop):
+    return (f"Stop rule ({stop['teacher']}, panels {', '.join(stop['panels'])}): boss_root_share "
+            f"{stop['boss_root_share']:.4f} ({stop['searched']} of {stop['decisions']}) -> {stop['verdict']}.")
+
+
+def render_g1(report):
+    row = _row
+    out = []
     g1 = report["g1"]
     out += ["G1 (selection panel, exact McNemar, alpha 0.025 each):",
             row(["Challenger", "paired", "excluded", "only challenger", "only current", "wins challenger",
@@ -646,11 +891,32 @@ def render(report):
     choice, stop = report["teacher_choice"], report["stop_rule"]
     out += [f"G1 verdict: {g1['verdict']}.", "",
             f"Teacher choice: {choice['chosen']} ({choice['rule']}).",
-            f"Stop rule ({stop['teacher']}, panels {', '.join(stop['panels'])}): boss_root_share "
-            f"{stop['boss_root_share']:.4f} ({stop['searched']} of {stop['decisions']}) -> {stop['verdict']}.",
+            _stop_line(stop),
             "Paired cases: " + ", ".join(f"{name} {t['paired']}" for name, t in g1["tests"].items())
             + ". At these sizes, differences below about 4-5 percentage points read as no difference."]
-    return "\n".join(out)
+    return out
+
+
+def render_v2(choice):
+    row = _row
+    out = ["", f"Dataset-teacher choice v2 (control {choice['control']}; candidates in tie-break order: "
+               f"{', '.join(choice['candidate_order'])}):",
+           row(["Candidate", "panel", "wins", "control wins", "deficit", "only control", "only candidate",
+                "escaped dropped", "one-sided p", "censored", "ineligible by"]),
+           row(["---"] * 11)]
+    for name, candidate in choice["candidates"].items():
+        for kind, t in candidate["panels"].items():
+            out.append(row([name, kind, t["wins"], t["control_wins"], t["win_deficit"], t["only_control"],
+                            t["only_candidate"], t["escaped_dropped"], f"{t['p_one_sided']:.4g}", t["censored"],
+                            ", ".join(t["reasons"]) or "-"]))
+    out += ["", row(["Candidate", "eligible", "resource loss (both panels)", "completed fights"]), row(["---"] * 4)]
+    out += [row([name, c["eligible"], _fmt(c["resource_loss"], 4), c["completed_fights"]])
+            for name, c in choice["candidates"].items()]
+    fallback = " (no candidate eligible; fell back to the control)" if choice["fell_back_to_control"] else ""
+    out += [f"Control {choice['control']} resource loss: {_fmt(choice['control_resource_loss'], 4)}.",
+            f"Chosen dataset teacher (v2): {choice['chosen']}{fallback}.",
+            f"Rule: {choice['rule']}.", f"Note: {choice['note']}.", _stop_line(choice["stop_rule"])]
+    return out
 
 
 # --- command line ------------------------------------------------------------------------------
@@ -671,8 +937,8 @@ def _split_spec(text, count, what):
 
 def _run_spec(text):
     teacher, panel, path = _split_spec(text, 3, "TEACHER:PANEL:DIR")
-    if teacher not in TEACHERS or panel not in PANELS:
-        raise argparse.ArgumentTypeError(f"TEACHER must be one of {TEACHERS} and PANEL one of {PANELS}")
+    if panel not in PANELS:
+        raise argparse.ArgumentTypeError(f"PANEL must be one of {PANELS}")
     return teacher, panel, Path(path)
 
 
@@ -711,7 +977,7 @@ def main(argv=None):
                              help="decisions.jsonl of a finished selection-split teacher run (summary.json beside it)")
     consistency.add_argument("--sample", type=entry._positive, default=2000)
     consistency.add_argument("--seed", type=int, required=True, help="sample seed")
-    consistency.add_argument("--teacher", choices=TEACHERS, required=True)
+    consistency.add_argument("--teacher", required=True, help="teacher name the run's provenance records")
     consistency.add_argument("--teachers", type=Path, required=True, help="teachers.json the run used")
     consistency.add_argument("--recipe", type=Path, required=True, help="recipe the run used")
     consistency.add_argument("--parallel", type=entry._positive, default=1)
@@ -723,9 +989,19 @@ def main(argv=None):
     report.add_argument("--panel", action="append", type=_panel_spec, required=True, metavar="PANEL:FILE")
     report.add_argument("--ppo", action="append", type=_ppo_spec, default=[], metavar="NAME:PANEL:SUMMARY")
     report.add_argument("--run-states", type=Path, metavar="FILE")
+    report.add_argument("--choose-v2", action="store_true",
+                        help="add the dataset-teacher choice v2; admits runs that record uncalibrated_allowed")
+    report.add_argument("--v1-control", metavar="NAME", help="v2 choice control teacher (with --choose-v2)")
+    report.add_argument("--candidate", action="append", default=[], metavar="NAME",
+                        help="v2 choice candidate, repeatable; the order is the tie-break order")
     report.add_argument("--output", type=Path, required=True, help="aggregate JSON under artifacts/")
     args = parser.parse_args(argv)
 
+    if args.command == "report":
+        if args.choose_v2 and (args.v1_control is None or not args.candidate):
+            parser.error("--choose-v2 needs --v1-control and at least one --candidate")
+        if not args.choose_v2 and (args.v1_control is not None or args.candidate):
+            parser.error("--v1-control and --candidate need --choose-v2")
     output = _output(parser, args.output)
     if args.command == "consistency":
         if not 0 <= args.seed < 1 << 64:
@@ -738,6 +1014,7 @@ def main(argv=None):
         [(panel, _ROOT / path) for panel, path in args.panel],
         [(name, panel, _ROOT / path) for name, panel, path in args.ppo],
         None if args.run_states is None else _ROOT / args.run_states,
+        {"control": args.v1_control, "candidates": args.candidate} if args.choose_v2 else None,
     )
     _write_json(output, result)
     print(render(result))

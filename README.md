@@ -141,6 +141,12 @@ the two replicates on the v1.2.0 pin with a 500-action per-turn cap, beside the
 panels, the search reference and the training-fight root availability. They are a
 separate series from the v1.1.1 baselines and are not paired with them.
 
+The [Gym v1.2.4 Standard baselines](docs/neural-standard-baseline-gym-1.2.4.md)
+retrain both replicates on the current pin, which has native Gym playouts. The
+doc also covers the rebuilt selection and boss panels, the search reference on
+both panels, the training-fight root availability (99.5% of decisions) and the
+calibrated search-teacher budgets. It is a separate series from v1.2.0.
+
 The separately approved fresh-weight campaign on this release has now completed
 its development comparisons. Across 438,272 learned decisions, the final mixed
 combat policy improved from **18/64 to 41/64 development wins**. All eight panels

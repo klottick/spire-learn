@@ -12,7 +12,7 @@ from spire_learn.neural.checkpoint import validate_checkpoint_metadata
 from spire_learn.neural.config import load_neural_config
 from spire_learn.neural.gym_contracts import (
     CURRENT_CONTRACT, LEGACY_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT,
-    GYM_V1_1_0_CONTRACT, GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT, GYM_V1_2_4_CONTRACT,
+    GYM_V1_1_0_CONTRACT, GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT, GYM_V1_2_4_CONTRACT, GYM_V1_2_5_CONTRACT,
     contract_for_revision, contracts_for_fingerprint,
 )
 from tests.unit import test_neural_envs_standard as standard_env_tests
@@ -166,7 +166,8 @@ class Gym8726D467Tests(unittest.TestCase):
                             for value in contract.raw_mode_mappings.values()))
         self.assertEqual(contracts_for_fingerprint(COMMON),
                          (CURRENT_CONTRACT, GYM_V1_CONTRACT, contract,
-                          GYM_V1_1_0_CONTRACT, GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT, GYM_V1_2_4_CONTRACT))
+                          GYM_V1_1_0_CONTRACT, GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT, GYM_V1_2_4_CONTRACT,
+                          GYM_V1_2_5_CONTRACT))
         self.assertEqual(dict(LEGACY_CONTRACT.raw_mode_mappings), {
             "standalone": "spire-learn-standalone-common-v1@02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78",
             "run": "spire-learn-run-policy-v3-common-v1@30905db1b7a520482d3ea8aa2e63ddb7f78b7c081de89d87268151f29cf4c7f8:02009686282c592f971eece3d5853eb54f2a482dde9dae1d0cf380ecdaf8fd78",

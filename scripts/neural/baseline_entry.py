@@ -719,9 +719,11 @@ def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, 
     settings = plan['evaluation'] if evaluation is None else evaluation
     evaluations = result_container.setdefault('evaluations', {})
     output.mkdir(parents=True, exist_ok=True)
+    from spire_learn.neural.gym_contracts import accepts_recorded_revision
     recipe = deps['load_recipe'](recipe_path)
     recipe_revision = getattr(recipe, 'gym_revision', None)  # Standard recipes carry their table's Gym revision
-    if recipe_revision is not None and recipe_revision != plan['gym_revision']:
+    # The table may be from another revision of the plan's rules epoch (a drop-in Gym), never another epoch.
+    if recipe_revision is not None and not accepts_recorded_revision(plan['gym_revision'], recipe_revision):
         raise ValueError(f"panel recipe {recipe_path} is for Gym {recipe_revision}, "
                          f"but the plan is for Gym {plan['gym_revision']}")
     if panel_kind == 'boss':

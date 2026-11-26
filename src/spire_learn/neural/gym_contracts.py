@@ -4,7 +4,7 @@ Schema names are not compatibility promises. A release selects the complete
 descriptor fingerprints and the checkpoint mapping IDs derived from them.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from collections.abc import Mapping
 
@@ -54,6 +54,9 @@ class GymContract:
     entry_resources_fingerprint: str | None = None
     run_states_table_schemas: tuple[str, ...] = ()
     standard_stream_smoke_tests: tuple[str, ...] = ()
+    # Native ``playout_many``/``playout_action`` accept ``tiered_verbs`` (rule
+    # ``spire-gym-public-playout-tiered-v1``, Gym v1.2.5). A capability, not a rules change.
+    tiered_playouts: bool = False
 
     @property
     def standard_compact_fingerprints(self) -> Mapping[str, str]:
@@ -251,11 +254,33 @@ GYM_V1_2_4_CONTRACT = GymContract(
         "tests.unit.test_neural_standard_compact.GatedCompactTests.test_capacity_overflow_is_a_driver_fault",
     ),
 )
+# A drop-in: v1.2.5 keeps v1.2.4's rules IDs, descriptor fingerprints, replay digests and rules
+# epoch, so its mode mappings equal v1.2.4's and checkpoints, tables and recipes cross between the
+# two. Only the build identity, the smoke tests and the tiered playout capability differ.
+GYM_V1_2_5_CONTRACT = replace(
+    GYM_V1_2_4_CONTRACT,
+    source_revision="731fca0e0341d80e7cf08a8be7a03be1fa32c3f1",
+    runtime_revisions=("731fca0e0341d80e7cf08a8be7a03be1fa32c3f1",),
+    build=BuildIdentity(
+        "731fca0e0341d80e7cf08a8be7a03be1fa32c3f1",
+        "19854fcccf6bd09ceef036297d4a6ecf9d068d9bbc37968a38de07482f2ce117",
+        "63533371d420314d41b6307169156e5fe715c41920052f4117d225cf758d6a63",
+        "release",
+        ("spire-python/extension",),
+    ),
+    standard_stream_smoke_tests=(
+        "tests.unit.test_neural_standard_stream_runtime.StandardStreamSmokeTest.test_standard_stream_smoke_gym_1_2_5",
+        "tests.unit.test_neural_standard_compact.GatedCompactTests.test_compact_and_dense_give_identical_policy_outputs",
+        "tests.unit.test_neural_standard_compact.GatedCompactTests.test_capacity_overflow_is_a_driver_fault",
+    ),
+    tiered_playouts=True,
+)
 CONTRACTS_BY_REVISION: dict[str, GymContract] = {
     revision: contract
     for contract in (
         LEGACY_CONTRACT, CURRENT_CONTRACT, GYM_V1_CONTRACT, GYM_8726D467_CONTRACT,
         GYM_V1_1_0_CONTRACT, GYM_V1_1_1_CONTRACT, GYM_V1_2_0_CONTRACT, GYM_V1_2_4_CONTRACT,
+        GYM_V1_2_5_CONTRACT,
     )
     for revision in contract.runtime_revisions
 }
@@ -275,6 +300,28 @@ def contract_for_revision(revision: str) -> GymContract:
     if type(revision) is str and revision in CONTRACTS_BY_REVISION:
         return CONTRACTS_BY_REVISION[revision]
     raise ValueError("unsupported Gym revision")
+
+
+def same_rules_epoch(revision_a: str, revision_b: str) -> bool:
+    """True only when both revisions are registered and their contracts share a rules epoch.
+
+    A contract without an epoch (``None``) shares none, not even with itself.
+    """
+    contracts = [CONTRACTS_BY_REVISION.get(revision) if type(revision) is str else None
+                 for revision in (revision_a, revision_b)]
+    if None in contracts:
+        return False
+    epoch = contracts[0].rules_epoch
+    return epoch is not None and epoch == contracts[1].rules_epoch
+
+
+def accepts_recorded_revision(live: str, recorded: str) -> bool:
+    """A recorded revision (a table's, a recipe's, a plan's) is usable on the live or configured one.
+
+    The same revision, as before, or two registered revisions in the same rules epoch. Records
+    from any other epoch fail closed.
+    """
+    return (type(live) is str and live == recorded) or same_rules_epoch(live, recorded)
 
 
 def contract_for_run_states(revision: str, table_schema: str) -> GymContract:

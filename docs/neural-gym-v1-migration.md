@@ -1,6 +1,6 @@
 # Spire Gym 1.0.0 and Standard adoption
 
-Updated **2026-11-25** (current release `v1.2.4`, build `673eb8f`; `v1.2.0`, build `4d19806`, stays valid; see the re-pin sections). Originally written 2026-11-12 for build `1929e18b`. Spire Learn now selects Gym by the configured revision
+Updated **2026-11-26** (current release `v1.2.5`, build `731fca0`, a drop-in in the `gym-1.2.4` rules epoch; `v1.2.4`, build `673eb8f`, and `v1.2.0`, build `4d19806`, stay valid; see the re-pin sections). Originally written 2026-11-12 for build `1929e18b`. Spire Learn now selects Gym by the configured revision
 and supports the Gym 1.0.0 common, Standard combat and Standard Run contracts.
 The native extension revision is
 `1929e18b9f44372e020877bd62f2a5c9dee3e64e` (tag `v1.0.0` is `fc3c0118`,
@@ -8,6 +8,78 @@ documentation/data only). The release build identity is `release`, clean, with
 feature `spire-python/extension`, source digest
 `d4b3121226cfbb030b89731ed7ea3773f5c2b44988c9ec01c2355d53f2dfa9b2` and file
 digest `dce682976f221f5686d16beda7ced03f0221624da0a9b83e8b5969f7300f60ce`.
+
+## Drop-in v1.2.5 (2026-11-26)
+
+Learn's newest templates are `configs/neural/gym-1.2.5/`. They pin Gym release
+`v1.2.5`, revision `731fca0e0341d80e7cf08a8be7a03be1fa32c3f1`, as a drop-in
+inside the existing rules epoch `gym-1.2.4`. Unlike the earlier re-pins, this
+one opens no new epoch: v1.2.4 checkpoints, run-states tables, recipes and
+panels are used unchanged on v1.2.5, and the reverse. The `v1.2.4` contract,
+profile and templates stay byte-identical and valid.
+
+| Item | Value |
+| --- | --- |
+| Packet | `~/.local/share/spire-gym/evidence/builds/731fca0/packet/` (read-only; never the network) |
+| Wheel SHA-256 | `02346039385b2135f5e7809b3af98315dca89e07cfd855de59eedfeeaad177cf` |
+| `_native` SHA-256 | `67819e119354e3a48e42102d66260055bcde7bed0f22b9e1eb7a84059580cdf2` |
+| `delivery_manifest_sha256` (SHA-256 of `DELIVERY.md`) | `c973774e2bc7af2399fe2332c48a5610c5160ad333c6037ae3d78903ccc8836b` |
+| `build_info()` | version `1.2.5`, `dirty=false`, `release`, feature `spire-python/extension`, Rust `1.99.0` |
+| `source_digest` / `file_digest` | `19854fcccf6bd09ceef036297d4a6ecf9d068d9bbc37968a38de07482f2ce117` / `63533371d420314d41b6307169156e5fe715c41920052f4117d225cf758d6a63` |
+| Rules IDs | Unchanged: Standard `spire-gym-native-standard-rules-v9`; M10/Gym66 `spire-gym-native-m10-rules-v6`; M9 `spire-gym-native-m9-rules-v7` |
+| Fingerprints | All 14 descriptor fingerprints, replay digests and Heart pins unchanged (packet `summary.txt`: 14 checked, none changed) |
+| `rules_epoch` | `gym-1.2.4` (shared with `v1.2.4`) |
+
+**Gym changes** (`docs/releases/v1.2.5.md` in the `source-ref` clone of the
+tag): a second native playout rule, `tiered_verbs`
+(`spire-gym-public-playout-tiered-v1`), on `playout_many` and
+`playout_action`, with `never_verbs` (default `use_potion`, `discard_potion`)
+and `last_resort_verbs` (default `end_turn`); it cannot be combined with
+`exclude_verbs`. Playout summaries gain `player_gold`, per-slot `potion_kind`
+and `potion_present`, and a terminal branch's `player_hp` is documented as HP
+after combat cleanup. The existing rule `spire-gym-public-playout-v1`, its
+defaults and its results are unchanged.
+
+**Epoch decision.** Learn's rules epochs exist so that weights, tables and
+recipes never cross a change in game rules. v1.2.5 changes no rules ID,
+fingerprint or replay digest, so it stays in `gym-1.2.4`. The registry gains
+`same_rules_epoch(a, b)`: true only when both revisions are registered and
+share an epoch that is not `None`. `accepts_recorded_revision(live, recorded)`
+is the same revision or `same_rules_epoch`; it replaces the strict
+recorded-versus-live revision checks. Records from any other epoch still fail
+closed.
+
+**Learn changes.**
+- `GYM_V1_2_5_CONTRACT` is `GYM_V1_2_4_CONTRACT` with v1.2.5's revision, build
+  identity and smoke tests, and the new capability flag `tiered_playouts=True`
+  (False for every earlier contract). Its mode mappings equal v1.2.4's (they
+  end `+gym-1.2.4`), so checkpoints load across the two releases in both
+  directions; `gym-1.2.0` checkpoints are still refused.
+- Epoch checks replace strict revision checks in `recipes.gym_validator`,
+  `recipes.require_recipe_revision` (so `stream_runner` and `stream_resume`),
+  `search_teacher_entry.py`, `teacher_audit.py`, `baseline_entry.py` (panel
+  recipe against the plan) and `boss_winnability._check_live_revision` (so the
+  descent-cost entry).
+- `search_teacher_entry.py` reads the compact-view capability from the live
+  Gym's contract and records the live `gym_revision` and `gym_build`;
+  `recipe_sha256` and `states_table_sha256` still name the `gym-1.2.4` recipe
+  and table.
+- `teacher_audit.py` keeps `rules_epoch` shared across runs, checks each run's
+  `gym_revision` against that epoch and records `gym_revision` and `gym_build`
+  per run under `provenance.runs` (no longer one shared build at the top).
+  Runs of one revision must still agree on `gym_build`. `consistency` keeps
+  exact build parity with the run it replays.
+- Added the six `configs/neural/gym-1.2.5/` files: the v1.2.4 ones with the
+  revision and run output directories changed. The package overlay is the
+  wheel extracted unchanged; the dependency venv is v1.2.4's.
+- Tests: `tests/unit/test_neural_gym_1_2_5.py`; gated smoke
+  `test_standard_stream_smoke_gym_1_2_5` (a gym-1.2.4 table on v1.2.5); the
+  gated compact tests also run on v1.2.5.
+- Not done here: native use of `tiered_verbs` for `no-potions-v2` (Task 10).
+
+**Determinism check** (Step 3, controller, runtime container): _pending; v1
+`current` on `--train-sample 200`, seed 2026112501, against
+`gym-1.2.4/t3/cost-current`._
 
 ## Re-pin to release v1.2.4 (2026-11-25)
 

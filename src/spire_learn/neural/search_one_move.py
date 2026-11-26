@@ -7,12 +7,39 @@ from hashlib import sha256
 import random
 
 from . import search_view
-from .search_view import View, summary_balance
+from .search_value import RootContext, ValueRule, cutoff_value, terminal_value
+from .search_view import PLAYOUT_POLICIES, View, summary_balance
 
 PLAYOUT_BACKENDS = ("python", "native")
 # Gym's declared public rule: Learn's View.heuristic_choice excludes these Standard verbs.
 PLAYOUT_RULE_ID = "spire-gym-public-playout-v1"
 PLAYOUT_EXCLUDE_VERBS = ("end_turn", "discard_potion")
+_FLAT = ValueRule("flat-v1")
+
+
+def check_value_options(value_rule: ValueRule, playout_policy: str, playout_backend: str,
+                        branch_view: str = "full") -> None:
+    """Guards shared by both teachers for the value rule and playout policy."""
+    if not isinstance(value_rule, ValueRule):
+        raise ValueError("value_rule must be a ValueRule")
+    if playout_policy not in PLAYOUT_POLICIES:
+        raise ValueError(f"playout_policy must be one of {PLAYOUT_POLICIES}")
+    if playout_backend != "python" and (value_rule.name != "flat-v1" or playout_policy != "uniform-v1"):
+        raise ValueError(f"The native backend plays out under Gym's {PLAYOUT_RULE_ID} rule, which cannot "
+                         "keep potions out; use playout_backend 'python' for "
+                         f"{value_rule.name} with {playout_policy}")
+    if playout_policy != "uniform-v1" and branch_view != "full":
+        raise ValueError(f"playout_policy {playout_policy} requires the full branch view")
+    if value_rule.name == "resource-v2" and playout_policy != "no-potions-v2":
+        raise ValueError("value rule resource-v2 requires playout_policy no-potions-v2")
+
+
+def terminal_score(rule: ValueRule, root: RootContext, view: View, observation, reward, info) -> float:
+    """resource-v2 value of a terminal step; the reason comes from the step's info."""
+    reason = info.get("terminal_reason")
+    if reason is None:
+        raise ValueError("A terminal step under resource-v2 has no terminal_reason")
+    return terminal_value(rule, root, view, observation, reward, reason)
 
 
 @dataclass(frozen=True)
@@ -153,14 +180,21 @@ def _close_branch(branch) -> None:
 
 def one_move_values(search, legal: Sequence[int], view: View, *, samples: int,
                     playout_steps: int, research_seed: int,
-                    branch_view: str = "full", playout_backend: str = "python") -> dict[int, ActionStat]:
+                    branch_view: str = "full", playout_backend: str = "python",
+                    value_rule: ValueRule = _FLAT, playout_policy: str = "uniform-v1",
+                    root: RootContext | None = None) -> dict[int, ActionStat]:
     """Evaluate each action over paired worlds. The caller owns the search root.
 
     The native backend takes the root action with ``step_many`` and plays every
     live branch out in one ``playout_many`` call under the Gym's public rule.
+    ``resource-v2`` needs ``root``, the context of the decision being searched.
     """
     if playout_backend not in PLAYOUT_BACKENDS:
         raise ValueError(f"playout_backend must be one of {PLAYOUT_BACKENDS}")
+    check_value_options(value_rule, playout_policy, playout_backend, branch_view)
+    v2 = value_rule.name == "resource-v2"
+    if v2 and root is None:
+        raise ValueError("resource-v2 needs the root context of the decision")
     with ExitStack() as handles:
         by_action = {}
         active = []
@@ -184,12 +218,22 @@ def one_move_values(search, legal: Sequence[int], view: View, *, samples: int,
             continuing = []
             for item, result in zip(active, step_branches(search, branches, actions, view=branch_view), strict=True):
                 if result.refused or result.terminated:
-                    item.value = result.reward
+                    if v2 and not result.refused:
+                        item.value = terminal_score(value_rule, root, view, result.observation,
+                                                    result.reward, result.info)
+                    else:
+                        item.value = result.reward
                     item.refused = result.refused
                 elif result.truncated or depth == playout_steps:
-                    item.value = 0.5 * view.balance(result.observation)
+                    if v2:
+                        item.value = cutoff_value(value_rule, root, view, result.observation)
+                    else:
+                        item.value = 0.5 * view.balance(result.observation)
                 else:
-                    item.action = view.heuristic_choice(result.observation, item.rng)
+                    if playout_policy == "uniform-v1":
+                        item.action = view.heuristic_choice(result.observation, item.rng)
+                    else:
+                        item.action = view.playout_choice(result.observation, item.rng, playout_policy)
                     continuing.append(item)
             active = continuing
             # Row views retain the stacked arrays. Release them before the next dispatch.
@@ -206,7 +250,10 @@ def one_move_values(search, legal: Sequence[int], view: View, *, samples: int,
 
 
 def _native_playouts(search, active, view, playout_steps, research_seed, branch_view):
-    """Take the root action, then score live branches natively. Returns no branches to continue."""
+    """Take the root action, then score live branches natively. Returns no branches to continue.
+
+    Gym's playout rule and summary serve only flat-v1 with uniform-v1; ``check_value_options`` refuses the rest.
+    """
     results = step_branches(search, [item.branch for item in active],
                             [item.action for item in active], view=branch_view)
     live = []

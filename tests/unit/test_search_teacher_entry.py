@@ -5,13 +5,18 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
+import random
 from unittest.mock import Mock, patch
 
 from scripts.neural import search_teacher_entry as entry
 from scripts.neural.boss_winnability import _is_train
-from spire_learn.neural.gym_contracts import GYM_V1_2_0_CONTRACT
+from spire_learn.neural.gym_contracts import GYM_V1_2_0_CONTRACT, GYM_V1_2_4_CONTRACT
 from spire_learn.neural.search_one_move import ActionStat
+from spire_learn.neural.search_teacher import TeacherConfig, TeacherResult
+from spire_learn.neural.search_value import RootContext, ValueRule
+from spire_learn.neural.search_view import View
 from spire_learn.neural.standard_stream import run_split
+from tests.unit import _search_fakes as fakes
 
 
 class Unsupported(Exception):
@@ -28,20 +33,48 @@ class Fault(Exception):
 
 CASE = {"case_id": "fixture", "entry": {"id": "fixture"}, "environment_seed": 42}
 CURRENT = {"samples": 32, "playout_steps": 80}
+V2 = ValueRule("resource-v2")
+POLICY = "no-potions-v2"
+CURRENT_V2 = {**CURRENT, "value_rule": V2, "playout_policy": POLICY}
+TEACHERS = entry._ROOT / "configs/neural/search-teacher-gym-1.2.4/teachers.json"
+# The fakes' player columns, then the public turn.
+TURN = len(fakes.PLAYER)
+
+
+def public(turn, **fields):
+    """A Standard-shaped public observation (``_search_fakes``) with the public turn appended."""
+    row = fakes.observation(**fields)
+    row["player"] = fakes.Arr([*row["player"], turn])
+    row["player_known"] = fakes.Arr([*row["player_known"], 1])
+    return row
+
+
+def resource_view(legal=(0,), choice=None):
+    """A real ``View`` on the fake descriptor whose legal actions and heuristic move are fixed."""
+    view = Mock(wraps=View(fakes.descriptor()))
+    view.legal.return_value = list(legal)
+    view.heuristic_choice.return_value = choice
+    return view
 
 
 class Fight:
-    def __init__(self, *, legal=(0,), turn_stride=1, terminal=False, finish=None):
+    def __init__(self, *, legal=(0,), turn_stride=1, terminal=False, finish=None, start=None, after=None,
+                 verbs=None):
         self.legal = list(legal)
         self.turn_stride = turn_stride
         self.finish = finish
         self.terminal = terminal
+        self.start = start or {}
+        self.after = self.start if after is None else after
+        self.verbs = tuple("play_card" for _ in self.legal) if verbs is None else verbs
         self.actions = []
         self.public_search = Mock(side_effect=Unsupported("runic_dome"))
 
     def observation(self):
-        return {"player": [len(self.actions) // self.turn_stride], "player_known": [1],
-                "hidden_rng": "private"}
+        fields = self.after if self.actions else self.start
+        row = public(len(self.actions) // self.turn_stride, verbs=self.verbs, **fields)
+        row["hidden_rng"] = "private"
+        return row
 
     def reset(self, case):
         return self.observation(), {
@@ -58,21 +91,19 @@ class Fight:
 
 def process_job(job):
     case = {**CASE, "case_id": f"fixture-{job}"}
-    view = Mock()
-    view.legal.return_value = [0]
     fight, decisions = entry.play_fight(
-        Fight(finish=job + 1), case, view, 0, CURRENT, research_seed=job,
+        Fight(finish=job + 1, after={"hp": 40 - job, "potions": ("fire_potion",)}), case, resource_view(),
+        TURN, CURRENT, research_seed=job,
     )
     return os.getpid(), fight, decisions
 
 
 class TeacherEntryTests(unittest.TestCase):
-    def play(self, fight, **kwargs):
-        view = Mock()
-        view.legal.return_value = fight.legal
-        view.heuristic_choice.return_value = fight.legal[-1] if fight.legal else None
+    def play(self, fight, teacher=CURRENT, view=None, **kwargs):
+        if view is None:
+            view = resource_view(fight.legal, fight.legal[-1] if fight.legal else None)
         with patch.object(entry.search_view, "_native_errors", return_value=(Unsupported, StateError, Fault)):
-            return entry.play_fight(fight, CASE, view, 0, CURRENT, research_seed=11, **kwargs)
+            return entry.play_fight(fight, CASE, view, TURN, teacher, research_seed=11, **kwargs)
 
     def test_terminal_at_reset_fight_has_zero_decisions(self):
         fight = Fight(terminal=True, legal=())
@@ -123,7 +154,9 @@ class TeacherEntryTests(unittest.TestCase):
     def test_outputs_have_no_hidden_state(self):
         result, records = self.play(Fight(finish=1))
         self.assertEqual(set(result), {"case_id", "outcome", "censor_reason", "steps",
-                                       "hp_after_cleanup", "cpu_seconds", "wall_seconds"})
+                                       "hp_after_cleanup", "cpu_seconds", "wall_seconds",
+                                       "hp_start", "max_hp_start", "max_hp_end", "potions_start",
+                                       "potions_end", "potion_hp_spent"})
         self.assertEqual(set(records[0]), {"case_id", "step", "action_prefix_length", "root",
                                            "values", "choice", "cpu_seconds", "research_seed",
                                            "branch_refusals", "simulations"})
@@ -220,8 +253,8 @@ class SearchFightParityTests(unittest.TestCase):
         }))
         self.enterContext(patch.object(entry, "_vector_env", return_value=self.vector))
 
-        reset = {"player": [1], "player_known": [1], "action_mask": [1, 0]}
-        successor = {"player": [2], "player_known": [1], "action_mask": [1, 1]}
+        reset = public(1, verbs=("play_card",))
+        successor = public(2, verbs=("play_card", "end_turn"))
         info = {"phase": "combat", "terminal_reason": None, "hp_after_cleanup": None}
         self.vector.reset.return_value = self.batch(reset), self.info_batch(info)
         self.vector.step.return_value = (
@@ -240,13 +273,11 @@ class SearchFightParityTests(unittest.TestCase):
                 for key, value in ((field, item), ("_" + field, True))}
 
     def assert_fight_rejects(self, message, *, after_step):
-        view = SimpleNamespace(legal=lambda row: [
-            index for index, legal in enumerate(row["action_mask"]) if legal
-        ])
+        view = View(fakes.descriptor())
         with (patch.object(entry.search_view, "_native_errors", return_value=(Unsupported, StateError, Fault)),
               self.assertRaisesRegex(RuntimeError, message)):
             with entry._fight_env(CASE, "train") as (fight, _):
-                entry.play_fight(fight, CASE, view, 0, CURRENT, research_seed=11)
+                entry.play_fight(fight, CASE, view, TURN, CURRENT, research_seed=11)
         self.standalone.public_search.assert_not_called()
         self.vector.close.assert_called_once_with()
         self.standalone.close.assert_called_once_with()
@@ -329,3 +360,261 @@ class PerActionTeacherEntryTests(unittest.TestCase):
             self.assertEqual(teacher.min_root_visits, 8)
             self.assertEqual((teacher.simulations, teacher.simulations_per_action), (None, k))
             self.assertEqual(teacher.decision_simulations(5), 5 * k)
+
+
+CURRENT_SHA = "2f29eef07620a022843bff0b634aad167d70902f06331ee6a5ef4c3284f1cdb4"
+SQRT_15 = {"name": "resource-v2", "potion_hp": 15, "hp_curve": "sqrt"}
+
+
+def v2_teachers(directory, **rows):
+    """The committed gym-1.2.4 teachers plus uncalibrated v2 rows; ``rows`` override or add teachers."""
+    data = json.loads(TEACHERS.read_text())
+    tree = data["teachers"]["tree-3x"]
+    data["teachers"].update({
+        "current-v2": {"kind": "one-move", "calibrated": False, "samples": 32, "playout_steps": 80,
+                       "playout_backend": "python", "value_rule": {"name": "resource-v2"},
+                       "playout_policy": POLICY},
+        "tree-3x-v2": {"calibrated": False, "target_cost_multiple": 3,
+                       "config": {**tree["config"], "playout_backend": "python",
+                                  "value_rule": {"name": "resource-v2"}, "playout_policy": POLICY}},
+        **rows,
+    })
+    path = Path(directory) / "teachers.json"
+    path.write_text(json.dumps(data))
+    return path
+
+
+def run_entry(directory, teachers, name, *, allow_uncalibrated=False):
+    """``_run`` on one selection fight, with the Gym, recipe and panel replaced by fakes."""
+    revision = GYM_V1_2_4_CONTRACT.source_revision
+    recipe = Mock(spec=entry.StandardRecipe, gym_revision=revision, table_sha256="table",
+                  character="ironclad", ascension=20)
+    gym = SimpleNamespace(_native=SimpleNamespace(build_info=lambda: {"revision": revision}))
+    panel = {"manifest": {"cases": [CASE]}, "panel_identity": "panel", "panel_sha256": "p", "manifest_sha256": "m"}
+    descriptor = {"profile_id": "profile", "schema_id": "schema", "fingerprint": "fingerprint"}
+    fight = {"case_id": CASE["case_id"], "outcome": "victory", "cpu_seconds": 0.0}
+    recipe_path = Path(directory) / "recipe.json"
+    recipe_path.write_text("{}")
+    args = SimpleNamespace(teachers=teachers, teacher=name, panel="selection", recipe=recipe_path,
+                           train_sample=None, seed=1, limit=None, max_steps=1024, max_turn_actions=500,
+                           parallel=1, allow_uncalibrated=allow_uncalibrated)
+    with (patch.dict(sys.modules, {"spire_lab": gym}),
+          patch.object(entry, "load_recipe", return_value=recipe),
+          patch.object(entry, "build_panel", return_value=panel),
+          patch.object(entry, "preflight", return_value=descriptor),
+          patch.object(entry, "_results", return_value=[(fight, [])]) as results):
+        summary = entry._run(args, Path(directory) / f"output-{name}")
+    return summary, results.call_args.args[0]
+
+
+class NamedTeacherTests(unittest.TestCase):
+    def test_v2_teacher_names_load_from_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            configs = v2_teachers(directory)
+            one_move, one_sha, one_calibrated = entry._teacher(configs, "current-v2", None)
+            tree, tree_sha, tree_calibrated = entry._teacher(configs, "tree-3x-v2", None)
+            with self.assertRaisesRegex(ValueError, "unknown teacher 'tree-99x'.*current, current-v2, tree-10x"):
+                entry._teacher(configs, "tree-99x", None)
+            with (patch.object(entry, "_run", return_value={}) as run,
+                  patch.dict(os.environ, {"SPIRE_LEARN_RUNNER_OUTPUT": ""})):
+                entry.main(["--recipe", "recipe.json", "--train-sample", "1", "--teacher", "tree-3x-v2",
+                            "--teachers", str(configs), "--seed", "1",
+                            "--output", str(entry._ROOT / "artifacts" / "unused-v2-name-test")])
+        self.assertEqual(run.call_args.args[0].teacher, "tree-3x-v2")
+        self.assertFalse(run.call_args.args[0].allow_uncalibrated)
+        self.assertEqual(one_move, CURRENT_V2)
+        self.assertIsInstance(tree, TeacherConfig)
+        self.assertEqual((tree.value_rule, tree.playout_policy, tree.playout_backend), (V2, POLICY, "python"))
+        self.assertEqual(tree.simulations_per_action, 66)
+        self.assertEqual(tree_sha, entry.config_sha256(tree))
+        self.assertFalse(one_calibrated or tree_calibrated)
+        v1_tree = entry._teacher(TEACHERS, "tree-3x", None)[1]
+        self.assertEqual(len({one_sha, tree_sha, CURRENT_SHA, v1_tree}), 4)
+
+    def test_v2_rows_reject_invalid_value_options(self):
+        tree = json.loads(TEACHERS.read_text())["teachers"]["tree-3x"]
+        bad = {
+            "native-v2": {"kind": "one-move", "samples": 32, "playout_steps": 80, "playout_backend": "native",
+                          "value_rule": {"name": "resource-v2"}, "playout_policy": POLICY},
+            "uniform-v2": {"kind": "one-move", "samples": 32, "playout_steps": 80,
+                           "value_rule": {"name": "resource-v2"}},
+            "extra-field": {"kind": "one-move", "samples": 32, "playout_steps": 80,
+                            "value_rule": {"name": "resource-v2", "scale": 2}, "playout_policy": POLICY},
+            "tree-native-v2": {"calibrated": False, "config": {**tree["config"],
+                                                               "value_rule": {"name": "resource-v2"},
+                                                               "playout_policy": POLICY}},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            configs = v2_teachers(directory, **bad)
+            for name in bad:
+                with self.subTest(teacher=name), self.assertRaises(ValueError):
+                    entry._teacher(configs, name, None)
+
+    def test_current_hash_unchanged_after_dispatch_change(self):
+        teacher, digest, calibrated = entry._teacher(TEACHERS, "current", "selection")
+        self.assertEqual(digest, CURRENT_SHA)
+        self.assertEqual(teacher, {"samples": 32, "playout_steps": 80, "playout_backend": "native"})
+        self.assertTrue(calibrated)
+        # Dispatch follows the row's kind, not its name: the same row under another name hashes the same.
+        row = json.loads(TEACHERS.read_text())["teachers"]["current"]
+        with tempfile.TemporaryDirectory() as directory:
+            configs = v2_teachers(directory, renamed=row, **{"current-explicit": {
+                **row, "value_rule": {"name": "flat-v1"}, "playout_policy": "uniform-v1"}})
+            self.assertEqual(entry._teacher(configs, "renamed", "selection")[:2], (teacher, CURRENT_SHA))
+            self.assertEqual(entry._teacher(configs, "current-explicit", "selection")[1], CURRENT_SHA)
+            summary, _ = run_entry(directory, TEACHERS, "current")
+        provenance = summary["provenance"]
+        self.assertEqual(provenance["config_sha256"], CURRENT_SHA)
+        self.assertEqual(provenance["teacher_config"], teacher)
+        self.assertNotIn("uncalibrated_allowed", provenance)
+
+    def test_uncalibrated_panel_run_needs_flag_and_is_recorded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            configs = v2_teachers(directory)
+            for name in ("current-v2", "tree-3x-v2"):
+                with self.subTest(teacher=name):
+                    with self.assertRaisesRegex(ValueError, "uncalibrated"):
+                        entry._teacher(configs, name, "selection")
+                    with self.assertRaisesRegex(ValueError, "uncalibrated"):
+                        run_entry(directory, configs, name)
+                    _, _, calibrated = entry._teacher(configs, name, "selection", allow_uncalibrated=True)
+                    self.assertFalse(calibrated)
+                    summary, _ = run_entry(directory, configs, name, allow_uncalibrated=True)
+                    provenance = summary["provenance"]
+                    self.assertIs(provenance["uncalibrated_allowed"], True)
+                    self.assertIs(provenance["calibrated"], False)
+                    self.assertEqual(provenance["panel"], "selection")
+            with patch.object(entry, "_run", return_value={}) as run, \
+                 patch.dict(os.environ, {"SPIRE_LEARN_RUNNER_OUTPUT": ""}):
+                entry.main(["--recipe", "recipe.json", "--panel", "selection", "--teacher", "current-v2",
+                            "--teachers", str(configs), "--seed", "1", "--allow-uncalibrated",
+                            "--output", str(entry._ROOT / "artifacts" / "unused-v2-flag-test")])
+        self.assertTrue(run.call_args.args[0].allow_uncalibrated)
+
+    def test_value_rule_round_trips_into_provenance(self):
+        one_move = {"kind": "one-move", "calibrated": True, "samples": 32, "playout_steps": 80,
+                    "value_rule": SQRT_15, "playout_policy": POLICY}
+        tree = json.loads(TEACHERS.read_text())["teachers"]["tree-1x"]
+        tree = {**tree, "config": {**tree["config"], "playout_backend": "python", "value_rule": SQRT_15,
+                                   "playout_policy": POLICY}}
+        rule = ValueRule.from_identity(SQRT_15)
+        with tempfile.TemporaryDirectory() as directory:
+            configs = v2_teachers(directory, **{"one-move-sqrt": one_move, "tree-sqrt": tree})
+            for name in ("one-move-sqrt", "tree-sqrt"):
+                with self.subTest(teacher=name):
+                    teacher, digest, _ = entry._teacher(configs, name, "selection")
+                    summary, jobs = run_entry(directory, configs, name)
+                    provenance = summary["provenance"]
+                    config = provenance["teacher_config"]
+                    self.assertEqual(config["value_rule"], rule.as_identity())
+                    self.assertEqual(config["value_rule"]["potion_overrides"],
+                                     {"fairy_potion": 30.0, "fruit_juice": 7.5})
+                    self.assertEqual(ValueRule.from_identity(config["value_rule"]), rule)
+                    self.assertEqual(config["playout_policy"], POLICY)
+                    self.assertEqual(provenance["config_sha256"], digest)
+                    written = json.loads((Path(directory) / f"output-{name}" / "summary.json").read_text())
+                    self.assertEqual(written["provenance"]["teacher_config"], json.loads(json.dumps(config)))
+                    self.assertEqual(jobs[0][2], teacher)
+                    self.assertNotIn("playout_backend", provenance)
+            self.assertEqual(entry._teacher(configs, "tree-sqrt", None)[0].value_rule, rule)
+            one, _, _ = entry._teacher(configs, "one-move-sqrt", None)
+        self.assertEqual(one, {**CURRENT, "value_rule": rule, "playout_policy": POLICY})
+
+
+class V2DecisionTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.object(entry.search_view, "_native_errors",
+                                       return_value=(Unsupported, StateError, Fault)))
+
+    def tree(self, **overrides):
+        return TeacherConfig(simulations_per_action=8, worlds=2, ucb_c=1.0, max_depth=2, widening=None,
+                             **overrides)
+
+    def refused(self, teacher):
+        # Real heuristic_choice prefers the potion (index 1); no-potions-v2 ends the turn (index 0).
+        observation = public(0, verbs=("end_turn", "use_potion"), potions=("fire_potion",))
+        view = Mock(wraps=View(fakes.descriptor()))
+        env = Mock(public_search=Mock(side_effect=Unsupported("runic_dome")))
+        rng = random.Random(5)
+        result = entry._decision(env, observation, [0, 1], view, teacher, rng, 7)
+        return result, view, rng, observation
+
+    def test_refused_root_uses_policy_for_v2(self):
+        flat_control = {**CURRENT, "playout_policy": POLICY}
+        for name, teacher in (("one-move-v2", CURRENT_V2), ("one-move-control", flat_control),
+                              ("tree-v2", self.tree(value_rule=V2, playout_policy=POLICY)),
+                              ("tree-control", self.tree(playout_policy=POLICY))):
+            with self.subTest(teacher=name):
+                (root, choice, values, *_), view, rng, observation = self.refused(teacher)
+                self.assertEqual((root, choice, values), ("runic_dome", 0, None))
+                view.playout_choice.assert_called_once_with(observation, rng, POLICY)
+                view.heuristic_choice.assert_not_called()
+        for name, teacher in (("one-move-v1", CURRENT), ("tree-v1", self.tree())):
+            with self.subTest(teacher=name):
+                (root, choice, values, *_), view, rng, observation = self.refused(teacher)
+                reference = random.Random(5)
+                expected = View(fakes.descriptor()).heuristic_choice(observation, reference)
+                self.assertEqual((root, choice, values), ("runic_dome", expected, None))
+                self.assertEqual(expected, 1)
+                self.assertEqual(rng.getstate(), reference.getstate())
+                view.heuristic_choice.assert_called_once_with(observation, rng)
+                view.playout_choice.assert_not_called()
+
+    def test_searched_v2_root_passes_the_decision_root_context(self):
+        observation = public(0, hp=40, max_hp=70, potions=("fairy_potion",), verbs=("play_card", "end_turn"))
+        view = View(fakes.descriptor())
+        expected = RootContext.from_observation(view, observation, V2)
+        stats = {0: ActionStat(0.5, 8, 0), 1: ActionStat(0.25, 8, 0)}
+        cases = (("one-move-v2", CURRENT_V2, expected), ("one-move-v1", CURRENT, None),
+                 ("tree-v2", self.tree(value_rule=V2, playout_policy=POLICY), expected),
+                 ("tree-v1", self.tree(), None))
+        for name, teacher, root in cases:
+            with self.subTest(teacher=name):
+                env = Mock()
+                with (patch.object(entry, "View"),
+                      patch.object(entry, "one_move_values", return_value=stats) as one_move,
+                      patch.object(entry, "teach", return_value=TeacherResult(0, stats, 16, 0, 0.0)) as tree):
+                    result = entry._decision(env, observation, [0, 1], view, teacher, random.Random(3), 9)
+                self.assertEqual(result[:2], ("searched", 0))
+                call = (tree if isinstance(teacher, TeacherConfig) else one_move).call_args
+                if root is None:
+                    self.assertNotIn("root", call.kwargs)
+                else:
+                    self.assertEqual(call.kwargs["root"], root)
+                env.public_search.return_value.close.assert_called_once()
+
+
+class FightResourceTests(unittest.TestCase):
+    START = {"hp": 50, "max_hp": 80, "potions": ("fire_potion", "fairy_potion", "block_potion")}
+    END = {"hp": 30, "max_hp": 85, "potions": ("block_potion", "fruit_juice")}
+
+    def play(self, fight, teacher=CURRENT):
+        view = resource_view(fight.legal, fight.legal[-1] if fight.legal else None)
+        with patch.object(entry.search_view, "_native_errors", return_value=(Unsupported, StateError, Fault)):
+            return entry.play_fight(fight, CASE, view, TURN, teacher, research_seed=11)[0]
+
+    def resources(self, row):
+        keys = ("hp_start", "max_hp_start", "max_hp_end", "potions_start", "potions_end", "potion_hp_spent")
+        for key in keys[:-1]:
+            self.assertIs(type(row[key]), int, key)
+        self.assertIs(type(row["potion_hp_spent"]), float)
+        return tuple(row[key] for key in keys)
+
+    def test_fight_row_records_resources(self):
+        # Spent fire (12) and fairy (30), gained fruit juice (7.5): 34.5 HP on the fixed reference prices.
+        expected = (50, 80, 85, 3, 2, 34.5)
+        dear = {**CURRENT_V2, "value_rule": ValueRule("resource-v2", potion_hp=15.0,
+                                                      potion_overrides=(("fairy_potion", 50.0),))}
+        for name, teacher in (("v1", CURRENT), ("v2-own-prices", dear)):
+            with self.subTest(teacher=name):
+                row = self.play(Fight(legal=(0, 1), finish=1, start=self.START, after=self.END), teacher)
+                self.assertEqual((row["outcome"], row["hp_after_cleanup"]), ("victory", 3))
+                self.assertEqual(self.resources(row), expected)
+
+        censored = self.play(Fight(turn_stride=2000, start=self.START, after=self.END))
+        self.assertEqual((censored["outcome"], censored["hp_after_cleanup"]), ("censored", None))
+        self.assertEqual(self.resources(censored), expected)
+
+        at_reset = self.play(Fight(terminal=True, legal=(), start=self.START, after=self.END))
+        self.assertEqual((at_reset["outcome"], at_reset["steps"], at_reset["hp_after_cleanup"]), ("victory", 0, 3))
+        self.assertEqual(self.resources(at_reset), (50, 80, 80, 3, 3, 0.0))

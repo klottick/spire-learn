@@ -31,14 +31,19 @@ from spire_learn.neural.cases import environment_seed_for
 from spire_learn.neural.gym_contracts import STANDARD_COMPACT_PRESET, contract_for_revision
 from spire_learn.neural.recipes import build_panel, load_recipe
 from spire_learn.neural.scenario_support import content_sha256, json_value
-from spire_learn.neural.search_one_move import PLAYOUT_RULE_ID, one_move_values
+from spire_learn.neural.search_one_move import PLAYOUT_RULE_ID, check_value_options, one_move_values
 from spire_learn.neural.search_teacher import TeacherConfig, config_identity, config_sha256, search_options, teach
+from spire_learn.neural.search_value import RootContext, ValueRule
 from spire_learn.neural.search_view import View, refusal_class
 from spire_learn.neural.standard_stream import StandardRecipe
 
 TERMINAL_REWARDS = {"victory": 1, "death": -1, "escaped": 0}
 # Gym 1.2.0 admits at most 4,096 live public branches per arena.
 _CURRENT_ACTION_BATCH = 127
+_FLAT = ValueRule("flat-v1")
+# Fight rows price potions on this fixed yardstick, whatever the teacher's own prices.
+_REFERENCE_PRICES = ValueRule("resource-v2", potion_hp=12.0,
+                              potion_overrides=(("fairy_potion", 30.0), ("fruit_juice", 7.5)))
 
 
 def sample_train_cases(states, count, seed):
@@ -157,9 +162,17 @@ def _fight_env(case, split):
         yield _SearchFight(vector, standalone), vector.observation_spec()
 
 
+def _value_options(teacher):
+    """The teacher's value rule and playout policy, at their v1 defaults when unset."""
+    if isinstance(teacher, TeacherConfig):
+        return teacher.value_rule, teacher.playout_policy
+    return teacher.get("value_rule", _FLAT), teacher.get("playout_policy", "uniform-v1")
+
+
 def _decision(env, observation, legal, view, teacher, rng, research_seed):
     if len(legal) == 1:
         return "single_legal", legal[0], None, None, 0, None
+    value_rule, playout_policy = _value_options(teacher)
 
     if isinstance(teacher, TeacherConfig):
         options = search_options(teacher, len(legal))
@@ -178,18 +191,26 @@ def _decision(env, observation, legal, view, teacher, rng, research_seed):
     try:
         arena = env.public_search(research_seed, **options)
     except (unsupported, state_error) as error:
-        return refusal_class(error), view.heuristic_choice(observation, rng), None, None, 0, None
+        if playout_policy == "uniform-v1":
+            fallback = view.heuristic_choice(observation, rng)
+        else:
+            fallback = view.playout_choice(observation, rng, playout_policy)
+        return refusal_class(error), fallback, None, None, 0, None
 
     try:
+        # resource-v2 scores branches against this decision's own public resources; v1 passes no root.
+        root = ({"root": RootContext.from_observation(view, observation, value_rule)}
+                if value_rule.name == "resource-v2" else {})
         branch_view = View(arena.observation_spec())
         if isinstance(teacher, TeacherConfig):
-            result = teach(arena, legal, branch_view, teacher, research_seed=research_seed)
+            result = teach(arena, legal, branch_view, teacher, research_seed=research_seed, **root)
             choice, stats, simulations = result.choice, result.stats, result.simulations
         else:
             simulations = teacher["samples"] * len(legal)
             stats = {}
             for group in batched(legal, _CURRENT_ACTION_BATCH):
-                stats.update(one_move_values(arena, group, branch_view, **teacher, research_seed=research_seed))
+                stats.update(one_move_values(arena, group, branch_view, **teacher, research_seed=research_seed,
+                                             **root))
             best = max(stat.mean for stat in stats.values())
             choice = rng.choice([action for action, stat in stats.items() if stat.mean == best])
     finally:
@@ -204,10 +225,31 @@ def _public_turn(observation, turn_column):
     return int(observation["player"][turn_column])
 
 
+def _resources(view, observation):
+    """Public HP, max HP and held potion kinds of one observation."""
+    return view.player_hp_now(observation), view.player_max_hp(observation), Counter(view.potion_kinds(observation))
+
+
+def _resource_fields(view, start, end):
+    hp_start, max_hp_start, held = start
+    _, max_hp_end, kept = end
+    prices = view.potion_price_table(_REFERENCE_PRICES)
+    try:
+        spent = (sum(prices[kind] * n for kind, n in (held - kept).items())
+                 - sum(prices[kind] * n for kind, n in (kept - held).items()))
+    except KeyError as error:
+        raise ValueError(f"potion kind {error.args[0]} has no price") from None
+    return {"hp_start": int(hp_start), "max_hp_start": int(max_hp_start), "max_hp_end": int(max_hp_end),
+            "potions_start": sum(held.values()), "potions_end": sum(kept.values()),
+            "potion_hp_spent": float(spent)}
+
+
 def play_fight(env, case, view, turn_column, teacher, *, research_seed,
                max_steps=1024, max_turn_actions=500):
     wall_start, cpu_start = perf_counter(), process_time()
     observation, info = env.reset(case)
+    # Read the reset resources before the first step.
+    start = _resources(view, observation)
     rng = random.Random(research_seed)
     decisions = []
     turn_actions = 0
@@ -249,6 +291,7 @@ def play_fight(env, case, view, turn_column, teacher, *, research_seed,
     return {
         "case_id": case["case_id"], "outcome": outcome, "censor_reason": censor_reason,
         "steps": len(decisions), "hp_after_cleanup": None if hp is None else int(hp),
+        **_resource_fields(view, start, _resources(view, observation)),
         "cpu_seconds": process_time() - cpu_start, "wall_seconds": perf_counter() - wall_start,
     }, decisions
 
@@ -273,15 +316,38 @@ def _results(jobs, parallel):
         pool.shutdown(cancel_futures=True)
 
 
-def _teacher(path, name, panel):
-    row = json.loads(path.read_text())["teachers"][name]
-    if name == "current":
+def _value_fields(fields):
+    """Parse optional value_rule and playout_policy; the v1 defaults are dropped so v1 identities hold."""
+    parsed = {}
+    if "value_rule" in fields:
+        if not isinstance(fields["value_rule"], dict):
+            raise ValueError("value_rule must be a value rule identity object")
+        rule = ValueRule.from_identity(fields["value_rule"])
+        if rule != _FLAT:
+            parsed["value_rule"] = rule
+    if fields.get("playout_policy", "uniform-v1") != "uniform-v1":
+        parsed["playout_policy"] = fields["playout_policy"]
+    return parsed
+
+
+def _uncalibrated(name, panel, calibrated, allow_uncalibrated):
+    if panel and not calibrated and not allow_uncalibrated:
+        raise ValueError(f"{name} is uncalibrated; use --train-sample during calibration "
+                         "or --allow-uncalibrated")
+
+
+def _teacher(path, name, panel, *, allow_uncalibrated=False):
+    teachers = json.loads(path.read_text())["teachers"]
+    if name not in teachers:
+        raise ValueError(f"unknown teacher {name!r}; valid teachers: {', '.join(sorted(teachers))}")
+    row = teachers[name]
+    if row.get("kind") == "one-move":
         current = {"samples": 32, "playout_steps": 80}
         expected = {"kind": "one-move", **current}
-        extra = {key: row[key] for key in ("calibrated",) if key in row}
+        extra = {key: row[key] for key in ("calibrated", "value_rule", "playout_policy") if key in row}
         backend = row.get("playout_backend", "python")
         if backend not in ("python", "native"):
-            raise ValueError("current playout_backend must be python or native")
+            raise ValueError(f"{name} playout_backend must be python or native")
         if backend == "native":
             current["playout_backend"] = expected["playout_backend"] = "native"
         elif "playout_backend" in row:
@@ -289,21 +355,25 @@ def _teacher(path, name, panel):
         if extra:
             expected.update(extra)
         if row != expected:
-            raise ValueError("current must use one-move search with 32 samples and 80 playout steps")
+            raise ValueError(f"{name} must use one-move search with 32 samples and 80 playout steps")
+        values = _value_fields(row)
+        check_value_options(values.get("value_rule", _FLAT), values.get("playout_policy", "uniform-v1"), backend)
+        current.update(values)
         calibrated = row.get("calibrated", True) is True
-        if panel and not calibrated:
-            raise ValueError("current is uncalibrated; use --train-sample during calibration")
-        identity = {key: value for key, value in row.items() if key not in ("calibrated",)}
+        _uncalibrated(name, panel, calibrated, allow_uncalibrated)
+        identity = {key: value for key, value in row.items()
+                    if key not in ("calibrated", "value_rule", "playout_policy")}
         if backend == "python":
             identity.pop("playout_backend", None)
         identity.update({"branch_layout": "compact", "workers": 1})
         if "playout_backend" in current:
             identity["playout_rule_id"] = PLAYOUT_RULE_ID
+        identity.update(_json_values(values))
         return current, content_sha256(identity), calibrated
     calibrated = row["calibrated"] is True
-    if panel and not calibrated:
-        raise ValueError(f"{name} is uncalibrated; use --train-sample during calibration")
-    config = row["config"]
+    _uncalibrated(name, panel, calibrated, allow_uncalibrated)
+    config = {key: value for key, value in row["config"].items() if key not in ("value_rule", "playout_policy")}
+    config.update(_value_fields(row["config"]))
     if config.get("widening") is not None:
         config = {**config, "widening": tuple(config["widening"])}
     teacher = TeacherConfig(**config)
@@ -312,13 +382,25 @@ def _teacher(path, name, panel):
     return teacher, config_sha256(teacher), calibrated
 
 
+def _json_values(fields):
+    """JSON-safe value fields: a value rule as its identity object."""
+    return {key: value.as_identity() if isinstance(value, ValueRule) else value for key, value in fields.items()}
+
+
+def _teacher_config(teacher):
+    return config_identity(teacher) if isinstance(teacher, TeacherConfig) else _json_values(teacher)
+
+
 def _native_backend(teacher):
     backend = teacher.playout_backend if isinstance(teacher, TeacherConfig) else teacher.get("playout_backend")
     return backend == "native"
 
 
 def _run(args, output):
-    teacher, teacher_sha, calibrated = _teacher(args.teachers, args.teacher, args.panel)
+    # Callers that build args without the flag keep today's calibration guard.
+    allow_uncalibrated = getattr(args, "allow_uncalibrated", False) is True
+    teacher, teacher_sha, calibrated = _teacher(args.teachers, args.teacher, args.panel,
+                                                allow_uncalibrated=allow_uncalibrated)
 
     from spire_lab import _native
     recipe = load_recipe(args.recipe)
@@ -380,7 +462,8 @@ def _run(args, output):
             "recipe_sha256": sha256(args.recipe.read_bytes()).hexdigest(), "states_table_sha256": recipe.table_sha256,
             "panel": args.panel, "split": split, **identity, "case_manifest_sha256": content_sha256(cases),
             "teacher": args.teacher, "calibrated": calibrated, "config_sha256": teacher_sha,
-            "teacher_config": config_identity(teacher) if isinstance(teacher, TeacherConfig) else teacher,
+            "teacher_config": _teacher_config(teacher),
+            **({"uncalibrated_allowed": True} if allow_uncalibrated else {}),
             "seed": args.seed, "environment_seeds": [case["environment_seed"] for case in cases],
             "research_seed_rule": "((seed + case_index) * max_steps + step) modulo 2**64",
             "character": recipe.character, "ascension": recipe.ascension, "profile": descriptor["profile_id"],
@@ -411,7 +494,7 @@ def main(argv=None):
     scope = parser.add_mutually_exclusive_group(required=True)
     scope.add_argument("--panel", choices=("selection", "boss"))
     scope.add_argument("--train-sample", type=_positive, metavar="N")
-    parser.add_argument("--teacher", choices=("current", "tree-1x", "tree-3x", "tree-10x"), required=True)
+    parser.add_argument("--teacher", required=True, help="a teacher name in --teachers")
     parser.add_argument("--teachers", type=Path, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -420,6 +503,8 @@ def main(argv=None):
     parser.add_argument("--workers", type=int, choices=(1,), default=1)
     parser.add_argument("--parallel", type=_positive, default=1)
     parser.add_argument("--limit", type=_positive)
+    parser.add_argument("--allow-uncalibrated", action="store_true",
+                        help="let a teacher marked uncalibrated run on --panel (recorded in provenance)")
     args = parser.parse_args(argv)
 
     output = args.output.resolve()

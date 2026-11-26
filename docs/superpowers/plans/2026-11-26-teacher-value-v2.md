@@ -400,6 +400,7 @@ Posted as `spire-9wa` on 2026-11-26 and delivered in Gym v1.2.5 (M42, PR #132), 
   - new helpers `playout_rule_id(policy)` and `require_tiered_playouts(contract)`.
 - Modify `src/spire_learn/neural/search_teacher.py`: `_native_playout` and `config_identity`.
 - Modify `src/spire_learn/neural/search_value.py`: add the summary-row scorers.
+- Modify `src/spire_learn/neural/search_view.py`: add `summary_enemy_share`, shared with `summary_balance`.
 - Modify `scripts/neural/search_teacher_entry.py`: the one-move identity, the provenance `playout_rule_id`, and the live tiered check.
 - Tests:
   - `tests/unit/test_search_native_playouts.py`;
@@ -433,7 +434,7 @@ Posted as `spire-9wa` on 2026-11-26 and delivered in Gym v1.2.5 (M42, PR #132), 
     - on live rows it must be `step_limit` or `max_steps`;
     - anything else raises.
 - **Root step and native tree playouts.**
-  - `_native_playouts` takes `(value_rule, playout_policy, root)`. Under `resource-v2` it scores root-step terminals and cut-offs with the observation scorers (`terminal_value` / `cutoff_value`). Under `flat-v1` it keeps `result.reward` / `0.5 * view.balance(...)` verbatim.
+  - `_native_playouts` takes `(value_rule, playout_policy, root)`. Under `resource-v2` it scores root-step terminals with `terminal_score(value_rule, root, view, result.observation, result.reward, result.info)`, as the Python loop does, and cut-offs with `cutoff_value`. Under `flat-v1` it keeps `result.reward` / `0.5 * view.balance(...)` verbatim.
   - `_native_playout` in `search_teacher.py` receives the root context and passes the value rule, policy and root to `playout_branches`.
 
 - [ ] **Step 1: Write the failing tests:**
@@ -449,3 +450,4 @@ Posted as `spire-9wa` on 2026-11-26 and delivered in Gym v1.2.5 (M42, PR #132), 
 - [ ] **Step 3: Exact parity (controller, container, gated test)** on v1.2.5, over 20 training-split fights:
   - Replay each native playout's `branch.actions()` with full-view stepping. Assert exact float equality between the summary scorers and the observation scorers, across wins, deaths, escapes, cut-offs and potion changes.
   - Assert that every action `playout_action(rule="tiered_verbs")` picks belongs to the tier that `View.playout_choice(..., "no-potions-v2")` would pick from.
+  - Add one or two targeted training entries that hold a Smoke Bomb or Alchemize, so live escapes and potion gains are replayed too.

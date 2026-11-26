@@ -88,13 +88,14 @@ Execution order: Tasks 1–5, 9, 10, 6, 8.
 - **Guards.**
   - `resource-v2` requires `playout_policy == "no-potions-v2"` and a root context.
   - On the Python backend, any `playout_policy` other than `uniform-v1` requires branch view `"full"`.
-  - On the native backend (Task 10), `no-potions-v2` and `resource-v2` require a Gym whose contract declares the tiered rule (v1.2.5 and later). Older Gyms refuse them with a `ValueError` that names the rule.
+  - On the native backend (Task 10), `no-potions-v2` and `resource-v2` require a live Gym whose contract declares the tiered rule (v1.2.5 and later). Older Gyms refuse them with a `ValueError` that names the rule. This check runs only where a live Gym exists; config construction stays offline.
+  - `resource-v2` requires branch view `"full"` on both backends.
   - `ValueRule("flat-v1", …)` rejects non-default v2 parameters.
 - Rules epoch `gym-1.2.4`. Learner settings: 16 rows, exact settings, compact view, `max_turn_actions = 500`.
 - Never feed seeds, hidden RNG state or unseen draw order to actors or critics. Faults are errors, never losses or censors. Only aggregates are published. Baalorlord-derived data stays local.
 - `search_teacher.py` must keep none of the words that `tests/unit/test_search_teacher.py` forbids: `checkpoint`, `restore`, `fork_session`, `seed`, `record` and `snapshot`, including in comments.
 - **Reviews:**
-  - two reviewers (Claude Sonnet medium plus Gemini 4 Neon Low) for Tasks 1–5;
+  - two reviewers (Claude Sonnet medium plus Gemini 4 Neon Low) for Tasks 1–5, 9 and 10;
   - one reviewer for configs and docs.
 - Never edit the repo while a container run is in progress. Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - PRs and merges run under the user's standing authority for this effort.
@@ -274,7 +275,6 @@ Execution order: Tasks 1–5, 9, 10, 6, 8.
 **Files:**
 - Create `configs/neural/search-teacher-gym-1.2.4/teachers-v2.json`.
 - Test: extend `EntryConfigTests` in `tests/unit/test_search_native_playouts.py`.
-- Create the gated test `tests/integration/test_search_value_native.py` (skipped unless `SPIRE_LEARN_RUN_NATIVE_INTEGRATION=1`), following the existing `tests/integration/test_search_*_native.py` files.
 
 **Teachers.** All are `"calibrated": false` and use `playout_backend` `"native"` (Gym v1.2.5).
 - **Control:** `current-v1-nopot`, which is `flat-v1` with `no-potions-v2` (native `tiered_verbs`). It isolates the playout policy.
@@ -284,14 +284,15 @@ Execution order: Tasks 1–5, 9, 10, 6, 8.
   - `tree-1x-v2`: tree-1x's config (22 per action, `min_root_visits` 8, `worlds` 8, `max_depth` 4, `widening` (2.0, 0.5)), with `ucb_c` set in Step 2.
 - **Sensitivity:** `current-v2-p10` and `current-v2-p15`, with potion_hp 10 and 15.
 
-- [ ] **Step 1:** Write the failing test `test_v2_file_teachers_load_and_differ_from_v1_only_in_value_policy_backend_and_ucb`, write the file, run the test to verify it passes, and commit `configs: v2 search teachers`.
+- [ ] **Step 1:** Write the failing test `test_v2_file_teachers_load_and_differ_from_v1_only_in_value_policy_calibration_and_ucb`, write the file, run the test to verify it passes, and commit `configs: v2 search teachers`.
 - [ ] **Step 2: UCB check (controller, container).** The v2 win band is narrower than v1's −1 to 1, so `ucb_c` 1.0 may over-explore.
   - Run `tree-1x-v2` at `ucb_c` 0.25, 0.5 and 1.0 on `--train-sample 100`, seed 2026112602 (training split, never panel cases).
   - Fix the `ucb_c` with the lowest mean resource loss among values not 6 or more wins below the best. Ties go to 1.0.
   - Commit the value as a config change, reviewed by Sonnet.
-- [ ] **Step 3: Native and Python agreement (controller, container, gated test).**
-  - On `--train-sample 100`, seed 2026112603, run `current-v2` natively and with the Python backend.
-  - They must agree statistically: wins within 6, and mean resource loss within 0.02. They are not bit-identical, because the RNG streams differ.
+- [ ] **Step 3: Native and Python agreement (controller, container).**
+  - Write a temporary teachers file under `~/scratch/spire-learn/` with `current-v2-py`, identical to `current-v2` but on the Python backend.
+  - Run both on `--train-sample 100`, seed 2026112603.
+  - They must agree statistically: wins within 6, mean resource loss within 0.02 on fights both won, and within 0.04 overall. They are not bit-identical, because the RNG streams differ. Task 10 Step 3 already gives the exact check.
   - A larger gap stops the task. It points to a scoring or rule mismatch to find before the measurement.
 
 ### Task 7: Gym change request (controller) — DONE
@@ -344,61 +345,107 @@ Posted as `spire-9wa` on 2026-11-26 and delivered in Gym v1.2.5 (M42, PR #132), 
   - Aggregates only. Sonnet review, then commit `docs: teacher value v2 results and dataset-teacher choice`, open the PR and merge.
 - [ ] **Step 4: Stop.** Report the choice to the user. Then write the parts 3–5 plan (dataset, students, PPO arm with the bounded decline diagnostic, gates G2–G4) around the chosen teacher.
 
-### Task 9: Adopt Gym v1.2.5 as a drop-in (do before Task 10)
+### Task 9: Adopt Gym v1.2.5 as a drop-in (after Tasks 4–5 merge, before Task 10)
 
 **Files:**
-- Modify `src/spire_learn/neural/gym_contracts.py`.
-- Create `configs/neural/gym-1.2.5/`, modelled on `configs/neural/gym-1.2.4/`: the runtime profile with the v1.2.5 overlay and the same templates.
+- Modify `src/spire_learn/neural/gym_contracts.py`: add the contract and `same_rules_epoch`.
+- Modify the strict revision guards, which become epoch checks:
+  - `src/spire_learn/neural/recipes.py`: `gym_validator` and `require_recipe_revision`;
+  - `scripts/neural/search_teacher_entry.py`: the contract lookup, the build check and the recorded revision;
+  - `scripts/neural/teacher_audit.py`: `SHARED_PROVENANCE`, `_shared_provenance` and the `run_consistency` live check;
+  - `scripts/neural/baseline_entry.py` (around line 724);
+  - `scripts/neural/boss_winnability.py` (around line 386).
+- Create `configs/neural/gym-1.2.5/`, modelled on `configs/neural/gym-1.2.4/`: the runtime profile with the v1.2.5 overlay and `delivery_manifest_sha256` pinned, and the same templates.
 - Modify `docs/neural-gym-v1-migration.md`: add a "Drop-in v1.2.5" section.
-- Tests: `tests/unit/test_gym_contracts.py` or the existing contract tests.
+- Test: create `tests/unit/test_neural_gym_1_2_5.py`, following `tests/unit/test_neural_gym_1_2_4.py`.
 
 **Interfaces:**
-- `GYM_V1_2_5_CONTRACT`, with v1.2.5's revision and build identity. It keeps `rules_epoch="gym-1.2.4"`, the same rules ids and every fingerprint of `GYM_V1_2_4_CONTRACT`, and adds a capability flag `tiered_playouts=True`. That flag is False for every older contract.
-- Every `gym-1.2.4` artifact is accepted on either v1.2.4 or v1.2.5, because the epoch is the same: the state table, recipe, panels, baselines' checkpoints and teacher configs. Records still fail closed across epochs.
-- `contract_for_run_states` and the live-revision guards accept the epoch's revision set. Today's pins are on the table's own recorded revision, `673eb8f`. They become a check that the recorded revision and the live revision share an epoch.
+- `GYM_V1_2_5_CONTRACT`, with v1.2.5's revision and build identity.
+  - It keeps `rules_epoch="gym-1.2.4"`, the same rules ids and every fingerprint of `GYM_V1_2_4_CONTRACT`.
+  - It adds the capability flag `tiered_playouts=True`. The flag is False for every older contract.
+- `same_rules_epoch(revision_a: str, revision_b: str) -> bool`. It is true only when both revisions are registered and share a rules epoch that is not `None`.
+- **Guards.** Each strict check of a recorded revision against the live one becomes `same_rules_epoch(live, recorded)`. Three things change with it:
+  - The entry looks up the contract of the live Gym, for the compact-view and `tiered_playouts` checks.
+  - The entry records the live `gym_revision` and `gym_build` in provenance. `recipe_sha256` and `states_table_sha256` still point at the `gym-1.2.4` recipe and table.
+  - `teacher_audit.py` keeps `rules_epoch` shared across runs. It checks that each run's `gym_revision` belongs to that epoch, and records `gym_revision` and `gym_build` per run instead of requiring one shared build. `run_consistency` keeps exact build parity against the run it replays.
+- Records from a different epoch still fail closed.
 
 - [ ] **Step 1: Write the failing tests:**
-  - `test_v1_2_5_contract_identities` (the hashes above);
+  - `test_v1_2_5_contract_identities` (the hashes in Global Constraints, plus the runtime profile's `delivery_manifest_sha256`);
   - `test_v1_2_5_shares_epoch_and_fingerprints_with_v1_2_4`;
+  - `test_same_rules_epoch`;
   - `test_gym_1_2_4_table_and_recipe_accepted_on_v1_2_5`;
+  - `test_checkpoints_cross_v1_2_4_and_v1_2_5`, using `validate_checkpoint_metadata` across the two profiles' templates, with `gym-1.2.0` still refused;
   - `test_other_epochs_still_refused`;
-  - `test_tiered_playouts_flag_only_on_v1_2_5`.
-- [ ] **Step 2: Implement.** Stage the wheel from the local packet, verify both SHA-256 values, and build the overlay the way v1.2.4 did. Clone tag v1.2.5 into `artifacts/development/neural-combat/gym-1.2.5/source-ref`. Run the tests and the full suite, then commit `feat: adopt Gym v1.2.5 as a drop-in in the gym-1.2.4 epoch`.
+  - `test_tiered_playouts_flag_only_on_v1_2_5`;
+  - `test_entry_records_live_revision`;
+  - `test_audit_accepts_mixed_revisions_in_one_epoch`.
+- [ ] **Step 2: Implement.** Stage the wheel from the local packet, verify both SHA-256 values and the manifest, and build the overlay the way v1.2.4 did. Clone tag v1.2.5 into `artifacts/development/neural-combat/gym-1.2.5/source-ref`. Run the tests and the full suite, then commit `feat: adopt Gym v1.2.5 as a drop-in in the gym-1.2.4 epoch`.
 - [ ] **Step 3: Determinism check (controller, container).** This is the user's 2026-11-25 condition for a drop-in.
-  - Check the release identity and the descriptor capture, which must be byte-identical to v1.2.4. Run one reset per mode and the card-metadata fingerprint.
-  - Run v1 `current` on `--train-sample 200`, seed 2026112501, on v1.2.5. It must give decisions, values, outcomes and `hp_after_cleanup` byte-identical to the v1.2.4 run in `artifacts/development/neural-combat/gym-1.2.4/t3/cost-current`.
+  - Check the release identity. The descriptor capture must be byte-identical to v1.2.4. Run one reset per mode and the card-metadata fingerprint.
+  - Run v1 `current` on `--train-sample 200`, seed 2026112501, on v1.2.5. Compare it with the v1.2.4 run in `artifacts/development/neural-combat/gym-1.2.4/t3/cost-current`, on these projections:
+    - `decisions.jsonl` without `cpu_seconds`;
+    - `fights.jsonl` restricted to `case_id`, `outcome`, `censor_reason`, `steps` and `hp_after_cleanup`. Task 4's new columns and the timing fields are projected out.
+  - They must be equal.
   - Any difference stops the plan and is filed as a spire-learn-labelled bead.
-  - Record the check in the migration doc.
+  - Record the check in the migration doc. Note that the Gym's `delivery.json` compares v1.2.5 with its predecessor build `673887a`, not with `673eb8f`. This check is what bridges `673eb8f` to `731fca0` for Learn.
 
-### Task 10: Native v2 scoring on the tiered rule (do after Task 9)
+### Task 10: Native v2 scoring on the tiered rule (after Task 9)
 
 **Files:**
-- Modify `src/spire_learn/neural/search_one_move.py`: `check_value_options`, `playout_branches`, `_score_playout` and `_native_playouts`.
+- Modify `src/spire_learn/neural/search_one_move.py`:
+  - `check_value_options`;
+  - `playout_branches` and `_score_playout`;
+  - `_native_playouts`;
+  - new helpers `playout_rule_id(policy)` and `require_tiered_playouts(contract)`.
 - Modify `src/spire_learn/neural/search_teacher.py`: `_native_playout` and `config_identity`.
-- Modify `src/spire_learn/neural/search_value.py`: add a summary-row scorer.
-- Tests: `tests/unit/test_search_native_playouts.py` and `tests/unit/test_search_value_wiring.py`. Create the gated test `tests/integration/test_search_value_native.py`.
+- Modify `src/spire_learn/neural/search_value.py`: add the summary-row scorers.
+- Modify `scripts/neural/search_teacher_entry.py`: the one-move identity, the provenance `playout_rule_id`, and the live tiered check.
+- Tests:
+  - `tests/unit/test_search_native_playouts.py`;
+  - `tests/unit/test_search_value_wiring.py`, updating `test_v2_guards`, which today refuses native v2 unconditionally;
+  - create the gated test `tests/integration/test_search_value_native.py`.
 
 **Interfaces:**
 - `TIERED_PLAYOUT_RULE_ID = "spire-gym-public-playout-tiered-v1"`.
-- Under `no-potions-v2` on the native backend, `playout_branches` calls `playout_many(..., rule="tiered_verbs", never_verbs=("use_potion", "discard_potion"), last_resort_verbs=("end_turn",), max_steps=..., playout_seed=...)`, passing the sets explicitly. Under `uniform-v1` it keeps today's call byte for byte.
-- `summary_terminal_value(rule, root, view, result, index, reason)` and `summary_cutoff_value(rule, root, view, result, index)` live in `search_value.py`.
-  - They give the same formula as `terminal_value` and `cutoff_value`, read from the summary.
-  - `player_hp` is HP after cleanup on a terminal branch.
-  - Max HP comes from `player_max_hp`.
+- `playout_rule_id(policy)` returns `PLAYOUT_RULE_ID` for `uniform-v1` and the tiered id for `no-potions-v2`. Both identity sites use it:
+  - `config_identity`, for tree configs;
+  - the entry's one-move identity and its provenance.
+
+  Native v1 identities and hashes stay unchanged.
+- **Pure config validation.** `check_value_options` stays pure and offline.
+  - It allows the native backend with `no-potions-v2` and `resource-v2`.
+  - `resource-v2` requires branch view `"full"` on both backends.
+  - It still rejects `resource-v2` with `uniform-v1`.
+- **The live capability check** happens only where a live Gym exists:
+  - in `search_teacher_entry._run`, against the live contract, before preflight;
+  - in `playout_branches`, before a tiered call, through a mockable helper in the style of `search_view._native_errors()`.
+
+  An older Gym raises a `ValueError` naming the rule. `TeacherConfig.__post_init__` never imports `spire_lab`.
+- **Native calls.** Under `no-potions-v2`, `playout_branches` calls `playout_many(..., rule="tiered_verbs", never_verbs=("use_potion", "discard_potion"), last_resort_verbs=("end_turn",), max_steps=..., playout_seed=...)`. Under `uniform-v1` it keeps today's call byte for byte, and `_score_playout` stays literally unchanged for `flat-v1`.
+- **Summary scorers:** `summary_terminal_value(rule, root, result, index)` and `summary_cutoff_value(rule, root, result, index)`.
+  - They take no `view`, because `RootContext` holds the max HP, the potions and the prices.
+  - `player_hp` is HP after cleanup on terminal rows, and `player_max_hp` is the max HP.
   - Potion kinds come from the `potion_kind` rows where `potion_present` is set.
-  - `e` comes from `enemy_hp`, `enemy_max_hp` and `enemy_present`, as in `summary_balance`.
-  - The terminal reason comes from the summary's `end_reason` and `rewards`: +1 is victory, −1 death and 0 escaped. Check how the Gym reports this against the v1.2.5 docs. A missing or unknown reason raises.
-- `check_value_options` allows the native backend for `no-potions-v2` and `resource-v2` only when the live contract has `tiered_playouts`. Otherwise it raises a `ValueError` naming the rule.
-- `config_identity` records `playout_rule_id = TIERED_PLAYOUT_RULE_ID` for native configs whose policy is not `uniform-v1`. Native v1 identities and hashes stay unchanged.
+  - `e` comes from a shared helper, `summary_enemy_share(result, index)`, in `search_view.py`.
+  - The reason is `result["end_reason"][index]`:
+    - on terminated rows it must be one of `victory`, `death` or `escaped`, with `rewards` equal to +1, −1 or 0 respectively;
+    - on live rows it must be `step_limit` or `max_steps`;
+    - anything else raises.
+- **Root step and native tree playouts.**
+  - `_native_playouts` takes `(value_rule, playout_policy, root)`. Under `resource-v2` it scores root-step terminals and cut-offs with the observation scorers (`terminal_value` / `cutoff_value`). Under `flat-v1` it keeps `result.reward` / `0.5 * view.balance(...)` verbatim.
+  - `_native_playout` in `search_teacher.py` receives the root context and passes the value rule, policy and root to `playout_branches`.
 
 - [ ] **Step 1: Write the failing tests:**
   - `test_native_v1_call_and_hash_unchanged`;
   - `test_native_no_potions_uses_tiered_rule_with_explicit_sets`;
+  - `test_playout_rule_id_in_identity_and_provenance`;
   - `test_summary_scoring_matches_observation_scoring` (equal values for equal states, including potions gained and spent);
-  - `test_native_v2_refused_without_tiered_contract`;
-  - `test_summary_unknown_reason_raises`.
+  - `test_summary_reason_validation`;
+  - `test_native_v2_root_step_terminal_scored_v2` (a lethal Feed and a Smoke Bomb at the root);
+  - `test_native_v2_refused_without_tiered_contract` (offline, through the mockable helper);
+  - `test_v2_guards`, updated.
 - [ ] **Step 2: Implement, run the tests and the full suite, and commit** `feat: native resource-aware value on the tiered playout rule`.
-- [ ] **Step 3: Gated native test (controller, container).** On v1.2.5, for 20 training-split fights:
-  - every terminal branch's summary `player_hp` equals the branch observation's `hp_after_cleanup`;
-  - the summary's potion kinds equal the observation's.
-
+- [ ] **Step 3: Exact parity (controller, container, gated test)** on v1.2.5, over 20 training-split fights:
+  - Replay each native playout's `branch.actions()` with full-view stepping. Assert exact float equality between the summary scorers and the observation scorers, across wins, deaths, escapes, cut-offs and potion changes.
+  - Assert that every action `playout_action(rule="tiered_verbs")` picks belongs to the tier that `View.playout_choice(..., "no-potions-v2")` would pick from.

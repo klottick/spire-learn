@@ -1,0 +1,110 @@
+{
+  "note": "Uncalibrated value-measurement teachers for Gym v1.2.5 native tiered playouts (spire-gym-public-playout-tiered-v1; drop-in within epoch gym-1.2.4). Run them with --allow-uncalibrated. current-v1-nopot is the flat-v1 control that isolates the no-potions-v2 playout policy; current-v2-p10 and current-v2-p15 are potion-price sensitivity variants. tree-1x-v2's ucb_c is 1.0 for now, pending the Task 6 Step 2 check.",
+  "teachers": {
+    "current-v1-nopot": {
+      "kind": "one-move",
+      "calibrated": false,
+      "samples": 32,
+      "playout_steps": 80,
+      "playout_backend": "native",
+      "playout_policy": "no-potions-v2"
+    },
+    "current-v2": {
+      "kind": "one-move",
+      "calibrated": false,
+      "samples": 32,
+      "playout_steps": 80,
+      "playout_backend": "native",
+      "value_rule": {
+        "name": "resource-v2",
+        "potion_hp": 12,
+        "potion_overrides": {
+          "fairy_potion": 30,
+          "fruit_juice": 7.5
+        },
+        "hp_curve": "linear"
+      },
+      "playout_policy": "no-potions-v2"
+    },
+    "current-v2-sqrt": {
+      "kind": "one-move",
+      "calibrated": false,
+      "samples": 32,
+      "playout_steps": 80,
+      "playout_backend": "native",
+      "value_rule": {
+        "name": "resource-v2",
+        "potion_hp": 12,
+        "potion_overrides": {
+          "fairy_potion": 30,
+          "fruit_juice": 7.5
+        },
+        "hp_curve": "sqrt"
+      },
+      "playout_policy": "no-potions-v2"
+    },
+    "tree-1x-v2": {
+      "calibrated": false,
+      "target_cost_multiple": 1,
+      "config": {
+        "simulations_per_action": 22,
+        "min_root_visits": 8,
+        "worlds": 8,
+        "ucb_c": 1.0,
+        "max_depth": 4,
+        "widening": [
+          2.0,
+          0.5
+        ],
+        "playout_steps": 80,
+        "branch_layout": "compact",
+        "workers": 1,
+        "playout_backend": "native",
+        "value_rule": {
+          "name": "resource-v2",
+          "potion_hp": 12,
+          "potion_overrides": {
+            "fairy_potion": 30,
+            "fruit_juice": 7.5
+          },
+          "hp_curve": "linear"
+        },
+        "playout_policy": "no-potions-v2"
+      }
+    },
+    "current-v2-p10": {
+      "kind": "one-move",
+      "calibrated": false,
+      "samples": 32,
+      "playout_steps": 80,
+      "playout_backend": "native",
+      "value_rule": {
+        "name": "resource-v2",
+        "potion_hp": 10,
+        "potion_overrides": {
+          "fairy_potion": 30,
+          "fruit_juice": 7.5
+        },
+        "hp_curve": "linear"
+      },
+      "playout_policy": "no-potions-v2"
+    },
+    "current-v2-p15": {
+      "kind": "one-move",
+      "calibrated": false,
+      "samples": 32,
+      "playout_steps": 80,
+      "playout_backend": "native",
+      "value_rule": {
+        "name": "resource-v2",
+        "potion_hp": 15,
+        "potion_overrides": {
+          "fairy_potion": 30,
+          "fruit_juice": 7.5
+        },
+        "hp_curve": "linear"
+      },
+      "playout_policy": "no-potions-v2"
+    }
+  }
+}

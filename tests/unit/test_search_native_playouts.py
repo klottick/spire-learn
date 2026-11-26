@@ -316,6 +316,52 @@ class EntryConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             load({**base, "playout_backend": "gpu"})
 
+    def test_v2_file_teachers_load_and_differ_from_v1_only_in_value_policy_calibration_and_ucb(self):
+        from dataclasses import replace
+        from scripts.neural import search_teacher_entry as entry
+        from spire_learn.neural.search_one_move import TIERED_PLAYOUT_RULE_ID
+
+        v1 = entry._ROOT / "configs/neural/search-teacher-gym-1.2.4/teachers.json"
+        v2 = entry._ROOT / "configs/neural/search-teacher-gym-1.2.4/teachers-v2.json"
+        names = ["current-v1-nopot", "current-v2", "current-v2-sqrt", "tree-1x-v2",
+                 "current-v2-p10", "current-v2-p15"]
+        self.assertEqual(sorted(json.loads(v2.read_text())["teachers"]), sorted(names))
+        overrides = {"fairy_potion": 30, "fruit_juice": 7.5}
+        expected = {"current-v1-nopot": ("flat-v1", 12.0, "linear"), "current-v2": ("resource-v2", 12, "linear"),
+                    "current-v2-sqrt": ("resource-v2", 12, "sqrt"), "tree-1x-v2": ("resource-v2", 12, "linear"),
+                    "current-v2-p10": ("resource-v2", 10, "linear"), "current-v2-p15": ("resource-v2", 15, "linear")}
+        v1_hashes = {entry._teacher(v1, n, None)[1] for n in ("current", "tree-1x", "tree-3x", "tree-10x")}
+        base, _, _ = entry._teacher(v1, "current", None)
+        tree_base, _, _ = entry._teacher(v1, "tree-1x", None)
+        hashes = set()
+        for name in names:
+            config, digest, calibrated = entry._teacher(v2, name, "selection", allow_uncalibrated=True)
+            with self.assertRaisesRegex(ValueError, "uncalibrated"):
+                entry._teacher(v2, name, "selection")
+            self.assertFalse(calibrated)
+            self.assertTrue(entry._native_backend(config))
+            self.assertNotIn(digest, v1_hashes)
+            hashes.add(digest)
+            kind, potion_hp, curve = expected[name]
+            if name == "tree-1x-v2":
+                rule, policy = config.value_rule, config.playout_policy
+                self.assertEqual(config.playout_rule_id if hasattr(config, "playout_rule_id") else
+                                 entry.config_identity(config)["playout_rule_id"], TIERED_PLAYOUT_RULE_ID)
+                neutral = {"value_rule": tree_base.value_rule, "playout_policy": tree_base.playout_policy}
+                self.assertEqual(asdict(replace(config, **neutral)), asdict(tree_base))
+            else:
+                rule, policy = config["value_rule"] if kind != "flat-v1" else config.get("value_rule"), config["playout_policy"]
+                self.assertEqual(entry.playout_rule_id(policy), TIERED_PLAYOUT_RULE_ID)
+                self.assertEqual({k: v for k, v in config.items() if k not in ("value_rule", "playout_policy")},
+                                 base)
+            self.assertEqual(policy, "no-potions-v2")
+            if kind == "flat-v1":
+                self.assertIsNone(rule)
+            else:
+                self.assertEqual(rule.as_identity(), {"name": "resource-v2", "potion_hp": potion_hp,
+                                                      "potion_overrides": overrides, "hp_curve": curve})
+        self.assertEqual(len(hashes), len(names))
+
 
 class NativePerActionTests(unittest.TestCase):
     script = staticmethod(TeacherNativeTests.script)

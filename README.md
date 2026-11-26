@@ -147,6 +147,12 @@ doc also covers the rebuilt selection and boss panels, the search reference on
 both panels, the training-fight root availability (99.5% of decisions) and the
 calibrated search-teacher budgets. It is a separate series from v1.2.0.
 
+The [search-teacher audit on Gym v1.2.4](docs/neural-search-teacher-gym-1.2.4.md)
+compares the one-move search with tree teachers at 1×, 3× and 10× its cost on
+the selection and boss panels. It also covers the self-consistency ceiling, gate
+G1 and the teacher choice. G1 fails: neither tree teacher at 1× or 3× beats the
+one-move search, which remains the teacher.
+
 The separately approved fresh-weight campaign on this release has now completed
 its development comparisons. Across 438,272 learned decisions, the final mixed
 combat policy improved from **18/64 to 41/64 development wins**. All eight panels

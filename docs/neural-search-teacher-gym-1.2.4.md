@@ -7,7 +7,7 @@ This is the stage-1 teacher audit of `docs/superpowers/specs/2026-11-21-search-d
 - **G1 fails.** Neither tree teacher beats `current` on the selection panel. `tree-1x` against `current`: 5 against 5 discordant cases, p = 1. `tree-3x` against `current`: 8 against 7, p = 1.
 - **The chosen teacher is `current`.** It has the most selection-panel wins of the three candidates (233, against 231 for `tree-1x` and 232 for `tree-3x`). Per the gate table, the work continues with this teacher.
 - **The stop rule gives CONTINUE.** `current` built a search root at 7,565 of 7,604 boss-fight decisions that needed one (0.9949).
-- **The self-consistency ceiling is 68.5%.** Two `tree-3x` searches of the same 2,000 selection-split decisions chose the same action 1,369 times.
+- **The teacher agrees with itself 68.5% of the time.** This is the spec's "consistency ceiling", a reference level rather than a strict upper bound. Two `tree-3x` searches of the same 2,000 selection-split decisions chose the same action 1,369 times.
 - The selection panel is near its ceiling for every search (231 to 240 wins of 256), so it separates teachers poorly. The tree teachers keep more HP than `current` on both panels. `tree-10x` is the strongest teacher on both panels, but it is outside the candidate set and is on the strength curve only.
 - Simulator faults are errors. There were none.
 
@@ -129,7 +129,7 @@ First, one fight inflates `current`'s selection-panel cost. That act 4 boss case
 | `tree-3x` | 230 | 1,139 | 4.99 | 16% |
 | `tree-10x` | 70 | 448 | 6.69 | 2% |
 
-It was also `tree-3x`'s costliest fight. The baseline document estimated that `tree-10x` would need about six hours on this fight if it played it as long as `current`. It won in 70 decisions and 448 CPU s.
+It was also `tree-3x`'s costliest fight. The baseline document estimated that `tree-10x` would need about six hours on this fight if it played it as long as `current`. It won in 70 decisions and 448 CPU s. Both parts of the estimate failed: the fight was shorter, and on it `tree-10x` cost 6.69 CPU s per searched decision against `current`'s 5.35, about 1.25 times, not 11.
 
 Second, the panel runs did not share a container allocation. `current` ran 12 fights in a 12-CPU container. The tree teachers ran six containers on 16 CPUs at once. CPU time per decision can depend on how busy the host is.
 
@@ -214,7 +214,7 @@ The dropped cases are the tree runs' censored cases. `current` won both cases dr
 
 The selection panel separates these teachers poorly. Only 10 and 15 paired cases are discordant, and both effects are well inside the 4 to 5 point range that reads as no difference (see "Reading the differences").
 
-**Post hoc comparisons (not part of G1).** These were not pre-registered and are not adjusted for multiple comparisons. They describe the strength curve and the boss panel, which the spec reports beside the gates but does not use for pass or fail. `tree-10x` is outside the candidate set by rule.
+**Post hoc comparisons (not part of G1).** These were not pre-registered and are not adjusted for multiple comparisons. The table is a chosen subset of the pairwise comparisons computed, so an unadjusted p near 0.01 should not be read as significant. They describe the strength curve and the boss panel, which the spec reports beside the gates but does not use for pass or fail. `tree-10x` is outside the candidate set by rule.
 
 | Panel | Comparison | Paired | Only first | Only second | Effect (points) | Exact p |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
@@ -225,7 +225,7 @@ The selection panel separates these teachers poorly. Only 10 and 15 paired cases
 | Boss | `tree-3x` vs `tree-1x` | 251 | 21 | 7 | +5.6 | 0.013 |
 | Boss | `tree-10x` vs `tree-3x` | 250 | 22 | 6 | +6.4 | 0.0037 |
 
-The first and fourth boss rows come from `report.json` (`g1.boss_panel`), which marks them as not used. On the boss panel the tree's wins grow with its budget, and `tree-10x` is ahead of `current` by 8.3 points. On the selection panel the same comparison gives +3.1 points with p = 0.077.
+The first two boss rows (`tree-1x` and `tree-3x` against `current`) come from `report.json` (`g1.boss_panel`), which marks them as not used. The other rows are one-off computations with the same exact test. On the boss panel the tree's wins grow with its budget, and `tree-10x` is ahead of `current` by 8.3 points. On the selection panel the same comparison gives +3.1 points with p = 0.077.
 
 ## Teacher choice
 
@@ -239,7 +239,7 @@ The spec's rule picks the candidate with the most selection-panel wins among `cu
 
 **Chosen teacher: `current`**, with the most wins outright. No tie-break was needed. The margins are one and two wins, far below anything the panel can resolve. The rule was fixed before the results, and the choice follows it.
 
-## Self-consistency ceiling
+## Self-consistency (the spec's consistency ceiling)
 
 The consistency audit drew 2,000 searched decisions from the `tree-3x` selection-panel run. The sample was drawn with `random.Random(2026112601).sample` from the 8,088 searched decisions, ordered by case and step. It covers 252 of the 256 cases, and its SHA-256 is `7a22432af61ebdfa78b33fbb393c490e723ba2098209ee9928906e3111c51b3b`. These are selection-split decisions: audit only, never training data. Each decision's state was rebuilt by resetting the case and replaying the recorded choices, and any mismatch would have stopped the run. Then `tree-3x` searched each state again (run B) with the recorded research seed plus one. The recorded search is run A.
 
@@ -252,7 +252,7 @@ python scripts/neural/teacher_audit.py consistency \
 
 It ran at learner revision `696c4844a07c68ca135de66fad7e6b892ea05cc5` (clean, unchanged after) in a 12-CPU container, in 301 s, at 0.80 CPU s per re-searched decision. `consistency.json` has SHA-256 `f6311d976834658b00f50614ca5cbfabfb528c4a8a82af1641878988d09d8fab`.
 
-**Seeds.** The teacher run gives each decision the research seed `(seed + case index) × 1024 + step`. Seed plus one is therefore the seed run A used at the same case's next decision. That holds for 1,933 sampled decisions. The other 67 are the last decision of their fight, and A never used their seed plus one. No fight reached 1,024 decisions (the longest had 580), so seed plus one never crosses into another case. Where A did use the seed, it searched a different state. At each audited state, A and B searched with different seeds, so the two searches share no random stream.
+**Seeds.** The teacher run gives each decision the research seed `(seed + case index) × 1024 + step`. Seed plus one is therefore the seed run A used at the same case's next decision. That holds for 1,933 sampled decisions. The other 67 are the last decision of their fight, and A never used their seed plus one. No fight reached 1,024 decisions (the longest had 580), so seed plus one never crosses into another case. Where A did use the seed, it searched a different state. At each audited state, A and B searched with different seeds, so the two searches used different seeds.
 
 **Value.** A search scores each root action by the mean return of that action's simulations. A simulation returns +1 if the simulated fight ends in victory, −1 on death and 0 on escape. If the fight has not ended when the simulation stops (at the end of its 80-step playout, or earlier if the branch is truncated), it returns half the HP balance. The HP balance is the player's HP fraction minus the remaining HP fraction of the living enemies, in [−1, 1] (`View.balance` in `src/spire_learn/neural/search_view.py`). A refused branch returns −1 (`teach` in `src/spire_learn/neural/search_teacher.py`). An action's value therefore lies in [−1, 1], and the teacher chooses the action with the highest value. "Value lost" is A's value of A's own choice minus A's value of B's choice, and symmetrically for B. It is zero when the runs agree.
 
@@ -266,11 +266,11 @@ It ran at learner revision `696c4844a07c68ca135de66fad7e6b892ea05cc5` (clean, un
 | Mean value lost on the 631 disagreements, run B's values | 0.134 |
 | Branch refusals in the reruns | 14 |
 
-**Reading.** A student that imitates `tree-3x`'s choices cannot be expected to match its top choice much more often than 68.5%, because the teacher matches itself only that often at a fresh seed. Most disagreements cost little by the teacher's own estimate. Over all 2,000 decisions the loss averages 0.04 on a scale where a certain win and a certain loss differ by 2. When the runs disagree, it averages 0.13 to 0.14. For two actions whose simulations all end the fight, 0.14 is a seven-point difference in simulated win share. So many disagreements are between actions the search rates as close, though not all are. The audit output keeps only these aggregates, so the distribution of the loss is not measured.
+**Reading.** 68.5% is how often the teacher matches itself at a fresh seed. It is a reference level for students, not a strict upper bound. A student that learns the teacher's most likely choice can match a single run more often than a second noisy run does. A student far below this level points to a learning problem, and one near it points to the teacher's own noise (the spec's G2 reading). Most disagreements cost little by the teacher's own estimate. Over all 2,000 decisions the loss averages 0.04 on a scale where a certain win and a certain loss differ by 2. When the runs disagree, it averages 0.13 to 0.14. For two actions whose simulations all end the fight, 0.14 is a seven-point difference in simulated win share. So many disagreements are between actions the search rates as close, though not all are. The audit output keeps only these aggregates, so the distribution of the loss is not measured.
 
-**Ties.** In run A, 1,250 of the 2,000 sampled decisions (62.5%) had two or more actions tied exactly for the top value. In 986 of them the tie was at 1.0 (every simulation of the tied actions won), in 216 at −1.0 and in 48 elsewhere. In 942, every legal action tied. The tree teacher breaks an exact tie by the lowest action index, so when both runs tie, they agree by that rule, not by preference. The agreement on decisions without a tie may therefore be well below 68.5%. The output does not split agreement by tie status, so this is not measured. Exact top ties are common in every teacher's selection-panel decisions: 71.4% of `current`'s searched decisions, and 65.6%, 62.9% and 53.3% of `tree-1x`'s, `tree-3x`'s and `tree-10x`'s. `current` breaks ties at random.
+**Ties.** In run A, 1,250 of the 2,000 sampled decisions (62.5%) had two or more actions tied exactly for the top value. In 986 of them the tie was at 1.0 (every simulation of the tied actions won), in 216 at −1.0 and in 48 elsewhere. In 942, every legal action tied. The tree teacher breaks an exact tie by the lowest action index, so when both runs tie on the same set of actions, they agree by that rule, not by preference. The agreement on decisions without a tie may therefore be well below 68.5%. The output does not split agreement by tie status, so this is not measured and the aggregates cannot bound it. Exact top ties are common in every teacher's selection-panel decisions: 71.4% of `current`'s searched decisions, and 65.6%, 62.9% and 53.3% of `tree-1x`'s, `tree-3x`'s and `tree-10x`'s. `current` breaks ties at random.
 
-The audit measured `tree-3x`, as the plan specifies. The ceiling for `current`, the chosen teacher, was not measured.
+The audit measured `tree-3x`, as the plan specifies. The self-agreement of `current`, the chosen teacher, was not measured.
 
 ## Root refusals and label coverage
 

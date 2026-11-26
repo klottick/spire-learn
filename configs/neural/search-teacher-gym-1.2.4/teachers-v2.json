@@ -1,5 +1,5 @@
 {
-  "note": "Uncalibrated value-measurement teachers for Gym v1.2.5 native tiered playouts (spire-gym-public-playout-tiered-v1; drop-in within epoch gym-1.2.4). Run them with --allow-uncalibrated. current-v1-nopot is the flat-v1 control that isolates the no-potions-v2 playout policy; current-v2-p10 and current-v2-p15 are potion-price sensitivity variants. tree-1x-v2's ucb_c is 1.0 for now, pending the Task 6 Step 2 check.",
+  "note": "Uncalibrated value-measurement teachers for Gym v1.2.5 native tiered playouts (spire-gym-public-playout-tiered-v1; drop-in within epoch gym-1.2.4). Run them with --allow-uncalibrated. current-v1-nopot is the flat-v1 control that isolates the no-potions-v2 playout policy; current-v2-p10 and current-v2-p15 are potion-price sensitivity variants. tree-1x-v2's ucb_c was set to 0.5 by the Task 6 Step 2 check (tree-1x-v2 on --train-sample 100, seed 2026112602, Gym v1.2.5: ucb_c 0.25 / 0.5 / 1.0 gave 85 / 87 / 84 wins and mean resource loss 0.455 / 0.413 / 0.443).",
   "teachers": {
     "current-v1-nopot": {
       "kind": "one-move",
@@ -50,7 +50,7 @@
         "simulations_per_action": 22,
         "min_root_visits": 8,
         "worlds": 8,
-        "ucb_c": 1.0,
+        "ucb_c": 0.5,
         "max_depth": 4,
         "widening": [
           2.0,

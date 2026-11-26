@@ -1,6 +1,7 @@
 """Public columns and heuristic policy for Standard combat search."""
 
 from collections.abc import Mapping
+from functools import cache
 import random
 
 PLAYOUT_POLICIES = ('uniform-v1', 'no-potions-v2')
@@ -115,8 +116,8 @@ class View:
         return mine - enemy_hp / enemy_max
 
 
-def summary_balance(result, index: int) -> float:
-    """``View.balance`` evaluated on one row of a native playout HP summary.
+def summary_enemy_share(result, index: int) -> float:
+    """``View.enemy_share`` evaluated on one row of a native playout summary.
 
     Alive enemies are the rows ``enemy_present`` marks; enemy HP is clipped at zero.
     """
@@ -125,14 +126,28 @@ def summary_balance(result, index: int) -> float:
     rows = [column for column in range(len(present)) if present[column]]
     enemy_hp = float(sum(max(int(hp[column]), 0) for column in rows))
     enemy_max = float(sum(int(maximum[column]) for column in rows)) or 1.0
+    return enemy_hp / enemy_max
+
+
+def summary_balance(result, index: int) -> float:
+    """``View.balance`` evaluated on one row of a native playout HP summary."""
+    enemies = summary_enemy_share(result, index)
     mine = float(max(int(result['player_hp'][index]), 0)) / float(max(int(result['player_max_hp'][index]), 1))
-    return mine - enemy_hp / enemy_max
+    return mine - enemies
 
 
 def _native_errors():
     """Gym's typed errors: (unsupported boundary, state, fault)."""
     from spire_lab import _native
     return _native.RunUnsupportedBoundaryError, _native.RunStateError, _native.RunFaultError
+
+
+@cache
+def _native_contract():
+    """The live Gym's contract, from its build revision (read once per process)."""
+    from spire_lab import _native
+    from .gym_contracts import contract_for_revision
+    return contract_for_revision(_native.build_info().get('revision'))
 
 
 def refusal_class(error: BaseException) -> str:

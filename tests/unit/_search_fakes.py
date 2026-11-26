@@ -37,7 +37,7 @@ class Arr:
         return sum(self.data)
 
 VERBS = ['padding', 'play_card', 'end_turn', 'use_potion', 'discard_potion']
-POTIONS = ['padding', 'block_potion', 'fairy_potion', 'fire_potion', 'fruit_juice', 'swift_potion']
+POTIONS = ['padding', 'block_potion', 'fairy_potion', 'fire_potion', 'fruit_juice', 'swift_potion', 'smoke_bomb']
 PLAYER = ['hp', 'max_hp', 'hp_before_healing', 'hp_after_cleanup']
 ENEMY = ['enemy_kind', 'hp', 'max_hp']
 

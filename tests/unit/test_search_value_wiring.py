@@ -3,11 +3,12 @@
 from dataclasses import asdict
 import json
 from pathlib import Path
+import sys
 import unittest
 from unittest.mock import patch
 
 from spire_learn.neural import search_teacher as teacher
-from spire_learn.neural.search_one_move import PLAYOUT_RULE_ID, ActionStat, one_move_values
+from spire_learn.neural.search_one_move import ActionStat, check_value_options, one_move_values
 from spire_learn.neural.search_value import RootContext, ValueRule
 from spire_learn.neural.search_view import View
 from tests.unit import _search_fakes as fakes
@@ -235,13 +236,23 @@ class V2WiringTests(unittest.TestCase):
 
     def test_v2_guards(self):
         native = dict(playout_backend="native")
-        for overrides in ({"value_rule": V2, "playout_policy": POLICY, **native},
-                          {"playout_policy": POLICY, **native}):
-            with self.subTest(overrides=overrides), self.assertRaisesRegex(ValueError, PLAYOUT_RULE_ID):
-                tt.config(**overrides)
-        for overrides in ({"value_rule": V2}, {"playout_policy": "other"}, {"value_rule": "resource-v2"}):
+        # Native v2 configs are valid offline: the tiered rule is checked against a live Gym, never here.
+        with patch.dict(sys.modules, {"spire_lab": None}):
+            for overrides in ({"value_rule": V2, "playout_policy": POLICY, **native},
+                              {"playout_policy": POLICY, **native}):
+                with self.subTest(overrides=overrides):
+                    self.assertEqual(tt.config(**overrides).playout_backend, "native")
+        for overrides in ({"value_rule": V2}, {"value_rule": V2, **native}, {"playout_policy": "other"},
+                          {"value_rule": "resource-v2"}):
             with self.subTest(overrides=overrides), self.assertRaises(ValueError):
                 tt.config(**overrides)
+        # resource-v2 needs the full branch view on both backends; the policy alone, on Python only.
+        for backend in ("python", "native"):
+            with self.subTest(backend=backend), self.assertRaisesRegex(ValueError, "full"):
+                check_value_options(V2, POLICY, backend, "mask")
+        with self.assertRaisesRegex(ValueError, "full"):
+            check_value_options(FLAT, POLICY, "python", "mask")
+        self.assertIsNone(check_value_options(FLAT, POLICY, "native", "mask"))
 
         root = fakes.observation(verbs=("play_card",))
         script = lambda world, path: (fakes.observation(), 1.0, True, False, {"terminal_reason": "victory"})
@@ -250,8 +261,9 @@ class V2WiringTests(unittest.TestCase):
 
         context = self.context(root)
         cases = (
-            ({"value_rule": V2, "playout_policy": POLICY, "root": context, **native}, PLAYOUT_RULE_ID),
-            ({"playout_policy": POLICY, **native}, PLAYOUT_RULE_ID),
+            ({"value_rule": V2, "playout_policy": POLICY, "root": context, "branch_view": "mask", **native}, "full"),
+            ({"value_rule": V2, "playout_policy": POLICY, **native}, "root context"),
+            ({"value_rule": V2, "root": context, **native}, POLICY),
             ({"playout_policy": POLICY, "branch_view": "mask"}, "full"),
             ({"value_rule": V2, "playout_policy": POLICY}, "root context"),
             ({"value_rule": V2, "root": context}, POLICY),

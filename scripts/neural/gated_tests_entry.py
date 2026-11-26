@@ -182,6 +182,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--standard-turncap": "tests.integration.test_standard_turncap",
         "--search-one-move": "tests.integration.test_search_one_move_native",
         "--native-playouts": "tests.integration.test_native_playouts_native",
+        "--search-value-native": "tests.integration.test_search_value_native",
         "--search-teacher": "tests.integration.test_search_teacher_native",
         "--search-teacher-entry": "tests.integration.test_search_teacher_entry_native",
         "--standard-boss-panel": (

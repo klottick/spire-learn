@@ -31,7 +31,9 @@ from spire_learn.neural.cases import environment_seed_for
 from spire_learn.neural.gym_contracts import STANDARD_COMPACT_PRESET, accepts_recorded_revision, contract_for_revision
 from spire_learn.neural.recipes import build_panel, load_recipe
 from spire_learn.neural.scenario_support import content_sha256, json_value
-from spire_learn.neural.search_one_move import PLAYOUT_RULE_ID, check_value_options, one_move_values
+from spire_learn.neural.search_one_move import (
+    check_value_options, one_move_values, playout_rule_id, require_tiered_playouts,
+)
 from spire_learn.neural.search_teacher import TeacherConfig, config_identity, config_sha256, search_options, teach
 from spire_learn.neural.search_value import RootContext, ValueRule
 from spire_learn.neural.search_view import View, refusal_class
@@ -367,7 +369,7 @@ def _teacher(path, name, panel, *, allow_uncalibrated=False):
             identity.pop("playout_backend", None)
         identity.update({"branch_layout": "compact", "workers": 1})
         if "playout_backend" in current:
-            identity["playout_rule_id"] = PLAYOUT_RULE_ID
+            identity["playout_rule_id"] = playout_rule_id(current.get("playout_policy", "uniform-v1"))
         identity.update(_json_values(values))
         return current, content_sha256(identity), calibrated
     calibrated = row["calibrated"] is True
@@ -436,6 +438,10 @@ def _run(args, output):
         cases = cases[::max(1, len(cases) // args.limit)][:args.limit]
     if not cases:
         raise ValueError("No fights selected")
+    _, playout_policy = _value_options(teacher)
+    if _native_backend(teacher) and playout_policy != "uniform-v1":
+        # Native v2 playouts need the live Gym's tiered rule; refuse before any preflight or output.
+        require_tiered_playouts(live)
     descriptor = preflight(cases, split)
 
     output.mkdir(parents=True, exist_ok=True)
@@ -478,7 +484,8 @@ def _run(args, output):
             "observation_schema": descriptor["schema_id"], "observation_fingerprint": descriptor["fingerprint"],
             "rules_epoch": live.rules_epoch, "capacity_preset": STANDARD_COMPACT_PRESET,
             "reward": TERMINAL_REWARDS, "branch_layout": "compact",
-            **({"playout_backend": "native", "playout_rule_id": PLAYOUT_RULE_ID} if _native_backend(teacher) else {}),
+            **({"playout_backend": "native", "playout_rule_id": playout_rule_id(playout_policy)}
+               if _native_backend(teacher) else {}),
             "workers": 1, "parallel": args.parallel, "max_steps": args.max_steps,
             "max_turn_actions": args.max_turn_actions, "gpu_seconds": 0,
         },

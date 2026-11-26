@@ -75,7 +75,7 @@ closed.
 - Tests: `tests/unit/test_neural_gym_1_2_5.py`; gated smoke
   `test_standard_stream_smoke_gym_1_2_5` (a gym-1.2.4 table on v1.2.5); the
   gated compact tests also run on v1.2.5.
-- Not done here: native use of `tiered_verbs` for `no-potions-v2` (Task 10).
+- Native use of `tiered_verbs` for `no-potions-v2` and `resource-v2` came with teacher value v2 Task 10: `playout_rule_id` records `spire-gym-public-playout-tiered-v1`, and the live capability check refuses Gyms without `tiered_playouts`.
 
 **Determinism check** (Step 3, controller, runtime container, 2026-11-26, learner
 `290e6db`, profile `configs/neural/gym-1.2.5/runtime.json`). Every run exited 0 with

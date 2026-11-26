@@ -55,8 +55,11 @@ class View:
         if self._potion_kind_column is None:
             raise ValueError('descriptor has no potions potion_kind column')
         occupied = observation['potions_occupied']
-        slots, column = observation['potions'], self._potion_kind_column
-        return tuple(sorted(int(slots[row][column]) for row in range(len(occupied)) if occupied[row]))
+        slots, known, column = observation['potions'], observation['potions_known'], self._potion_kind_column
+        rows = [row for row in range(len(occupied)) if occupied[row]]
+        if not all(known[row][column] for row in rows):
+            raise ValueError('an occupied potion row has an unknown potion_kind')
+        return tuple(sorted(int(slots[row][column]) for row in rows))
 
     def potion_price_table(self, rule) -> dict[int, float]:
         """HP price per potion-kind id for ``rule``; raises ``ValueError`` on an unknown override id."""

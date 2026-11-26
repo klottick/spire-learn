@@ -24,9 +24,6 @@ class PolicyTests(unittest.TestCase):
     def setUp(self):
         self.view = View(descriptor())
 
-    def verbs_of(self, obs, picks):
-        return {self.view.legal(obs).index(i) for i in picks}
-
     def test_policies_and_unknown_policy(self):
         self.assertEqual(PLAYOUT_POLICIES, ('uniform-v1', 'no-potions-v2'))
         with self.assertRaises(ValueError):

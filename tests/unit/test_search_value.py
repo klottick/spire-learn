@@ -159,6 +159,52 @@ class ValueTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.view.potion_price_table(ValueRule('resource-v2', potion_overrides=(('nope', 1.0),)))
 
+    def test_potion_kinds_fail_closed_on_unknown_kind(self):
+        obs = observation(potions=['block_potion'], potions_unknown=True)
+        with self.assertRaises(ValueError):
+            self.view.potion_kinds(obs)
+        self.assertEqual(self.view.potion_kinds(observation(potions_unknown=True)), ())
+
+    def test_from_identity_rejects_non_mapping_overrides(self):
+        for bad in ([('fairy_potion', 30.0)], None, 'x'):
+            with self.assertRaises(ValueError):
+                ValueRule.from_identity({'name': 'resource-v2', 'potion_overrides': bad})
+
+    def test_real_fixture_descriptor_resolves(self):
+        import json
+        from pathlib import Path
+        path = Path(__file__).parents[1] / 'fixtures/neural/standard-combat-compact-4d19806.json'
+        real = View(json.loads(path.read_text()))
+        vocabulary = json.loads(path.read_text())['vocabularies']
+        table = real.potion_price_table(V2)
+        self.assertEqual(table[vocabulary['potion'].index('fairy_potion')], 30.0)
+        self.assertEqual(table[vocabulary['potion'].index('fruit_juice')], 7.5)
+        self.assertIsNotNone(real._cleanup_hp_column)
+        self.assertIsNotNone(real._potion_kind_column)
+        self.assertEqual(real.use_potion, vocabulary['verb'].index('use_potion'))
+
+    def test_potion_multiset_charge(self):
+        root = self.root(hp=80, max_hp=80, potions=['block_potion', 'block_potion'])
+        base = self.victory(root, hp=40, max_hp=80, potions=['block_potion', 'block_potion'])
+        one_spent = self.victory(root, hp=40, max_hp=80, potions=['block_potion'])
+        self.assertAlmostEqual(base - one_spent, SCALE * 12 / 80)
+        root1 = self.root(hp=80, max_hp=80, potions=['block_potion'])
+        gained = self.victory(root1, hp=40, max_hp=80, potions=['block_potion', 'block_potion'])
+        same = self.victory(root1, hp=40, max_hp=80, potions=['block_potion'])
+        self.assertAlmostEqual(gained - same, SCALE * 12 / 80)
+
+    def test_v2_cutoff_exact_values(self):
+        # M 80; hp 40 -> h 0.5; enemies 10/40 -> e 0.25; max +4 -> 6 HP; one block_potion spent -> 12 HP.
+        kw = dict(hp=40, max_hp=84, enemies=((10, 40),))
+        root = self.root(hp=80, max_hp=80, potions=['block_potion'])
+        bonus = SCALE * (6 - 12) / 80
+        self.assertAlmostEqual(cutoff_value(V2, root, self.view, observation(**kw)),
+                               SCALE * (0.5 - 0.25) + bonus)
+        rule = ValueRule('resource-v2', hp_curve='sqrt')
+        root = self.root(rule, hp=80, max_hp=80, potions=['block_potion'])
+        self.assertAlmostEqual(cutoff_value(rule, root, self.view, observation(**kw)),
+                               SCALE * (math.sqrt(0.5) - 0.25) + bonus)
+
 
 if __name__ == '__main__':
     unittest.main()

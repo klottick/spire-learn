@@ -50,13 +50,14 @@ def descriptor():
             'vocabularies': {'verb': VERBS, 'potion': POTIONS}}
 
 
-def observation(*, hp=50, max_hp=80, cleanup=None, potions=(), enemies=((20, 40),), verbs=(), known=True):
+def observation(*, potions_unknown=False, hp=50, max_hp=80, cleanup=None, potions=(), enemies=((20, 40),), verbs=(), known=True):
     """``cleanup`` None means unknown; ``potions`` are names; ``verbs`` are the legal action verbs."""
     player = [hp, max_hp, 0, cleanup or 0]
     player_known = [1, 1, 1, 0 if cleanup is None else 1]
     if not known:
         player_known = [0, 0, 0, 0]
     slots = [[0] for _ in range(5)]
+    slots_known = [[0 if potions_unknown else 1] for _ in range(5)]
     occupied = [0] * 5
     for row, name in enumerate(potions):
         slots[row][0], occupied[row] = POTIONS.index(name), 1
@@ -65,6 +66,6 @@ def observation(*, hp=50, max_hp=80, cleanup=None, potions=(), enemies=((20, 40)
     mask = [0] * 16
     for row, verb in enumerate(verbs):
         actions[row][0], mask[row] = VERBS.index(verb), 1
-    return {'player': Arr(player), 'player_known': Arr(player_known), 'potions': Arr(slots),
+    return {'player': Arr(player), 'player_known': Arr(player_known), 'potions': Arr(slots), 'potions_known': Arr(slots_known),
             'potions_occupied': Arr(occupied), 'enemies': Arr(foes), 'actions': Arr(actions),
             'action_mask': Arr(mask)}

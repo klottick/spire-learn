@@ -68,7 +68,10 @@ class ValueRule:
             raise ValueError(f'unknown value rule fields: {sorted(extra)}')
         fields = {key: identity[key] for key in ('potion_hp', 'hp_curve') if key in identity}
         if 'potion_overrides' in identity:
-            fields['potion_overrides'] = tuple(identity['potion_overrides'].items())
+            overrides = identity['potion_overrides']
+            if not isinstance(overrides, Mapping):
+                raise ValueError('potion_overrides must be a mapping')
+            fields['potion_overrides'] = tuple(overrides.items())
         return cls(identity['name'], **fields)
 
 

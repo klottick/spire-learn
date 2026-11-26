@@ -12,7 +12,10 @@ consistency
   set, terminal state or root differs from the record is an error. Reported:
   top-choice agreement, and mean value lost both ways: run A's value of its own
   choice minus run A's value of run B's choice, and the same from run B's side.
-  Needs the native Gym.
+  The decisions must cover fights.jsonl and summary.json from the same directory
+  (one fight per case, its step count of decision rows), every case must be in
+  the rebuilt panel, and the native Gym's revision, dirty state and source digest
+  must equal the run's. Needs the native Gym.
 
 report
   Aggregates finished teacher runs (stdlib only, no Gym). Inputs are explicit:
@@ -36,8 +39,9 @@ report
   panel, exact McNemar, a case censored or escaped on either side dropped; a
   teacher beats current with more paired wins and p < 0.025; the boss panel is
   shown beside and not used); the teacher choice (most selection wins among
-  current, tree-1x and tree-3x, ties to the lower measured selection CPU seconds
-  per searched decision; tree-10x is on the strength curve only); and the stop
+  current, tree-1x and tree-3x, ties to the lower nominal budget, current and
+  tree-1x 1x and tree-3x 3x, then the lower measured selection CPU seconds per
+  searched decision; tree-10x is on the strength curve only); and the stop
   rule (boss_root_share < 0.5 over the chosen teacher's boss-fight decisions on
   every panel given gives STOP). Root shares exclude single-legal decisions,
   which never open a root; labelled shares count every decision.
@@ -77,6 +81,8 @@ REPORT_SCHEMA = "spire-learn-teacher-audit-report-v1"
 TEACHERS = ("current", "tree-1x", "tree-3x", "tree-10x")
 # Dataset-teacher candidates: at most 3x the current search's cost, cheapest budget first.
 CANDIDATES = ("current", "tree-1x", "tree-3x")
+# Nominal cost multiples of the current search; tree-1x is calibrated to current's cost.
+NOMINAL_BUDGET = {"current": 1, "tree-1x": 1, "tree-3x": 3}
 CHALLENGERS = ("tree-1x", "tree-3x")
 PANELS = ("selection", "boss")
 G1_ALPHA = 0.025
@@ -113,6 +119,24 @@ def _load_summary(path, what):
     if summary.get("schema") != ENTRY_SCHEMA:
         raise AuditInputError(f"{what} summary is not a {ENTRY_SCHEMA} output")
     return summary
+
+
+def check_decisions(what, summary, fight_steps, rows, by_case):
+    """Every decision case has one fight, each fight's step count is its decision count, roots match the summary."""
+    if (by_case.keys() - fight_steps.keys()
+            or any(len(by_case.get(cid, ())) != steps for cid, steps in fight_steps.items())
+            or len(fight_steps) != summary.get("cases")
+            or Counter(row["root"] for row in rows) != Counter(summary.get("roots") or {})):
+        raise AuditInputError(f"{what} decisions do not match its fights and summary")
+
+
+def _fight_steps(what, fights):
+    steps = {}
+    for fight in fights:
+        if fight["case_id"] in steps:
+            raise AuditInputError(f"{what} has a case played twice")
+        steps[fight["case_id"]] = fight["steps"]
+    return steps
 
 
 def case_decisions(rows):
@@ -153,6 +177,8 @@ def compare(recorded, choice_b, values_b):
     if a.keys() != b.keys():
         raise ReplayMismatch("Replayed search scored a different legal set than the recorded one")
     choice_a = recorded["choice"]
+    if choice_a not in a or choice_b not in b:
+        raise ReplayMismatch("A recorded or replayed choice is not among the searched actions")
     return {"agree": choice_a == choice_b,
             "lost_a": a[choice_a] - a[choice_b],
             "lost_b": b[choice_b] - b[choice_a]}
@@ -247,6 +273,8 @@ def run_consistency(args, output):
     rows = _jsonl(args.decisions)
     by_case = case_decisions(rows)
     sample = sample_decisions(summary, rows, args.sample, args.seed)
+    fights = _jsonl(args.decisions.parent / "fights.jsonl")
+    check_decisions("Teacher run", summary, _fight_steps("Teacher run", fights), rows, by_case)
 
     teacher, teacher_sha, _ = entry._teacher(args.teachers, args.teacher, provenance["panel"])
     if teacher_sha != provenance["config_sha256"]:
@@ -258,11 +286,18 @@ def run_consistency(args, output):
     recipe = entry.load_recipe(args.recipe)
     if not (gym_build.get("revision") == recipe.gym_revision == provenance["gym_revision"]):
         raise AuditInputError("Native Gym, recipe and decisions name different Gym revisions")
+    run_build = provenance.get("gym_build") or {}
+    for key in ("revision", "dirty", "source_digest"):
+        if gym_build.get(key) != run_build.get(key):
+            raise AuditInputError(f"Native Gym build {key} differs from the run's recorded gym_build")
     panel = entry.build_panel(recipe, "selection", kind=provenance["panel"])
     cases = panel["manifest"]["cases"]
     if entry.content_sha256(cases) != provenance["case_manifest_sha256"]:
         raise AuditInputError("Rebuilt panel cases differ from the run's case manifest")
     by_id = {case["case_id"]: case for case in cases}
+    absent = sorted(by_case.keys() - by_id.keys())
+    if absent:
+        raise AuditInputError(f"{len(absent)} decision cases are not in the rebuilt {provenance['panel']} panel")
 
     steps = defaultdict(list)
     for row in sample:
@@ -315,7 +350,7 @@ def g1_test(challenger, current, alpha=G1_ALPHA):
 
 
 def choose_teacher(strength):
-    """Most selection-panel wins among the candidates; ties go to the lower measured CPU per searched decision."""
+    """Most selection-panel wins among the candidates; ties to the lower nominal budget, then measured CPU."""
     candidates = {}
     for name in CANDIDATES:
         if name not in strength:
@@ -324,12 +359,14 @@ def choose_teacher(strength):
         if cpu is None:
             raise AuditInputError(f"{name} has no searched decisions to cost")
         candidates[name] = {"wins": strength[name]["wins"], "cpu_seconds_per_searched_decision": cpu}
-    chosen = min(candidates, key=lambda name: (-candidates[name]["wins"],
+        candidates[name]["nominal_budget"] = NOMINAL_BUDGET[name]
+    chosen = min(candidates, key=lambda name: (-candidates[name]["wins"], NOMINAL_BUDGET[name],
                                                candidates[name]["cpu_seconds_per_searched_decision"],
                                                CANDIDATES.index(name)))
     return {"chosen": chosen, "candidates": candidates,
-            "rule": "most selection-panel wins among current, tree-1x and tree-3x; ties to the lower "
-                    "selection-panel CPU seconds per searched decision, then the smaller budget"}
+            "rule": "most selection-panel wins among current, tree-1x and tree-3x; ties to the lower nominal "
+                    "budget (current and tree-1x 1x, tree-3x 3x), then the lower selection-panel CPU seconds "
+                    "per searched decision, then candidate order"}
 
 
 def stop_rule(boss_roots):
@@ -395,10 +432,7 @@ def load_run(directory, teacher, kind, panel):
 
     rows = _jsonl(Path(directory) / "decisions.jsonl")
     decisions = case_decisions(rows)
-    if (decisions.keys() - fights.keys()
-            or any(len(decisions.get(cid, ())) != fight["steps"] for cid, fight in fights.items())
-            or Counter(row["root"] for row in rows) != Counter(summary["roots"])):
-        raise AuditInputError(f"{what} decisions do not match its fights and summary")
+    check_decisions(what, summary, {cid: fight["steps"] for cid, fight in fights.items()}, rows, decisions)
     return {"teacher": teacher, "panel": kind, "provenance": provenance, "fights": fights,
             "decisions": decisions, "summary_sha256": _file_sha256(summary_path)}
 
@@ -614,7 +648,8 @@ def render(report):
             f"Teacher choice: {choice['chosen']} ({choice['rule']}).",
             f"Stop rule ({stop['teacher']}, panels {', '.join(stop['panels'])}): boss_root_share "
             f"{stop['boss_root_share']:.4f} ({stop['searched']} of {stop['decisions']}) -> {stop['verdict']}.",
-            "With 256 paired cases, differences below about 4-5 percentage points read as no difference."]
+            "Paired cases: " + ", ".join(f"{name} {t['paired']}" for name, t in g1["tests"].items())
+            + ". At these sizes, differences below about 4-5 percentage points read as no difference."]
     return "\n".join(out)
 
 

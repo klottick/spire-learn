@@ -1,12 +1,14 @@
 """Teacher audit and gate G1 on synthetic run outputs (no Gym runtime)."""
 
 from collections import Counter
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from hashlib import sha256
 import io
 import json
 from pathlib import Path
+import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -198,8 +200,10 @@ class GateTests(unittest.TestCase):
             "tree-10x": {"wins": 240, "cpu_seconds_per_searched_decision": 3.1},
         }
         self.assertEqual(audit.choose_teacher(strength)["chosen"], "tree-1x")
+        # A tree-1x / tree-3x tie goes to the 1x budget even when tree-3x measured cheaper.
         strength["tree-1x"]["cpu_seconds_per_searched_decision"] = 0.96
-        self.assertEqual(audit.choose_teacher(strength)["chosen"], "tree-3x")
+        self.assertEqual(audit.choose_teacher(strength)["chosen"], "tree-1x")
+        # current and tree-1x share the 1x budget; measured CPU breaks that tie.
         strength["current"]["wins"] = 210
         self.assertEqual(audit.choose_teacher(strength)["chosen"], "current")
         strength["tree-3x"]["wins"] = 211
@@ -374,6 +378,10 @@ class ConsistencyTests(unittest.TestCase):
         recorded = searched(1, {0: 0.2, 1: 0.6}, 1)
         agree = audit.compare(recorded, 1, {"0": [0.5, 8], "1": [0.9, 8]})
         self.assertEqual((agree["agree"], agree["lost_a"], agree["lost_b"]), (True, 0.0, 0.0))
+        with self.assertRaises(audit.ReplayMismatch):
+            audit.compare(recorded, 2, {"0": [0.5, 8], "1": [0.9, 8]})
+        with self.assertRaises(audit.ReplayMismatch):
+            audit.compare({**recorded, "choice": 5}, 1, {"0": [0.5, 8], "1": [0.9, 8]})
         differ = audit.compare(recorded, 0, {"0": [0.9, 8], "1": [0.5, 8]})
         self.assertFalse(differ["agree"])
         self.assertAlmostEqual(differ["lost_a"], 0.4)
@@ -460,6 +468,120 @@ class ConsistencyTests(unittest.TestCase):
                  self.assertRaisesRegex(audit.AuditInputError, "selection"):
                 run_main(root, argv)
             self.assertFalse((root / "artifacts/out.json").exists())
+
+
+class ConsistencyRunTests(unittest.TestCase):
+    """run_consistency end to end with fakes for the teacher, panel, Gym build and replay seams."""
+
+    LEGAL = {"p-case-alpha": {0: [0, 1], 1: [0, 1]}, "p-case-beta": {0: [0], 1: [0, 1, 2]}}
+    BUILD = {"revision": "rev", "dirty": False, "source_digest": "src"}
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.run = self.root / "artifacts/run"
+        self.run.mkdir(parents=True)
+        self.recipe = self.root / "recipe.json"
+        self.recipe.write_text("{}")
+        self.cases = [{"case_id": cid, "entry": {"id": cid}, "environment_seed": index}
+                      for index, cid in enumerate(self.LEGAL)]
+        self.rows = [
+            {**searched(0, {0: 0.2, 1: 0.6}, 1), "case_id": "p-case-alpha"},
+            {**searched(1, {0: 0.5, 1: 0.1}, 0), "case_id": "p-case-alpha"},
+            {**searched(0, {}, 0), "case_id": "p-case-beta", "root": "single_legal", "values": None},
+            {**searched(1, {0: 0.3, 1: 0.9, 2: 0.1}, 1), "case_id": "p-case-beta"},
+        ]
+        self.fights = [{"case_id": cid, "outcome": "victory", "censor_reason": None, "steps": 2,
+                        "hp_after_cleanup": 5, "cpu_seconds": 1.0, "wall_seconds": 1.0} for cid in self.LEGAL]
+        self.provenance = {
+            "split": "selection", "panel": "selection", "teacher": "tree-3x", "config_sha256": "cfg",
+            "recipe_sha256": sha256(b"{}").hexdigest(), "gym_revision": "rev", "gym_build": dict(self.BUILD),
+            "case_manifest_sha256": audit.entry.content_sha256(self.cases), "seed": 9,
+        }
+        self.build = dict(self.BUILD)
+        self.panel_cases = self.cases
+
+    def write(self):
+        (self.run / "decisions.jsonl").write_text("".join(json.dumps(r) + "\n" for r in self.rows))
+        (self.run / "fights.jsonl").write_text("".join(json.dumps(f) + "\n" for f in self.fights))
+        (self.run / "summary.json").write_text(json.dumps({
+            "schema": "spire-learn-search-teacher-entry-v1", "cases": len(self.fights),
+            "roots": dict(Counter(r["root"] for r in self.rows)), "provenance": self.provenance}))
+
+    def consistency(self, sample=3):
+        self.write()
+        fights = {}
+
+        @contextmanager
+        def fight_env(case, split):
+            self.assertEqual(split, "selection")
+            fight = fights[case["case_id"]] = FakeFight(self.LEGAL[case["case_id"]], finish=2)
+            yield fight, fight
+
+        def decide(env, observation, legal, view, teacher, rng, seed):
+            self.assertEqual(teacher, "teacher")
+            return "searched", 1, {str(a): [0.7 if a == 1 else 0.5, 8] for a in legal}, 0.25, 0, 16
+
+        gym = SimpleNamespace(_native=SimpleNamespace(build_info=lambda: self.build))
+        argv = ["consistency", "--decisions", str(self.run / "decisions.jsonl"), "--sample", str(sample), "--seed", "4",
+                "--teacher", "tree-3x", "--teachers", "teachers.json", "--recipe", str(self.recipe),
+                "--output", str(self.root / "artifacts/consistency.json")]
+        with patch.dict(sys.modules, {"spire_lab": gym}), \
+             patch.object(audit.entry, "_teacher", return_value=("teacher", "cfg", True)), \
+             patch.object(audit.entry, "load_recipe", return_value=SimpleNamespace(gym_revision="rev")), \
+             patch.object(audit.entry, "build_panel", return_value={"manifest": {"cases": self.panel_cases}}), \
+             patch.object(audit.entry, "preflight") as preflight, \
+             patch.object(audit.entry, "_fight_env", fight_env), \
+             patch.object(audit.entry, "View", FakeView), \
+             patch.object(audit.entry, "_decision", side_effect=decide), \
+             redirect_stdout(io.StringIO()) as stdout:
+            run_main(self.root, argv)
+        preflight.assert_called_once()
+        self.assertEqual({cid: f.actions for cid, f in fights.items()},
+                         {"p-case-alpha": [1, 0], "p-case-beta": [0, 1]})
+        return (self.root / "artifacts/consistency.json").read_text(), stdout.getvalue()
+
+    def test_consistency_run_writes_aggregate_report(self):
+        text, stdout = self.consistency()
+        self.assertNotIn("p-case-", text)
+        self.assertNotIn("p-case-", stdout)
+        report = json.loads(text)
+        self.assertEqual(report["schema"], "spire-learn-teacher-consistency-v1")
+        self.assertEqual((report["decisions"], report["agreements"]), (3, 2))
+        self.assertAlmostEqual(report["top_choice_agreement"], 2 / 3)
+        # Only alpha step 1 disagrees: A loses 0.5 - 0.1, B loses 0.7 - 0.5.
+        self.assertAlmostEqual(report["mean_value_lost_run_a"], 0.4 / 3)
+        self.assertAlmostEqual(report["mean_value_lost_run_b"], 0.2 / 3)
+        self.assertAlmostEqual(report["mean_value_lost_run_a_when_disagreeing"], 0.4)
+        self.assertEqual(report["provenance"]["sample_sha256"], audit.entry.content_sha256(
+            [["p-case-alpha", 0], ["p-case-alpha", 1], ["p-case-beta", 1]]))
+        self.assertEqual((report["provenance"]["split"], report["provenance"]["audit_only"]), ("selection", True))
+
+    def test_consistency_run_refuses_records_that_do_not_cover_the_fights(self):
+        # A decisions file truncated after alpha's first step; the summary roots agree with it.
+        self.rows = [self.rows[0], *self.rows[2:]]
+        with self.assertRaisesRegex(audit.AuditInputError, "do not match its fights"):
+            self.consistency(sample=2)
+        # A fight with no decision rows at all.
+        self.rows = self.rows[1:]
+        self.fights = self.fights[1:]
+        self.fights.append({**self.fights[0], "case_id": "p-case-gamma"})
+        with self.assertRaisesRegex(audit.AuditInputError, "do not match its fights"):
+            self.consistency(sample=1)
+
+    def test_consistency_run_refuses_a_case_missing_from_the_rebuilt_panel(self):
+        self.panel_cases = self.cases[:1]
+        self.provenance["case_manifest_sha256"] = audit.entry.content_sha256(self.panel_cases)
+        with self.assertRaisesRegex(audit.AuditInputError, "not in the rebuilt selection panel"):
+            self.consistency()
+
+    def test_consistency_run_refuses_a_different_gym_build(self):
+        for key, value in (("dirty", True), ("source_digest", "other")):
+            with self.subTest(key=key):
+                self.build = {**self.BUILD, key: value}
+                with self.assertRaisesRegex(audit.AuditInputError, key):
+                    self.consistency()
 
 
 if __name__ == "__main__":

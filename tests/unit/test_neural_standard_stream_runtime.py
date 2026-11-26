@@ -38,6 +38,8 @@ STANDARD_TEMPLATE = ROOT / "configs/neural/gym-1.1.1/standard-standalone.toml"
 STANDARD_STREAM_TEMPLATE = ROOT / "configs/neural/gym-1.1.1/standard-stream.toml"
 STANDARD_STREAM_TEMPLATE_1_2_0 = ROOT / "configs/neural/gym-1.2.0/standard-stream.toml"
 STANDARD_STREAM_TEMPLATE_1_2_4 = ROOT / "configs/neural/gym-1.2.4/standard-stream.toml"
+STANDARD_STREAM_TEMPLATE_1_2_5 = ROOT / "configs/neural/gym-1.2.5/standard-stream.toml"
+GYM_1_2_5 = "731fca0e0341d80e7cf08a8be7a03be1fa32c3f1"  # a drop-in in the gym-1.2.4 rules epoch
 _RUN_NATIVE = os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") == "1"
 
 # The unmodified M10 pins (tests/unit/test_neural_scenario_stream_v2.py).
@@ -700,7 +702,20 @@ class StandardStreamSmokeTest(unittest.TestCase):
             "layout": "compact", "preset": "standard-combat-compact-v1",
             "fingerprint": "49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8"})
 
-    def _smoke(self, revision: str, template_text: str) -> dict:
+    def test_standard_stream_smoke_gym_1_2_5(self):
+        """The v1.2.5 drop-in smoke: a synthetic gym-1.2.4 table on the v1.2.5 Gym, compact view."""
+        if _live_gym_revision() != GYM_1_2_5:
+            self.skipTest("the v1.2.5 smoke needs the Gym v1.2.5 runtime")
+        template_text = STANDARD_STREAM_TEMPLATE_1_2_5.read_text().replace(
+            "steps = 32", "steps = 8").replace("max_wall_seconds = 900.0", "max_wall_seconds = 1200.0")
+        self.assertIn('standard_view_layout = "compact"', template_text)
+        evidence = self._smoke(GYM_1_2_5, template_text, table_revision=GYM_1_2_4)
+        self.assertEqual(evidence["table_gym_revision"], GYM_1_2_4)
+        self.assertEqual(evidence["standard_view"], {
+            "layout": "compact", "preset": "standard-combat-compact-v1",
+            "fingerprint": "49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8"})
+
+    def _smoke(self, revision: str, template_text: str, *, table_revision: str | None = None) -> dict:
         from spire_learn.neural.runner import RuntimeOperationLimits
         from spire_learn.neural.standard_catalog import validate_entries
         from spire_learn.neural.stream_runner import prepare_stream, run_stream_segment
@@ -709,7 +724,7 @@ class StandardStreamSmokeTest(unittest.TestCase):
         ss.clear_shard_cache()
         root = WORK / f"standard-stream-smoke-{revision[:7]}-{os.getpid()}"
         root.mkdir()
-        _, table_sha = write_table(root, smoke_states(), revision=revision)
+        _, table_sha = write_table(root, smoke_states(), revision=table_revision or revision)
         recipe_path = root / "recipe.json"
         recipe_path.write_text(json.dumps(recipe_document(
             table_sha, shard_size=32, redraw_bound=4,
@@ -723,6 +738,8 @@ class StandardStreamSmokeTest(unittest.TestCase):
         template.write_text(template_text)
         evidence = {"gym_revision": revision, "recipe_sha256": recipe.sha256, "table_sha256": table_sha,
                     "segments": []}
+        if table_revision is not None:
+            evidence["table_gym_revision"] = table_revision
         parent = None
         for index, purpose in ((0, "train"), (1, "resume")):
             prepared = prepare_stream(recipe_path, root / f"shard-{index}", arm="mixed", split="train",

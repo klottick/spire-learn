@@ -98,6 +98,7 @@ if __package__ in (None, ""):
     sys.path[:0] = [str(_ROOT / "src"), str(_ROOT)]
 
 from scripts.neural import search_teacher_entry as entry
+from spire_learn.neural.gym_contracts import CONTRACTS_BY_REVISION, accepts_recorded_revision
 from scripts.neural.standard_results import KIND_ORDER, mcnemar_exact, paired, recorded_wins, root_table
 
 ENTRY_SCHEMA = "spire-learn-search-teacher-entry-v1"
@@ -115,8 +116,11 @@ STOP_BOSS_ROOT_SHARE = 0.5
 # Entry outcomes in standard_results' paired vocabulary; escaped and incomplete leave a pair.
 PAIRED_OUTCOME = {"victory": "win", "death": "loss", "escaped": "escaped", "censored": "incomplete"}
 PPO_OUTCOMES = ("win", "loss", "escaped", "incomplete")
-SHARED_PROVENANCE = ("gym_revision", "rules_epoch", "recipe_sha256", "states_table_sha256",
+# Runs share one rules epoch; each run's gym_revision and gym_build are its own (a drop-in Gym in
+# the same epoch, such as v1.2.5 for gym-1.2.4, may have produced some of them).
+SHARED_PROVENANCE = ("rules_epoch", "recipe_sha256", "states_table_sha256",
                      "observation_fingerprint", "max_steps", "max_turn_actions")
+RUN_BUILD_PROVENANCE = ("gym_revision", "gym_build")
 # Fight-row resource fields of search_teacher_entry.py runs; potion_hp_spent is a float, the rest ints.
 RESOURCE_FIELDS = ("hp_start", "max_hp_start", "max_hp_end", "potions_start", "potions_end", "potion_hp_spent")
 # Dataset-teacher choice v2 (pre-registered).
@@ -327,7 +331,9 @@ def run_consistency(args, output):
     from spire_lab import _native
     gym_build = dict(_native.build_info())
     recipe = entry.load_recipe(args.recipe)
-    if not (gym_build.get("revision") == recipe.gym_revision == provenance["gym_revision"]):
+    # Exact build parity with the replayed run; the recipe's table may be from any revision of its epoch.
+    if not (gym_build.get("revision") == provenance["gym_revision"]
+            and accepts_recorded_revision(gym_build.get("revision"), recipe.gym_revision)):
         raise AuditInputError("Native Gym, recipe and decisions name different Gym revisions")
     run_build = provenance.get("gym_build") or {}
     for key in ("revision", "dirty", "source_digest"):
@@ -363,6 +369,7 @@ def run_consistency(args, output):
             "source_summary_sha256": _file_sha256(summary_path),
             "source_decisions_sha256": _file_sha256(args.decisions),
             "source_seed": provenance.get("seed"), "gym_build": gym_build,
+            "gym_revision": provenance.get("gym_revision"),
             **{key: provenance.get(key) for key in SHARED_PROVENANCE},
             "parallel": args.parallel, "workers": 1, "gpu_seconds": 0,
         },
@@ -685,11 +692,30 @@ def _shared_provenance(runs):
         if len(values) != 1:
             raise AuditInputError(f"Teacher runs disagree on {key}")
         shared[key] = runs[0]["provenance"].get(key)
-    builds = {json.dumps(run["provenance"].get("gym_build"), sort_keys=True) for run in runs}
-    if len(builds) != 1:
-        raise AuditInputError("Teacher runs disagree on gym_build")
-    shared["gym_build"] = runs[0]["provenance"].get("gym_build")
+    _check_run_builds(runs, shared["rules_epoch"])
     return shared
+
+
+def _check_run_builds(runs, epoch):
+    """Each run's gym_revision is in the shared rules epoch; runs of one revision share one gym_build.
+
+    Runs of a single revision are accepted as before. Several revisions are accepted only when
+    each is registered under ``epoch``; a registered revision must always be under ``epoch``.
+    """
+    by_revision = {}
+    for run in runs:
+        provenance = run["provenance"]
+        key = json.dumps(provenance.get("gym_revision"), sort_keys=True)
+        by_revision.setdefault(key, set()).add(json.dumps(provenance.get("gym_build"), sort_keys=True))
+    for key, builds in by_revision.items():
+        revision = json.loads(key)
+        contract = CONTRACTS_BY_REVISION.get(revision) if type(revision) is str else None
+        if ((contract is None and len(by_revision) > 1)
+                or (contract is not None and (epoch is None or contract.rules_epoch != epoch))):
+            raise AuditInputError(f"Teacher runs disagree on gym_revision: {revision!r} is not a Gym revision "
+                                  f"of the runs' rules epoch {epoch!r}")
+        if len(builds) != 1:
+            raise AuditInputError(f"Teacher runs of Gym revision {revision!r} disagree on gym_build")
 
 
 def _stop_for(runs, panels, teacher):
@@ -781,6 +807,7 @@ def build_report(run_specs, panel_specs, ppo_specs=(), run_states=None, v2=None)
             "panels": {kind: {key: panel[key] for key in ("panel_sha256", "manifest_sha256", "document_sha256")}
                        for kind, panel in panels.items()},
             "runs": {f"{teacher}:{kind}": {"config_sha256": run["provenance"].get("config_sha256"),
+                                           **{key: run["provenance"].get(key) for key in RUN_BUILD_PROVENANCE},
                                            "seed": run["provenance"].get("seed"),
                                            "summary_sha256": run["summary_sha256"],
                                            "calibrated": run["provenance"].get("calibrated"),

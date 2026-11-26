@@ -78,8 +78,11 @@ class RegistrySitesTest(unittest.TestCase):
                 run(FAKE)
             with self.assertRaisesRegex(ValueError, "supported Gym revision"):
                 run(UNKNOWN, live=UNKNOWN)
-            with self.assertRaisesRegex(ValueError, "Gym revision"):
+            # FAKE_CONTRACT keeps REAL's rules epoch: a live Gym in that epoch passes, another epoch's does not.
+            with self.assertRaisesRegex(RuntimeError, "past the gate"):
                 run(FAKE, live=REAL.source_revision)
+            with self.assertRaisesRegex(ValueError, "Gym revision"):
+                run(FAKE, live=gym_contracts.GYM_V1_2_0_CONTRACT.source_revision)
         with self.assertRaisesRegex(ValueError, "supported Gym revision"):
             run(FAKE)
 

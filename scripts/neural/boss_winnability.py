@@ -384,12 +384,13 @@ def standard_panel_winnability(output: Path, *, recipe: Path, samples: int, play
 
 
 def _check_live_revision(table_revision: str, build_info=None) -> None:
-    """The loaded Gym must be the revision the run-states table was built for (never the other Gym)."""
+    """The loaded Gym must be the table's revision or one in its rules epoch (never another epoch's Gym)."""
+    from spire_learn.neural.gym_contracts import accepts_recorded_revision
     if build_info is None:
         from spire_lab import _native
         build_info = _native.build_info
     live = build_info().get('revision')
-    if live != table_revision:
+    if not accepts_recorded_revision(live, table_revision):
         raise ValueError(f'the loaded Spire Gym is revision {live!r}, but the run-states table is for '
                          f'Gym {table_revision!r}; run it in that Gym\'s runtime')
 

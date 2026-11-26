@@ -21,6 +21,7 @@ import hashlib
 from pathlib import Path
 import threading
 
+from .gym_contracts import accepts_recorded_revision
 from .scenario_stream import ScenarioRecipe, ScenarioShard, generate_scenario_shard, load_scenario_recipe
 from .scenario_support import json_value, read_json
 from .standard_catalog import Validate, bind_gym
@@ -62,8 +63,9 @@ def gym_validator(what: str = "fuzzed shards", recipe: Recipe | None = None, *,
     """The bound validator, binding the pinned Gym on first use (runtime container only).
 
     A validator bound from the real Gym records the loaded build's revision (``live_gym_revision``).
-    With a Standard ``recipe``, that revision must equal the recipe's table revision: a v1.1.1
-    recipe is never validated or played on the v1.2.0 Gym, nor the reverse. Validators injected by
+    With a Standard ``recipe``, that revision must be the recipe's table revision or one in its rules
+    epoch: a v1.2.4 table runs on the v1.2.5 drop-in, but a v1.1.1 recipe is never validated or played
+    on the v1.2.0 Gym, nor the reverse. Validators injected by
     ``bind_validator`` (host tests) carry no revision unless they set one, and are not checked.
     ``build_info`` replaces the loaded extension's ``build_info`` (tests).
 
@@ -85,7 +87,7 @@ def gym_validator(what: str = "fuzzed shards", recipe: Recipe | None = None, *,
         if isinstance(recipe, StandardRecipe) and checked and not isinstance(live, str):
             raise ValueError("the loaded Spire Gym's build_info reports no revision, so it cannot be "
                              "matched against the Standard recipe's table revision")
-        if isinstance(recipe, StandardRecipe) and checked and live != recipe.gym_revision:
+        if isinstance(recipe, StandardRecipe) and checked and not accepts_recorded_revision(live, recipe.gym_revision):
             raise ValueError(f"the loaded Spire Gym is revision {live}, but the Standard recipe's run-states "
                              f"table is for Gym {recipe.gym_revision}; run it in that Gym's runtime")
         return _VALIDATOR
@@ -134,8 +136,8 @@ def load_recipe(path: Path) -> Recipe:
 
 
 def require_recipe_revision(recipe: Recipe, gym_revision: str) -> None:
-    """A Standard recipe's table was built for one Gym revision; a config for another must not use it."""
-    if isinstance(recipe, StandardRecipe) and recipe.gym_revision != gym_revision:
+    """A Standard recipe's table was built for one Gym revision; a config outside its rules epoch must not use it."""
+    if isinstance(recipe, StandardRecipe) and not accepts_recorded_revision(gym_revision, recipe.gym_revision):
         raise ValueError(f"the Standard recipe's run-states table is for Gym {recipe.gym_revision}, "
                          f"but the configuration is for Gym {gym_revision}")
 

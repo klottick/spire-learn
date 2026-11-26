@@ -845,6 +845,7 @@ class ConsistencyRunTests(unittest.TestCase):
             "case_manifest_sha256": audit.entry.content_sha256(self.cases), "seed": 9,
         }
         self.build = dict(self.BUILD)
+        self.recipe_revision = "rev"
         self.panel_cases = self.cases
 
     def write(self):
@@ -874,7 +875,7 @@ class ConsistencyRunTests(unittest.TestCase):
                 "--output", str(self.root / "artifacts/consistency.json")]
         with patch.dict(sys.modules, {"spire_lab": gym}), \
              patch.object(audit.entry, "_teacher", return_value=("teacher", "cfg", True)), \
-             patch.object(audit.entry, "load_recipe", return_value=SimpleNamespace(gym_revision="rev")), \
+             patch.object(audit.entry, "load_recipe", return_value=SimpleNamespace(gym_revision=self.recipe_revision)), \
              patch.object(audit.entry, "build_panel", return_value={"manifest": {"cases": self.panel_cases}}), \
              patch.object(audit.entry, "preflight") as preflight, \
              patch.object(audit.entry, "_fight_env", fight_env), \
@@ -927,6 +928,26 @@ class ConsistencyRunTests(unittest.TestCase):
                 self.build = {**self.BUILD, key: value}
                 with self.assertRaisesRegex(audit.AuditInputError, key):
                     self.consistency()
+
+    def test_consistency_replays_on_the_run_build_within_the_recipe_epoch(self):
+        from spire_learn.neural.gym_contracts import GYM_V1_2_0_CONTRACT, GYM_V1_2_4_CONTRACT, GYM_V1_2_5_CONTRACT
+        v124, v125 = GYM_V1_2_4_CONTRACT.source_revision, GYM_V1_2_5_CONTRACT.source_revision
+        build = {"revision": v125, "dirty": False, "source_digest": GYM_V1_2_5_CONTRACT.build.source_digest}
+        # A v1.2.5 run of the gym-1.2.4 recipe replays on v1.2.5 and records the live build.
+        self.recipe_revision, self.build = v124, dict(build)
+        self.provenance.update(gym_revision=v125, gym_build=dict(build), rules_epoch="gym-1.2.4")
+        report = json.loads(self.consistency()[0])
+        self.assertEqual((report["provenance"]["gym_revision"], report["provenance"]["gym_build"]), (v125, build))
+        self.assertEqual(report["provenance"]["rules_epoch"], "gym-1.2.4")
+        (self.root / "artifacts/consistency.json").unlink()
+        # Exact build parity with the replayed run: the v1.2.4 Gym does not replay a v1.2.5 run.
+        self.build = {"revision": v124, "dirty": False, "source_digest": GYM_V1_2_4_CONTRACT.build.source_digest}
+        with self.assertRaisesRegex(audit.AuditInputError, "Gym revision"):
+            self.consistency()
+        # And a recipe from another epoch is refused even on the run's own build.
+        self.build, self.recipe_revision = dict(build), GYM_V1_2_0_CONTRACT.source_revision
+        with self.assertRaisesRegex(audit.AuditInputError, "Gym revision"):
+            self.consistency()
 
 
 if __name__ == "__main__":

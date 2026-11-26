@@ -28,7 +28,7 @@ if __package__ in (None, ""):
 from scripts.neural.boss_winnability import _catalog, _is_train
 from spire_learn.neural import search_view
 from spire_learn.neural.cases import environment_seed_for
-from spire_learn.neural.gym_contracts import STANDARD_COMPACT_PRESET, contract_for_revision
+from spire_learn.neural.gym_contracts import STANDARD_COMPACT_PRESET, accepts_recorded_revision, contract_for_revision
 from spire_learn.neural.recipes import build_panel, load_recipe
 from spire_learn.neural.scenario_support import content_sha256, json_value
 from spire_learn.neural.search_one_move import PLAYOUT_RULE_ID, check_value_options, one_move_values
@@ -412,8 +412,16 @@ def _run(args, output):
     except ValueError as error:
         raise ValueError(f"Teacher entry requires a supported Gym revision: {error}") from error
     revision = contract.source_revision
-    if STANDARD_COMPACT_PRESET not in contract.standard_compact_fingerprints or gym_build.get("revision") != revision:
-        raise ValueError(f"Teacher entry requires a Standard recipe and Gym revision {revision} with compact views")
+    # The live Gym may be the table's revision or a drop-in in its rules epoch; its own contract
+    # decides the compact view, and its revision and build are what the provenance records.
+    live_revision = gym_build.get("revision")
+    if not accepts_recorded_revision(live_revision, revision):
+        raise ValueError(f"Teacher entry requires a Standard recipe and Gym revision {revision} "
+                         "(or one in its rules epoch) with compact views")
+    live = contract_for_revision(live_revision)
+    if STANDARD_COMPACT_PRESET not in live.standard_compact_fingerprints:
+        raise ValueError(f"Teacher entry requires a Standard recipe and Gym revision {revision} "
+                         "(or one in its rules epoch) with compact views")
 
     if args.panel:
         split = "selection"
@@ -458,7 +466,7 @@ def _run(args, output):
         "searched_decisions": searched, "cpu_seconds_per_searched_decision": search_cpu / searched if searched else None,
         "fight_cpu_seconds": fight_cpu, "fight_run_wall_seconds": perf_counter() - wall_start,
         "provenance": {
-            "gym_revision": revision, "gym_build": gym_build,
+            "gym_revision": live_revision, "gym_build": gym_build,
             "recipe_sha256": sha256(args.recipe.read_bytes()).hexdigest(), "states_table_sha256": recipe.table_sha256,
             "panel": args.panel, "split": split, **identity, "case_manifest_sha256": content_sha256(cases),
             "teacher": args.teacher, "calibrated": calibrated, "config_sha256": teacher_sha,
@@ -468,7 +476,7 @@ def _run(args, output):
             "research_seed_rule": "((seed + case_index) * max_steps + step) modulo 2**64",
             "character": recipe.character, "ascension": recipe.ascension, "profile": descriptor["profile_id"],
             "observation_schema": descriptor["schema_id"], "observation_fingerprint": descriptor["fingerprint"],
-            "rules_epoch": contract.rules_epoch, "capacity_preset": STANDARD_COMPACT_PRESET,
+            "rules_epoch": live.rules_epoch, "capacity_preset": STANDARD_COMPACT_PRESET,
             "reward": TERMINAL_REWARDS, "branch_layout": "compact",
             **({"playout_backend": "native", "playout_rule_id": PLAYOUT_RULE_ID} if _native_backend(teacher) else {}),
             "workers": 1, "parallel": args.parallel, "max_steps": args.max_steps,

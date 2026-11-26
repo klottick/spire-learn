@@ -347,7 +347,9 @@ class EntryConfigTests(unittest.TestCase):
                 rule, policy = config.value_rule, config.playout_policy
                 self.assertEqual(config.playout_rule_id if hasattr(config, "playout_rule_id") else
                                  entry.config_identity(config)["playout_rule_id"], TIERED_PLAYOUT_RULE_ID)
-                neutral = {"value_rule": tree_base.value_rule, "playout_policy": tree_base.playout_policy}
+                self.assertEqual(config.ucb_c, 0.5)  # set by the Task 6 Step 2 check
+                neutral = {"value_rule": tree_base.value_rule, "playout_policy": tree_base.playout_policy,
+                           "ucb_c": tree_base.ucb_c}
                 self.assertEqual(asdict(replace(config, **neutral)), asdict(tree_base))
             else:
                 rule, policy = config["value_rule"] if kind != "flat-v1" else config.get("value_rule"), config["playout_policy"]

@@ -77,9 +77,33 @@ closed.
   gated compact tests also run on v1.2.5.
 - Native use of `tiered_verbs` for `no-potions-v2` and `resource-v2` came with teacher value v2 Task 10: `playout_rule_id` records `spire-gym-public-playout-tiered-v1`, and the live capability check refuses Gyms without `tiered_playouts`.
 
-**Determinism check** (Step 3, controller, runtime container): _pending; v1
-`current` on `--train-sample 200`, seed 2026112501, against
-`gym-1.2.4/t3/cost-current`._
+**Determinism check** (Step 3, controller, runtime container, 2026-11-26, learner
+`290e6db`, profile `configs/neural/gym-1.2.5/runtime.json`). Every run exited 0 with
+`learner_changed` false. **Passed.**
+
+- **Entry smoke** (`--train-sample 4`). Provenance records the live
+  `gym_revision` `731fca0…`, `source_digest` `19854fcc…`, `rules_epoch`
+  `gym-1.2.4` and the unchanged recipe SHA-256 `5d53d065…`.
+- **Descriptors.** All ten captured descriptors (`common`, `standard-combat`,
+  its catalog, compact, compact-play and environment variants, `standard-run`
+  and its environment) are byte-identical to the v1.2.4 captures.
+- **Qualification.** One reset per mode passed.
+- **Card metadata.** The fingerprint is `effbb810…`, unchanged, with 0 alias
+  rejections. The probe needs the absolute alias path
+  `configs/neural/standard/name-aliases.json` as its argument.
+- **v1 `current` on `--train-sample 200`, seed 2026112501,** compared with
+  `gym-1.2.4/t3/cost-current`:
+  - Decision rows (5,217) are equal on every shared key, excluding
+    `cpu_seconds`. The only extra key on v1.2.5 is `simulations`, which Learn
+    added after the v1.2.4 run.
+  - Fight rows (200) are equal on `case_id`, `outcome`, `censor_reason`,
+    `steps` and `hp_after_cleanup`.
+
+The Gym's `delivery.json` compares v1.2.5 with its predecessor build
+`673887a` (PR #132), not with `673eb8f` (v1.2.4). This check is what bridges
+`673eb8f` to `731fca0` for Learn. Audit reports built after this change carry
+`gym_revision` and `gym_build` per run under `provenance.runs`, not at the top
+level.
 
 ## Re-pin to release v1.2.4 (2026-11-25)
 

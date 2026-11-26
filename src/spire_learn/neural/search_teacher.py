@@ -12,8 +12,10 @@ from time import process_time
 from . import search_view
 from .gym_contracts import STANDARD_COMPACT_PRESET
 from .search_one_move import (
-    PLAYOUT_BACKENDS, PLAYOUT_RULE_ID, ActionStat, _close_branch, playout_branches, playout_seed,
+    PLAYOUT_BACKENDS, PLAYOUT_RULE_ID, ActionStat, _close_branch, check_value_options, playout_branches,
+    playout_seed, terminal_score,
 )
+from .search_value import RootContext, ValueRule, cutoff_value
 from .search_view import View
 
 # Bound retained native branches and their Python observations per fight.
@@ -36,6 +38,9 @@ class TeacherConfig:
     workers: int = 1
     # "python" is the reference rollout; "native" uses Gym's playout_many.
     playout_backend: str = "python"
+    # Scoring and playout choice are independent switches; v1 defaults keep the v1 paths and hashes.
+    value_rule: ValueRule = ValueRule("flat-v1")
+    playout_policy: str = "uniform-v1"
 
     def __post_init__(self) -> None:
         if (self.simulations is None) == (self.simulations_per_action is None):
@@ -59,6 +64,8 @@ class TeacherConfig:
             raise ValueError("Invalid public search layout or worker count")
         if self.playout_backend not in PLAYOUT_BACKENDS:
             raise ValueError(f"playout_backend must be one of {PLAYOUT_BACKENDS}")
+        # Tree branches always step with the full view.
+        check_value_options(self.value_rule, self.playout_policy, self.playout_backend)
         if not isfinite(self.ucb_c) or self.ucb_c < 0:
             raise ValueError("ucb_c must be finite and nonnegative")
         if self.widening is not None:
@@ -85,8 +92,17 @@ class TeacherResult:
 
 
 def config_identity(config: TeacherConfig) -> dict:
-    """Identity fields of a config. Python teachers keep the pre-native fields, so their hashes hold."""
+    """Identity fields of a config. Python teachers keep the pre-native fields, so their hashes hold.
+
+    The value rule and playout policy appear only when they differ from flat-v1 and uniform-v1.
+    """
     fields = asdict(config)
+    if config.value_rule == ValueRule("flat-v1"):
+        del fields["value_rule"]
+    else:
+        fields["value_rule"] = config.value_rule.as_identity()
+    if config.playout_policy == "uniform-v1":
+        del fields["playout_policy"]
     if config.simulations_per_action is None:
         del fields["simulations_per_action"]
     else:
@@ -219,19 +235,28 @@ def _native_playout(search, branch, observation, view, config, research_seed, wo
     return outcome.value
 
 
-def _playout(branch, observation, view, rng, steps):
+def _playout(branch, observation, view, rng, steps, config, context):
+    v2 = config.value_rule.name == "resource-v2"
     for _ in range(steps):
-        action = view.heuristic_choice(observation, rng)
-        observation, reward, terminated, truncated, _ = branch.step(action, view="full")
+        if config.playout_policy == "uniform-v1":
+            action = view.heuristic_choice(observation, rng)
+        else:
+            action = view.playout_choice(observation, rng, config.playout_policy)
+        observation, reward, terminated, truncated, info = branch.step(action, view="full")
         if terminated:
+            if v2:
+                return terminal_score(config.value_rule, context, view, observation, reward, info)
             return reward
         if truncated:
             break
+    if v2:
+        return cutoff_value(config.value_rule, context, view, observation)
     return 0.5 * view.balance(observation)
 
 
 def _simulate(search, world, root, first_action, view, config, nodes, points, capacity, path, *,
-              research_seed, uniform):
+              research_seed, uniform, context):
+    v2 = config.value_rule.name == "resource-v2"
     node, action = root, first_action
     prefix = ()
     branch = point = None
@@ -257,10 +282,14 @@ def _simulate(search, world, root, first_action, view, config, nodes, points, ca
                 if not nodes:
                     root_observation, _ = branch.decision()
                     nodes[_public_key(root_observation)] = root
-                observation, reward, terminated, truncated, _ = branch.step(action, view="full")
+                observation, reward, terminated, truncated, info = branch.step(action, view="full")
                 if terminated:
+                    if v2:
+                        return terminal_score(config.value_rule, context, view, observation, reward, info)
                     return reward
                 if truncated:
+                    if v2:
+                        return cutoff_value(config.value_rule, context, view, observation)
                     return 0.5 * view.balance(observation)
                 public_key = _public_key(observation)
                 child = nodes.get(public_key)
@@ -282,6 +311,8 @@ def _simulate(search, world, root, first_action, view, config, nodes, points, ca
             if expanded or depth == config.max_depth:
                 path.append((node, None))
                 if not config.playout_steps:
+                    if v2:
+                        return cutoff_value(config.value_rule, context, view, observation)
                     return 0.5 * view.balance(observation)
                 if branch is None:
                     branch = point.branch.fork()
@@ -291,7 +322,7 @@ def _simulate(search, world, root, first_action, view, config, nodes, points, ca
                         node.playouts_by_world[world] = n + 1
                     return _native_playout(search, branch, observation, view, config, research_seed, world, n)
                 rng = _playout_rng(node, research_seed, world, uniform=uniform)
-                return _playout(branch, observation, view, rng, config.playout_steps)
+                return _playout(branch, observation, view, rng, config.playout_steps, config, context)
             action = _select(node, config)
     finally:
         if branch is not None:
@@ -299,10 +330,11 @@ def _simulate(search, world, root, first_action, view, config, nodes, points, ca
 
 
 def teach(search, legal: Sequence[int], view: View, config: TeacherConfig, *,
-          research_seed: int) -> TeacherResult:
+          research_seed: int, root: RootContext | None = None) -> TeacherResult:
     """Run a tree search on the caller's arena with its matching view.
 
-    A min_root_visits value of 0 is treated as 1.
+    A min_root_visits value of 0 is treated as 1. ``resource-v2`` needs ``root``,
+    the context of the decision being searched.
     """
     start = process_time()
     if type(research_seed) is not int or not 0 <= research_seed < 2**64:
@@ -313,9 +345,11 @@ def teach(search, legal: Sequence[int], view: View, config: TeacherConfig, *,
     simulations = config.decision_simulations(len(legal))
     if simulations < len(legal) * max(1, config.min_root_visits):
         raise ValueError("Simulation budget cannot cover required root visits")
+    if config.value_rule.name == "resource-v2" and root is None:
+        raise ValueError("resource-v2 needs the root context of the decision")
 
     unsupported, _, _ = search_view._native_errors()
-    root = _Node(legal)
+    tree = _Node(legal)
     nodes = {}
     points = OrderedDict()
     available = search.limits()["max_live_branches"] - search.counters()["live_branches"]
@@ -325,13 +359,13 @@ def teach(search, legal: Sequence[int], view: View, config: TeacherConfig, *,
     try:
         for index in range(simulations):
             world = index % config.worlds
-            action = legal[index // config.worlds] if uniform else _select(root, config, root=True)
+            action = legal[index // config.worlds] if uniform else _select(tree, config, root=True)
             path = []
             rejected = False
             try:
                 value = _simulate(
-                    search, world, root, action, view, config, nodes, points, capacity, path,
-                    research_seed=research_seed, uniform=uniform,
+                    search, world, tree, action, view, config, nodes, points, capacity, path,
+                    research_seed=research_seed, uniform=uniform, context=root,
                 )
             except (unsupported, _PlayoutRefused):
                 rejected = True
@@ -340,7 +374,7 @@ def teach(search, legal: Sequence[int], view: View, config: TeacherConfig, *,
             for depth, (node, chosen) in enumerate(path):
                 # A later return to the same public decision shares its node,
                 # while root quotas and results count the first choice only.
-                if depth and node is root:
+                if depth and node is tree:
                     continue
                 node.visits += 1
                 if chosen is not None:
@@ -353,6 +387,6 @@ def teach(search, legal: Sequence[int], view: View, config: TeacherConfig, *,
             _close_branch(point.branch)
 
     stats = {action: ActionStat(data.total / data.visits, data.visits, data.refused)
-             for action, data in root.actions.items()}
+             for action, data in tree.actions.items()}
     choice = max(legal, key=lambda action: stats[action].mean)
     return TeacherResult(choice, stats, simulations, refused, process_time() - start)

@@ -229,6 +229,7 @@ class IdentityTests(unittest.TestCase):
         python, native = tt.config(), tt.config(playout_backend="native")
         fields = asdict(python)
         del fields["playout_backend"], fields["simulations_per_action"]
+        del fields["value_rule"], fields["playout_policy"]
         legacy = sha256(json.dumps(fields, sort_keys=True, separators=(",", ":"), allow_nan=False).encode())
         self.assertEqual(teacher.config_sha256(python), legacy.hexdigest())
         self.assertNotEqual(teacher.config_sha256(python), teacher.config_sha256(native))

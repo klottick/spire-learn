@@ -396,7 +396,7 @@ These ratios bracket the target of 3, while the fixed-budget probe's 14.7, 7.4 a
 
 Native playouts cost less than v1.2.0's Python playouts. On the same cost-unit sample size and seed (`--train-sample 200`, seed 2026112501, 12 CPUs), v1.2.0 `current` used 1.4773 CPU s per searched decision (`s1t7-calibration/cost-current`), against 0.2815 here, about 5.2 times less. This is not a single-variable comparison: the rules epoch differs as well. The v1.2.0 section "Search reference cost" in `docs/neural-standard-baseline-gym-1.2.0.md` reports 0.821 CPU s per searched decision for compact, one-worker search on the v1.2.0 selection panel under a four-CPU allocation. The v1.2.4 selection panel costs 0.630 with its longest fight, 1.3 times less, and 0.312 without it, 2.6 times less. One fight moves the panel ratio by a factor of two, so the panel figures are not a stable measure. The sample-matched 5.2 is the better estimate of the playout change. Neither figure is a Gym-release effect on its own.
 
-The long tail matters for the tree teachers. A `tree-10x` search of that one selection fight should take about ten times its 2,326 CPU s, roughly six hours on one core. That is an estimate, not a measurement.
+The long tail matters for the tree teachers. Before the tree runs, this doc estimated that a `tree-10x` search of that one selection fight would take about ten times its 2,326 CPU s, roughly six hours on one core. The estimate did not hold. Every tree teacher won that fight, with `tree-10x` taking 448 s and `tree-3x` 1,139 s; see the [search-teacher audit](neural-search-teacher-gym-1.2.4.md).
 
 ## Baselines
 

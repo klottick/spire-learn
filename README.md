@@ -160,6 +160,12 @@ Gym v1.2.5's native no-potions rule. The chosen dataset teacher is `current-v2`.
 It wins as often as before (233 and 180 of 256), keeps 0.62 of max HP on the
 selection panel against 0.38, and cuts pooled resource loss by about a third.
 
+The [full-run panel and gate R1](docs/neural-full-run-panel.md) puts both teachers
+through the same 64 full Ironclad A20 runs, with a pre-registered non-combat
+heuristic. `current-v2` reaches more floors than `current` in 42 of the 64 pairs
+and fewer in 2 (sign test p = 1.1 × 10⁻¹⁰), with a mean of 11.9 floors against
+7.8. R1 passes. Most runs of both teachers still end in Act 1.
+
 The separately approved fresh-weight campaign on this release has now completed
 its development comparisons. Across 438,272 learned decisions, the final mixed
 combat policy improved from **18/64 to 41/64 development wins**. All eight panels

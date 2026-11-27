@@ -247,7 +247,20 @@ def _resource_fields(view, start, end):
 
 
 def play_fight(env, case, view, turn_column, teacher, *, research_seed,
-               max_steps=1024, max_turn_actions=500):
+               max_steps=1024, max_turn_actions=500, chooser=None, observer=None, finisher=None):
+    """Play one fight with the teacher; the caps, censors and resource fields live only here.
+
+    Optional hooks (the defaults play the teacher's move and change nothing):
+
+    - ``chooser(observation, legal, teacher_result, rng) -> action`` picks the move to play;
+      ``teacher_result`` is ``_decision``'s tuple ``(root, choice, values, cpu_seconds,
+      refusals, simulations)`` and ``rng`` the fight's teacher Random. The move must be legal.
+      A decision row's ``choice`` is the move actually played.
+    - ``observer(observation, decision, turn)`` sees each decision row with the decision's own
+      observation and public turn, before the move is stepped.
+    - ``finisher(final_observation, info, outcome, censor_reason)`` sees the fight's end state
+      (the observation potion kinds, max HP and cleanup HP are read from), once, before return.
+    """
     wall_start, cpu_start = perf_counter(), process_time()
     observation, info = env.reset(case)
     # Read the reset resources before the first step.
@@ -267,14 +280,21 @@ def play_fight(env, case, view, turn_column, teacher, *, research_seed,
         if not legal:
             raise RuntimeError(f"Live fight has no legal action at step {step}")
         seed = (research_seed * max_steps + step) % (1 << 64)
-        root, action, values, cpu_seconds, refusals, simulations = _decision(
-            env, observation, legal, view, teacher, rng, seed)
-        observation, reward, done, truncated, info = env.step(action)
-        decisions.append({
+        teacher_result = _decision(env, observation, legal, view, teacher, rng, seed)
+        root, action, values, cpu_seconds, refusals, simulations = teacher_result
+        if chooser is not None:
+            action = chooser(observation, legal, teacher_result, rng)
+            if action not in legal:
+                raise RuntimeError(f"Chooser played an action outside the legal set at step {step}")
+        decision = {
             "case_id": case["case_id"], "step": step, "action_prefix_length": step,
             "root": root, "values": values, "choice": action, "cpu_seconds": cpu_seconds,
             "research_seed": seed, "branch_refusals": refusals, "simulations": simulations,
-        })
+        }
+        if observer is not None:
+            observer(observation, decision, turn)
+        observation, reward, done, truncated, info = env.step(action)
+        decisions.append(decision)
         if truncated:
             raise RuntimeError("Unexpected native Standalone combat truncation")
         if done:
@@ -289,6 +309,8 @@ def play_fight(env, case, view, turn_column, teacher, *, research_seed,
         outcome not in TERMINAL_REWARDS or reward is not None and reward != TERMINAL_REWARDS[outcome]
     ):
         raise RuntimeError("Terminal fight has an invalid public outcome or reward")
+    if finisher is not None:
+        finisher(observation, info, outcome, censor_reason)
     hp = info.get("hp_after_cleanup") if censor_reason is None else None
     return {
         "case_id": case["case_id"], "outcome": outcome, "censor_reason": censor_reason,

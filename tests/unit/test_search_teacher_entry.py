@@ -622,3 +622,100 @@ class FightResourceTests(unittest.TestCase):
         at_reset = self.play(Fight(terminal=True, legal=(), start=self.START, after=self.END))
         self.assertEqual((at_reset["outcome"], at_reset["steps"], at_reset["hp_after_cleanup"]), ("victory", 0, 3))
         self.assertEqual(self.resources(at_reset), (50, 80, 80, 3, 3, 0.0))
+
+
+class PlayFightHookTests(unittest.TestCase):
+    """The chooser, observer and finisher hooks; the defaults leave play_fight unchanged."""
+
+    STATS = {0: ActionStat(0.5, 32, 0), 1: ActionStat(1.0, 32, 1)}
+    TIED = {0: ActionStat(0.5, 32, 0), 1: ActionStat(0.5, 32, 0)}
+
+    def play(self, fight, stats, **hooks):
+        view = resource_view(fight.legal, fight.legal[-1])
+        fight.public_search = Mock(return_value=Mock())
+        with (patch.object(entry.search_view, "_native_errors", return_value=(Unsupported, StateError, Fault)),
+              patch.object(entry, "View"), patch.object(entry, "one_move_values", return_value=stats)):
+            result, rows = entry.play_fight(fight, CASE, view, TURN, CURRENT, research_seed=11, **hooks)
+        for row in [result, *rows]:
+            row.pop("cpu_seconds")
+            row.pop("wall_seconds", None)
+        return result, rows
+
+    def test_default_hooks_unchanged(self):
+        def row(step, choice, values, refusals=0):
+            return {"case_id": "fixture", "step": step, "action_prefix_length": step, "root": "searched",
+                    "values": values, "choice": choice, "research_seed": 11 * 1024 + step,
+                    "branch_refusals": refusals, "simulations": 64}
+
+        fight_row = {"case_id": "fixture", "outcome": "victory", "censor_reason": None, "steps": 2,
+                     "hp_after_cleanup": 3, "hp_start": 50, "max_hp_start": 80, "max_hp_end": 80,
+                     "potions_start": 0, "potions_end": 0, "potion_hp_spent": 0.0}
+        best = {"0": [0.5, 32], "1": [1.0, 32]}
+        # Pinned: today's rows and fight row for a fixed searched fight.
+        self.assertEqual(self.play(Fight(legal=(0, 1), finish=2), self.STATS),
+                         (fight_row, [row(0, 1, best, 1), row(1, 1, best, 1)]))
+        # A tie is broken by the fight's own Random(research_seed); the hooks must not perturb it.
+        reference = random.Random(11)
+        ties = [reference.choice([0, 1]) for _ in range(3)]
+        tied = {"0": [0.5, 32], "1": [0.5, 32]}
+        baseline = self.play(Fight(legal=(0, 1), finish=3), self.TIED)
+        self.assertEqual(baseline, ({**fight_row, "steps": 3}, [row(i, ties[i], tied) for i in range(3)]))
+
+        seen = []
+        hooked = self.play(
+            Fight(legal=(0, 1), finish=3), self.TIED,
+            chooser=lambda observation, legal, teacher, rng: teacher[1],
+            observer=lambda observation, decision, turn: seen.append((decision["step"], turn)),
+            finisher=lambda *args: seen.append("end"))
+        self.assertEqual(hooked, baseline)
+        self.assertEqual(seen, [(0, 0), (1, 1), (2, 2), "end"])
+
+    def test_chooser_plays_its_move_and_must_stay_legal(self):
+        fight = Fight(legal=(0, 1), finish=2)
+        seen = []
+
+        def chooser(observation, legal, teacher, rng):
+            seen.append((legal, teacher[:3], isinstance(rng, random.Random)))
+            return 0
+
+        _, rows = self.play(fight, self.STATS, chooser=chooser)
+        self.assertEqual(fight.actions, [0, 0])
+        self.assertEqual([row["choice"] for row in rows], [0, 0])  # rows record the move played
+        best = {"0": [0.5, 32], "1": [1.0, 32]}
+        self.assertEqual(seen, [([0, 1], ("searched", 1, best), True)] * 2)
+        with self.assertRaisesRegex(RuntimeError, "legal"):
+            self.play(Fight(legal=(0, 1), finish=2), self.STATS, chooser=lambda *args: 5)
+
+    def test_observer_sees_the_decision_observation_before_the_step(self):
+        fight = Fight(legal=(0, 1), finish=2, start={"hp": 50}, after={"hp": 40})
+        seen = []
+        self.play(fight, self.STATS, observer=lambda observation, decision, turn: seen.append(
+            (observation["player"][0], decision["step"], len(fight.actions), turn)))
+        self.assertEqual(seen, [(50, 0, 0, 0), (40, 1, 1, 1)])
+
+    def test_finisher_receives_end_state(self):
+        start = {"hp": 50, "max_hp": 80, "potions": ("fire_potion", "fairy_potion")}
+        end = {"hp": 30, "max_hp": 85, "cleanup": 31, "potions": ("fruit_juice",)}
+        view = View(fakes.descriptor())
+        calls = []
+
+        def finisher(final_observation, info, outcome, censor_reason):
+            calls.append((view.potion_kinds(final_observation), view.player_max_hp(final_observation),
+                          view.cleanup_hp(final_observation), info.get("terminal_reason"),
+                          info.get("hp_after_cleanup"), outcome, censor_reason))
+
+        juice = fakes.POTIONS.index("fruit_juice")
+        result, _ = self.play(Fight(legal=(0, 1), finish=2, start=start, after=end), self.STATS, finisher=finisher)
+        self.assertEqual(calls, [((juice,), 85, 31, "victory", 3, "victory", None)])
+        self.assertEqual(result["max_hp_end"], 85)
+
+        calls.clear()
+        self.play(Fight(legal=(0, 1), turn_stride=2000, start=start, after=end), self.STATS, finisher=finisher)
+        self.assertEqual(calls, [((juice,), 85, 31, None, 3, "censored", "turn_cap")])
+
+        calls.clear()
+        at_reset = {**start, "cleanup": 44}
+        fight = Fight(legal=(0, 1), terminal=True, start=at_reset, after=at_reset)
+        self.play(fight, self.STATS, finisher=finisher)
+        fire, fairy = (fakes.POTIONS.index(name) for name in ("fire_potion", "fairy_potion"))
+        self.assertEqual(calls, [(tuple(sorted((fire, fairy))), 80, 44, "victory", 3, "victory", None)])

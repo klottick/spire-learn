@@ -433,6 +433,18 @@ class StandardTurnCapGateTests(unittest.TestCase):
         load.assert_called_once_with("tests.neural.test_distill_data")
         self.assertNotIn("tests.neural.test_distill_data", entry.MODULES)
 
+    def test_selects_only_the_distill_label_and_policy_player_modules(self):
+        from scripts.neural import gated_tests_entry as entry
+
+        for flag, module in (("--distill-native", "tests.integration.test_distill_label_native"),
+                             ("--policy-player", "tests.neural.test_policy_player")):
+            with self.subTest(flag=flag), patch.dict(os.environ, {"SPIRE_LEARN_RUN_NATIVE_INTEGRATION": "1"}), \
+                 patch.object(unittest.defaultTestLoader, "loadTestsFromName", return_value=_Suite(1)) as load:
+                self.assertEqual(entry.main([flag]), 0)
+            load.assert_called_once_with(module)
+            # Native routes, not the tensor suite: no sampled-row ledger reservation.
+            self.assertNotIn(module, entry.MODULES)
+
     def test_native_route_requires_opt_in(self):
         from scripts.neural import gated_tests_entry as entry
 

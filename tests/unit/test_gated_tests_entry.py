@@ -433,11 +433,13 @@ class StandardTurnCapGateTests(unittest.TestCase):
         load.assert_called_once_with("tests.neural.test_distill_data")
         self.assertNotIn("tests.neural.test_distill_data", entry.MODULES)
 
-    def test_selects_only_the_distill_label_and_policy_player_modules(self):
+    def test_selects_only_the_distill_label_policy_player_bridge_and_full_run_modules(self):
         from scripts.neural import gated_tests_entry as entry
 
         for flag, module in (("--distill-native", "tests.integration.test_distill_label_native"),
-                             ("--policy-player", "tests.neural.test_policy_player")):
+                             ("--policy-player", "tests.neural.test_policy_player"),
+                             ("--compact-bridge", "tests.neural.test_compact_bridge"),
+                             ("--full-run-native", "tests.integration.test_full_run_native")):
             with self.subTest(flag=flag), patch.dict(os.environ, {"SPIRE_LEARN_RUN_NATIVE_INTEGRATION": "1"}), \
                  patch.object(unittest.defaultTestLoader, "loadTestsFromName", return_value=_Suite(1)) as load:
                 self.assertEqual(entry.main([flag]), 0)

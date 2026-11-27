@@ -815,10 +815,11 @@ def distill_config_hash(hyperparameters: DistillHyperparameters) -> str:
 
 @dataclass(frozen=True)
 class DistillConfig:
-    """A strict distillation training config: no manifest_path, [rollout] or [ppo].
+    """A strict distillation training config: no manifest_path, [rollout], [ppo] or shard paths.
 
-    Shards (``chunks`` or ``dataset_manifest``), ``seed`` and ``eval_every`` are run metadata,
-    outside every identity hash.
+    The shards come from a dataset manifest given to the trainer (``distill_train_entry.py
+    --dataset``). The shards, ``seed`` and ``eval_every`` are run metadata, outside every
+    identity hash.
     """
 
     source: Path
@@ -833,8 +834,6 @@ class DistillConfig:
     runtime_gpu_uuid: str | None
     seed: int
     eval_every: int
-    chunks: tuple[Path, ...]
-    dataset_manifest: Path | None
     model: ModelConfig
     distill: DistillHyperparameters
     identity: NeuralIdentity
@@ -858,7 +857,7 @@ def load_distill_config(path: Path) -> DistillConfig:
     except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise ValueError(f"cannot read distillation config {source}: {exc}") from exc
     required = {"schema", "mode", "output_root", "device", "seed", "eval_every", "environment",
-                "data", "model", "distill", "identity"}
+                "model", "distill", "identity"}
     if isinstance(raw, dict) and raw.get("device") == "cuda:0":
         required.add("runtime")
     if not isinstance(raw, dict) or set(raw) != required:
@@ -896,20 +895,6 @@ def load_distill_config(path: Path) -> DistillConfig:
     if fingerprint != presets[preset]:
         raise ValueError("the compact Standard layout requires its preset's compact view fingerprint")
 
-    data = raw["data"]
-    if not isinstance(data, dict) or len(data) != 1 or not set(data) <= {"chunks", "manifest"}:
-        raise ValueError("[data] declares exactly one of chunks (a list of chunk dirs) or manifest")
-    chunks: tuple[Path, ...] = ()
-    dataset_manifest = None
-    if "chunks" in data:
-        if not isinstance(data["chunks"], list) or not data["chunks"]:
-            raise ValueError("data.chunks must be a non-empty list of chunk directories")
-        chunks = tuple(_resolve(source, item, "data.chunks entry") for item in data["chunks"])
-        if len(set(chunks)) != len(chunks):
-            raise ValueError("data.chunks lists a chunk twice")
-    else:
-        dataset_manifest = _resolve(source, data["manifest"], "data.manifest")
-
     model_fields = {"embedding_width", "hidden_width", "max_parameters", "value_heads"}
     model = ModelConfig(**_exact_keys(raw["model"], model_fields, "model"))
     if model.value_heads != 3:
@@ -940,7 +925,7 @@ def load_distill_config(path: Path) -> DistillConfig:
         environment_revision=environment["gym_revision"], standard_view_layout="compact",
         standard_view_preset=preset, standard_view_fingerprint=fingerprint, output_root=output_root,
         device=device, runtime_gpu_uuid=runtime_gpu_uuid, seed=seed, eval_every=eval_every,
-        chunks=chunks, dataset_manifest=dataset_manifest, model=model, distill=hyperparameters,
+        model=model, distill=hyperparameters,
         identity=identity,
     )
 

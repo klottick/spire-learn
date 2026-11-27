@@ -29,8 +29,22 @@ top-1 agreement, and every loss term. The result is the checkpoint with the lowe
 candidates within one run-level SE (delta 11) of it go to the lowest value loss (delta 12).
 Only that checkpoint and the final one are kept.
 
-Importing this module imports neither numpy nor torch; the dataset discovery and the checkpoint
-choice are pure Python.
+**Dataset.** The trainer takes a dataset manifest (``build_dataset_manifest``, stdlib only): each
+chunk directory with the sha256 of its ``chunk-manifest.json``. At start-up every chunk-manifest
+hash is checked and ``verify_dataset`` runs ``ShardReader.verify`` on every shard (structure and
+file hashes: one read of the data); any mismatch refuses the run. The manifest's own sha256 is
+run metadata.
+
+**RNG layout.** A distillation checkpoint keeps the four standard training-state RNG domains
+(``policy``, ``minibatch``, ``curriculum``, ``controller``) but uses them differently from PPO:
+``policy`` seeds the model initialisation (no action is ever sampled), ``minibatch`` is the
+batch-order generator, and ``curriculum``/``controller`` are unused seeded ``random.Random``
+states, recorded only so the training-state contract stays explicit. All four derive from the
+one student ``seed`` (``domain_seed``). There is no resume path yet: checkpoints validate for
+``purpose="resume"``, but nothing restores the batch order or optimizer from them.
+
+Importing this module imports neither numpy nor torch; the dataset manifest, discovery and the
+checkpoint choice are pure Python.
 """
 
 from __future__ import annotations
@@ -38,9 +52,11 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+import functools
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import random
 import shutil
@@ -67,9 +83,9 @@ _SEED_DOMAIN = "spire-learn-distill-v1"
 CHUNK_SCHEMA = "spire-learn-distill-label-chunk-v1"
 CHUNK_MANIFEST = "chunk-manifest.json"
 SERIES = ("train", "validation")
-# OUTCOMES codes of distill_data: win, death, escaped (none never has value labels).
-_OUTCOME_TARGETS = (1.0, -1.0, 0.0)
-_ROOT_SEARCHED = 0  # distill_data.ROOT_KINDS.index("searched")
+# Outcome head targets by distill_data.OUTCOMES name ("none" never has value labels); the stored
+# codes are looked up in distill_data at use, never copied here.
+OUTCOME_TARGETS = {"win": 1.0, "death": -1.0, "escaped": 0.0}
 
 
 class DistillError(ContractError):
@@ -101,6 +117,7 @@ class Dataset:
     chunk_manifest_sha256: Mapping[str, str]
     train: tuple[ShardRef, ...]  # every training shard, in index order
     validation: tuple[ShardRef, ...]
+    manifest_sha256: str | None = None  # the dataset manifest file's own sha256
 
     def train_prefix(self, fraction: float) -> tuple[ShardRef, ...]:
         """``data_fraction`` of the training shards: a prefix in index order."""
@@ -116,6 +133,7 @@ class Dataset:
         return {
             "chunks": [str(path) for path in self.chunks],
             "chunk_manifest_sha256": dict(self.chunk_manifest_sha256),
+            "dataset_manifest_sha256": self.manifest_sha256,
             "dataset_sha256": _canonical_sha256(sorted(self.chunk_manifest_sha256.values())),
             "train_shards": [ref.index for ref in self.train],
             "validation_shards": [ref.index for ref in self.validation],
@@ -137,26 +155,74 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def dataset_chunks(config: DistillConfig) -> tuple[Path, ...]:
-    """The config's chunk dirs, or those listed by its dataset manifest (relative to it)."""
-    if config.chunks:
-        return config.chunks
-    if config.dataset_manifest is None:
-        raise DistillError("the config names neither chunks nor a dataset manifest")
+def build_dataset_manifest(chunk_dirs: Sequence[Path | str], *, relative_to: Path | str | None = None) -> dict:
+    """The dataset manifest of finished chunks: each path and its chunk-manifest sha256 (stdlib only).
+
+    Paths are written relative to ``relative_to`` (normally the manifest's own directory) when given,
+    so the manifest stays valid where the repository is mounted elsewhere.
+    """
+    chunks = []
+    seen = set()
+    for chunk in chunk_dirs:
+        chunk = Path(chunk).resolve()
+        if chunk in seen:
+            raise DistillError(f"{chunk} is listed twice")
+        seen.add(chunk)
+        manifest = chunk / CHUNK_MANIFEST
+        if not manifest.is_file():
+            raise DistillError(f"{chunk} is not a finished label chunk")
+        path = chunk if relative_to is None else Path(_relative(chunk, Path(relative_to).resolve()))
+        chunks.append({"path": str(path), "chunk_manifest_sha256": _file_sha256(manifest)})
+    if not chunks:
+        raise DistillError("a dataset needs at least one chunk")
+    return {"schema": DISTILL_DATASET_SCHEMA, "chunks": chunks}
+
+
+def _relative(path: Path, base: Path) -> str:
+    return os.path.relpath(path, base)
+
+
+def load_dataset_manifest(path: Path | str) -> tuple[tuple[Path, ...], str]:
+    """Chunk dirs of a dataset manifest (relative to it) and the manifest's sha256.
+
+    Every chunk's ``chunk-manifest.json`` must still have its recorded sha256.
+    """
+    path = Path(path)
     try:
-        document = json.loads(config.dataset_manifest.read_text())
+        raw = path.read_bytes()
+        document = json.loads(raw)
     except (OSError, ValueError) as error:
         raise DistillError(f"unreadable dataset manifest: {error}") from None
+    entries = document.get("chunks") if isinstance(document, dict) else None
     if (not isinstance(document, dict) or set(document) != {"schema", "chunks"}
-            or document["schema"] != DISTILL_DATASET_SCHEMA or not isinstance(document["chunks"], list)
-            or not document["chunks"] or not all(isinstance(item, str) and item for item in document["chunks"])):
-        raise DistillError(f"a dataset manifest is {{schema: {DISTILL_DATASET_SCHEMA}, chunks: [dirs]}}")
-    base = config.dataset_manifest.parent
-    chunks = tuple((Path(item) if Path(item).is_absolute() else base / item).resolve()
-                   for item in document["chunks"])
+            or document["schema"] != DISTILL_DATASET_SCHEMA or not isinstance(entries, list) or not entries
+            or not all(isinstance(item, dict) and set(item) == {"path", "chunk_manifest_sha256"}
+                       and isinstance(item["path"], str) and item["path"]
+                       and isinstance(item["chunk_manifest_sha256"], str) for item in entries)):
+        raise DistillError(f"a dataset manifest is {{schema: {DISTILL_DATASET_SCHEMA}, "
+                           "chunks: [{path, chunk_manifest_sha256}]}")
+    chunks = []
+    for item in entries:
+        chunk = Path(item["path"])
+        chunk = (chunk if chunk.is_absolute() else path.parent / chunk).resolve()
+        try:
+            actual = _file_sha256(chunk / CHUNK_MANIFEST)
+        except OSError as error:
+            raise DistillError(f"{chunk} has no readable chunk manifest: {error}") from None
+        if actual != item["chunk_manifest_sha256"]:
+            raise DistillError(f"{chunk} chunk manifest differs from the dataset manifest")
+        chunks.append(chunk)
     if len(set(chunks)) != len(chunks):
         raise DistillError("the dataset manifest lists a chunk twice")
-    return chunks
+    return tuple(chunks), hashlib.sha256(raw).hexdigest()
+
+
+def open_dataset(path: Path | str) -> Dataset:
+    """Load a dataset manifest, check its chunk hashes and discover the shards (stdlib only)."""
+    chunks, digest = load_dataset_manifest(path)
+    dataset = discover_dataset(chunks)
+    return Dataset(dataset.chunks, dataset.chunk_manifest_sha256, dataset.train, dataset.validation,
+                   manifest_sha256=digest)
 
 
 def discover_dataset(chunks: Sequence[Path]) -> Dataset:
@@ -274,6 +340,43 @@ def _np():
     return numpy
 
 
+@functools.lru_cache(maxsize=None)
+def label_codes() -> tuple[int, dict[int, float]]:
+    """The stored ``searched`` root code and the outcome-target of each stored outcome code.
+
+    Both come from ``distill_data.ROOT_KINDS``/``OUTCOMES``; codes without a target (``none``) are
+    absent, so a value row carrying one is refused.
+    """
+    from spire_learn.neural.distill_data import OUTCOMES, ROOT_KINDS
+
+    if set(OUTCOME_TARGETS) != set(OUTCOMES) - {"none"}:
+        raise DistillError("the outcome targets do not cover distill_data.OUTCOMES")
+    return ROOT_KINDS.index("searched"), {OUTCOMES.index(name): value for name, value in OUTCOME_TARGETS.items()}
+
+
+def verify_dataset(dataset: "Dataset", schema, *, series: Sequence[str] = SERIES) -> int:
+    """``ShardReader.verify`` on every shard (structure and every file hash); returns the rows checked.
+
+    Refuses (``DistillError``) on any mismatch, including a shard manifest that differs from the one
+    its chunk recorded.
+    """
+    from spire_learn.neural.distill_data import ShardError, ShardReader
+
+    rows = 0
+    for ref in (ref for name in series for ref in getattr(dataset, name)):
+        if _file_sha256(ref.path / "manifest.json") != ref.manifest_sha256:
+            raise DistillError(f"{ref.path} manifest differs from its chunk manifest")
+        try:
+            with ShardReader(ref.path, schema) as reader:
+                reader.verify(schema)
+                if reader.rows != ref.rows:
+                    raise DistillError(f"{ref.path} has {reader.rows} rows, its chunk records {ref.rows}")
+        except ShardError as error:
+            raise DistillError(f"{ref.path} fails verification: {error}") from None
+        rows += ref.rows
+    return rows
+
+
 @dataclass
 class ShardLabels:
     """The label columns a trainer needs, copied into RAM (never a model input)."""
@@ -303,23 +406,26 @@ class ShardLabels:
 
     def _check(self) -> None:
         np = _np()
+        searched, targets = label_codes()
         value_rows = self.value_ok
-        if np.any(self.outcome[value_rows] > 2):
-            raise DistillError("a value_ok row has no fight outcome")
+        outcomes = self.outcome[value_rows].astype(np.int64)
+        if not np.all(np.isin(outcomes, np.asarray(sorted(targets), dtype=np.int64))):
+            raise DistillError("a value_ok row has no fight outcome (code none, negative or unknown)")
         if not (np.all(np.isfinite(self.hp_kept[value_rows])) and np.all(np.isfinite(self.realised_v2[value_rows]))):
             raise DistillError("a value_ok row has a non-finite value target")
         counts = np.diff(self.legal_offsets)
-        for row in np.flatnonzero(self.policy_ok):
-            values = self.values[self.legal_offsets[row]:self.legal_offsets[row + 1]]
-            if self.root[row] != _ROOT_SEARCHED or counts[row] < 1 or not np.all(np.isfinite(values)):
-                raise DistillError("a policy_ok row needs a searched root with finite values")
+        row_of = np.repeat(np.arange(self.rows), counts)
+        nonfinite = np.bincount(row_of[~np.isfinite(self.values)], minlength=self.rows) > 0
+        policy = self.policy_ok
+        if np.any(policy & ((self.root != searched) | (counts < 1) | nonfinite)):
+            raise DistillError("a policy_ok row needs a searched root with finite values")
 
     def row_values(self, row: int):
         return self.values[self.legal_offsets[row]:self.legal_offsets[row + 1]]
 
     def regret_row(self, row: int) -> bool:
         """Searched and not an all-way tie (the rows regret and agreement are measured on)."""
-        if self.root[row] != _ROOT_SEARCHED:
+        if self.root[row] != label_codes()[0]:
             return False
         values = self.row_values(row)
         return len(values) > 0 and bool(values.max() != values.min())
@@ -588,6 +694,7 @@ def batch_targets(shards: ShardSet, items, action_mask, *, tau: float, device: s
     import torch
 
     np = _np()
+    _searched, outcome_targets = label_codes()
     items = np.asarray(items, dtype=np.int64).reshape(-1, 2)
     mask = action_mask.detach().cpu().numpy().astype(bool)
     width = mask.shape[1]
@@ -607,7 +714,7 @@ def batch_targets(shards: ShardSet, items, action_mask, *, tau: float, device: s
             policy_values.append((legal, row_values))
         if labels.value_ok[row]:
             value.append(position)
-            value_rows.append((_OUTCOME_TARGETS[int(labels.outcome[row])], float(labels.hp_kept[row]),
+            value_rows.append((outcome_targets[int(labels.outcome[row])], float(labels.hp_kept[row]),
                                float(labels.realised_v2[row])))
         if labels.regret_row(row):
             regret.append(position)
@@ -682,9 +789,19 @@ def loss_terms(output, action_mask, targets: BatchTargets, *, policy_count: int 
     return LossTerms(total, policy, tuple(heads), policy_count, value_count)
 
 
+def _sync(device: str) -> None:
+    if device.startswith("cuda"):
+        import torch
+        torch.cuda.synchronize()
+
+
 def train_step(policy, optimizer, shards: ShardSet, items, *, tau: float, microbatch_rows: int,
-               device: str = "cpu") -> dict[str, float]:
-    """One optimizer step over ``items``, accumulating microbatches to the full-batch gradient."""
+               device: str = "cpu", clock: Callable[[], float] = time.perf_counter) -> dict[str, float]:
+    """One optimizer step over ``items``, accumulating microbatches to the full-batch gradient.
+
+    ``load_seconds`` is collation plus targets (CPU); ``model_seconds`` is forward, backward,
+    clipping and the optimizer step, synchronised on CUDA so it is the device step time.
+    """
     import torch
 
     np = _np()
@@ -696,10 +813,15 @@ def train_step(policy, optimizer, shards: ShardSet, items, *, tau: float, microb
     policy.train()
     optimizer.zero_grad(set_to_none=True)
     sums = {"policy_loss": 0.0, **{f"{name}_loss": 0.0 for name in VALUE_HEADS}}
+    load_seconds = model_seconds = 0.0
     for start in range(0, len(items), microbatch_rows):
         chunk = items[start:start + microbatch_rows]
+        began = clock()
         batch = collate_observations(shards, chunk, device=device)
         targets = batch_targets(shards, chunk, batch.action_mask, tau=tau, device=device)
+        _sync(device)
+        loaded = clock()
+        load_seconds += loaded - began
         output = policy(batch)
         terms = loss_terms(output, batch.action_mask, targets, policy_count=max(policy_count, 1),
                            value_count=max(value_count, 1))
@@ -707,15 +829,19 @@ def train_step(policy, optimizer, shards: ShardSet, items, *, tau: float, microb
         sums["policy_loss"] += float(terms.policy.detach())
         for name, head in zip(VALUE_HEADS, terms.values):
             sums[f"{name}_loss"] += float(head.detach())
+        model_seconds += clock() - loaded
+    began = clock()
     parameters = [parameter for parameter in policy.parameters() if parameter.grad is not None]
     grad_norm = float(torch.nn.utils.clip_grad_norm_(parameters, MAX_GRAD_NORM)) if parameters else 0.0
     if not math.isfinite(grad_norm):
         raise DistillError("non-finite gradient norm")
     optimizer.step()
+    _sync(device)
+    model_seconds += clock() - began
     value_loss = VALUE_HEAD_WEIGHT * sum(sums[f"{name}_loss"] for name in VALUE_HEADS)
     return {**sums, "value_loss": value_loss, "loss": sums["policy_loss"] + value_loss,
             "grad_norm": grad_norm, "policy_rows": policy_count, "value_rows": value_count,
-            "rows": len(items)}
+            "rows": len(items), "load_seconds": load_seconds, "model_seconds": model_seconds}
 
 
 # --- validation -----------------------------------------------------------------------------
@@ -725,9 +851,12 @@ class ValidationResult:
     metrics: dict[str, float | int]
     regret_rows: list[float]
     run_hashes: list[int]
+    load_seconds: float = 0.0  # collation and targets
+    model_seconds: float = 0.0  # forward passes and metrics (synchronised on CUDA)
 
 
-def evaluate(policy, shards: ShardSet, *, tau: float, batch_rows: int, device: str = "cpu") -> ValidationResult:
+def evaluate(policy, shards: ShardSet, *, tau: float, batch_rows: int, device: str = "cpu",
+             clock: Callable[[], float] = time.perf_counter) -> ValidationResult:
     """Every validation row in shard order: regret, strict/tie-aware agreement and each loss term."""
     import torch
 
@@ -737,6 +866,7 @@ def evaluate(policy, shards: ShardSet, *, tau: float, batch_rows: int, device: s
     regrets: list[float] = []
     runs: list[int] = []
     strict = tie_aware = 0
+    load_seconds = model_seconds = 0.0
     was_training = policy.training
     policy.eval()
     try:
@@ -745,8 +875,12 @@ def evaluate(policy, shards: ShardSet, *, tau: float, batch_rows: int, device: s
                 for start in range(0, count, batch_rows):
                     rows = np.arange(start, min(count, start + batch_rows), dtype=np.int64)
                     items = np.stack((np.full(len(rows), position, dtype=np.int64), rows), axis=1)
+                    began = clock()
                     batch = collate_observations(shards, items, device=device)
                     targets = batch_targets(shards, items, batch.action_mask, tau=tau, device=device)
+                    _sync(device)
+                    loaded = clock()
+                    load_seconds += loaded - began
                     output = policy(batch)
                     terms = loss_terms(output, batch.action_mask, targets, policy_count=1, value_count=1)
                     sums["policy"] += float(terms.policy)
@@ -765,6 +899,7 @@ def evaluate(policy, shards: ShardSet, *, tau: float, batch_rows: int, device: s
                         runs.extend(int(run) for run in targets.regret_run_hash)
                         strict += int(np.sum(choice == targets.regret_choice))
                         tie_aware += int(np.sum(chosen == best))
+                    model_seconds += clock() - loaded
             shards.close()
     finally:
         policy.train(was_training)
@@ -783,7 +918,7 @@ def evaluate(policy, shards: ShardSet, *, tau: float, batch_rows: int, device: s
         "regret_rows": regret_count, "policy_rows": policy_rows, "value_rows": value_rows,
         "rows": sum(shards.row_counts),
     }
-    return ValidationResult(metrics, regrets, runs)
+    return ValidationResult(metrics, regrets, runs, load_seconds, model_seconds)
 
 
 # --- the training run -----------------------------------------------------------------------
@@ -796,6 +931,29 @@ class _NoGate:
 
     def release(self) -> None:
         return None
+
+
+def timing_summary(*, device: str, rows: int, train_wall: float, train_load: float, train_model: float,
+                   eval_wall: float, eval_load: float, eval_model: float, wall: float,
+                   gpu_wait_seconds: float) -> dict[str, object]:
+    """The summary's timing record (pure).
+
+    ``*_load_seconds`` is collation and targets on the CPU, ``*_model_seconds`` the model work,
+    synchronised on CUDA; ``gpu_step_seconds`` is their device total (None off CUDA).
+    ``train_eval_wall_seconds`` is the wall time of training and validation together, excluding
+    GPU waits, checkpoint writes and start-up.
+    """
+    cuda = device.startswith("cuda")
+    return {
+        "train_wall_seconds": train_wall, "train_load_seconds": train_load, "train_model_seconds": train_model,
+        "eval_wall_seconds": eval_wall, "eval_load_seconds": eval_load, "eval_model_seconds": eval_model,
+        "train_eval_wall_seconds": train_wall + eval_wall,
+        "gpu_step_seconds": train_model + eval_model if cuda else None,
+        "gpu_wait_seconds": float(gpu_wait_seconds),
+        "wall_seconds": wall,
+        "rows_per_second": rows / train_wall if train_wall else 0.0,
+        "model_rows_per_second": rows / train_model if train_model else 0.0,
+    }
 
 
 def _peak_rss_bytes() -> int:
@@ -894,6 +1052,7 @@ def train_student(config: DistillConfig, schema, dataset: Dataset, output: Path,
         "data_fraction": hyper.data_fraction,
         "train_shards": [ref.index for ref in train_refs],
         "dataset_sha256": dataset.identity()["dataset_sha256"],
+        "dataset_manifest_sha256": dataset.manifest_sha256,
     }
     summary: dict[str, object] = {
         "schema": "spire-learn-distill-train-summary-v1",
@@ -910,7 +1069,12 @@ def train_student(config: DistillConfig, schema, dataset: Dataset, output: Path,
         "provenance": dict(provenance or {}),
     }
     log = (output / "train_log.jsonl").open("x", encoding="utf-8")
+    # GPU wait events go to the log as they happen (earlier ones, e.g. before qualification, first).
+    attach = getattr(gate, "set_journal", None)
+    if attach is not None:
+        attach(lambda event: _json_line(log, event))
     train_seconds = eval_seconds = 0.0
+    train_load = train_model = eval_load = eval_model = 0.0
     records: list[EvalRecord] = []
     evaluations: list[dict[str, object]] = []
     counters = {"optimizer_steps": 0, "rows_seen": 0, "policy_rows": 0, "value_rows": 0}
@@ -931,10 +1095,10 @@ def train_student(config: DistillConfig, schema, dataset: Dataset, output: Path,
         for step in range(1, hyper.gradient_steps + 1):
             began = clock()
             metrics = train_step(policy, optimizer, train_set, order.next_batch(), tau=hyper.tau,
-                                 microbatch_rows=hyper.effective_microbatch_rows, device=device)
-            if device.startswith("cuda"):
-                torch.cuda.synchronize()
+                                 microbatch_rows=hyper.effective_microbatch_rows, device=device, clock=clock)
             elapsed = clock() - began
+            train_load += metrics["load_seconds"]
+            train_model += metrics["model_seconds"]
             train_seconds += elapsed
             window_seconds += elapsed
             window_rows += metrics["rows"]
@@ -952,8 +1116,10 @@ def train_student(config: DistillConfig, schema, dataset: Dataset, output: Path,
                 gate.wait(f"eval-{step}")
                 began = clock()
                 result = evaluate(policy, validation_set, tau=hyper.tau, batch_rows=hyper.effective_microbatch_rows,
-                                  device=device)
+                                  device=device, clock=clock)
                 eval_seconds += clock() - began
+                eval_load += result.load_seconds
+                eval_model += result.model_seconds
                 path = candidates / f"step-{step:08d}"
                 _save(path, policy=policy, optimizer=optimizer, policy_generator=policy_generator,
                       batch_order=order, config=config, step=step, counters=counters, run_metadata=run_metadata)
@@ -986,11 +1152,10 @@ def train_student(config: DistillConfig, schema, dataset: Dataset, output: Path,
                        "value_mse": {name: best_eval[f"{name}_mse"] for name in VALUE_HEADS},
                        "checkpoint": str(best_path)},
             "final": {"step": final_step, "checkpoint": str(final)},
-            "timing": {"train_seconds": train_seconds, "eval_seconds": eval_seconds,
-                       "gpu_seconds": train_seconds + eval_seconds if device.startswith("cuda") else 0.0,
-                       "gpu_wait_seconds": float(getattr(gate, "waited_seconds", 0.0)),
-                       "wall_seconds": clock() - started,
-                       "rows_per_second": total_rows / train_seconds if train_seconds else 0.0},
+            "timing": timing_summary(device=device, rows=total_rows, train_wall=train_seconds,
+                                     train_load=train_load, train_model=train_model, eval_wall=eval_seconds,
+                                     eval_load=eval_load, eval_model=eval_model, wall=clock() - started,
+                                     gpu_wait_seconds=float(getattr(gate, "waited_seconds", 0.0))),
             "memory": {"peak_rss_bytes": _peak_rss_bytes(), "rss_budget_bytes": RSS_BUDGET_BYTES,
                        "within_rss_budget": _peak_rss_bytes() <= RSS_BUDGET_BYTES,
                        "peak_open_shards": max(train_set.peak_open, validation_set.peak_open),
@@ -999,6 +1164,8 @@ def train_student(config: DistillConfig, schema, dataset: Dataset, output: Path,
         _json_line(log, {"event": "complete", "chosen_step": chosen.step, "tied_steps": tied})
         return summary
     finally:
+        if attach is not None:
+            attach(None)
         log.close()
         train_set.close()
         validation_set.close()
@@ -1008,7 +1175,8 @@ __all__ = [
     "ADAM_EPS", "BATCH_ROWS", "EVAL_EVERY", "MAX_GRAD_NORM", "OPEN_SHARD_LIMIT", "RNG_DOMAINS",
     "SHUFFLE_WINDOW_SHARDS", "VALUE_HEADS", "VALUE_HEAD_WEIGHT", "BatchOrder", "BatchTargets", "Dataset",
     "DistillError", "EvalRecord", "LossTerms", "ShardLabels", "ShardRef", "ShardSet", "ValidationResult",
-    "batch_targets", "build_student", "choose_checkpoint", "collate_observations", "dataset_chunks",
+    "batch_targets", "build_student", "choose_checkpoint", "collate_observations",
+    "build_dataset_manifest", "timing_summary", "label_codes", "load_dataset_manifest", "open_dataset", "verify_dataset", "OUTCOME_TARGETS",
     "discover_dataset", "domain_seed", "evaluate", "loss_terms", "run_level_se", "train_step",
     "train_student",
 ]

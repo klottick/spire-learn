@@ -22,7 +22,8 @@ from spire_learn.neural.config import (
 )
 from spire_learn.neural.contracts import ModelConfig, NeuralIdentity
 from spire_learn.neural.distill_train import (
-    EvalRecord, choose_checkpoint, dataset_chunks, discover_dataset, domain_seed, run_level_se,
+    EvalRecord, build_dataset_manifest, choose_checkpoint, discover_dataset, domain_seed, load_dataset_manifest,
+    open_dataset, run_level_se, timing_summary,
 )
 from spire_learn.neural.policy_player import model_config_hash as player_model_config_hash
 from spire_learn.neural.runner import _config_projection
@@ -83,7 +84,7 @@ def _identity_toml(*, objective=DISTILL_OBJECTIVE_ID, hashes: dict[str, str], ta
     return "\n".join(lines) + "\n"
 
 
-def distill_toml(*, model=STUDENT, hyper=HYPER, seed=1, eval_every=1000, data='chunks = ["chunk-a"]',
+def distill_toml(*, model=STUDENT, hyper=HYPER, seed=1, eval_every=1000,
                  extra="", hashes=None, microbatch_rows=None) -> str:
     hashes = hashes or {"model": model_config_hash(model), "distill": distill_config_hash(hyper)}
     microbatch = "" if microbatch_rows is None else f"microbatch_rows = {microbatch_rows}\n"
@@ -93,7 +94,6 @@ def distill_toml(*, model=STUDENT, hyper=HYPER, seed=1, eval_every=1000, data='c
         f"seed = {seed}\neval_every = {eval_every}\n{extra}\n"
         f'[environment]\ngym_revision = "{GYM}"\nstandard_view_layout = "compact"\n'
         f'standard_view_preset = "standard-combat-compact-v1"\nstandard_view_fingerprint = "{COMPACT}"\n\n'
-        f"[data]\n{data}\n\n"
         f"[model]\nembedding_width = {model.embedding_width}\nhidden_width = {model.hidden_width}\n"
         f"max_parameters = {model.max_parameters}\nvalue_heads = {model.value_heads}\n\n"
         f"[distill]\ntau = {hyper.tau}\nlearning_rate = {hyper.learning_rate}\nbatch_rows = {hyper.batch_rows}\n"
@@ -211,11 +211,10 @@ class DistillConfigTests(unittest.TestCase):
         self.assertEqual(config.identity.config_hashes["distill"], _canonical_hash(
             {"tau": 0.05, "learning_rate": 0.0003, "batch_rows": 512, "gradient_steps": 18000, "data_fraction": 1.0}))
         self.assertEqual(config.model, STUDENT)
-        self.assertEqual(config.chunks, ((self.folder / "chunk-a").resolve(),))
-        self.assertFalse(hasattr(config, "ppo") or hasattr(config, "manifest_path"))
+        for absent in ("ppo", "manifest_path", "chunks", "dataset_manifest"):
+            self.assertFalse(hasattr(config, absent), absent)
         # Seed, eval_every, the shards and microbatching are run metadata, outside the hashes.
-        for variant in (distill_toml(seed=7), distill_toml(eval_every=250), distill_toml(microbatch_rows=128),
-                        distill_toml(data='manifest = "dataset.json"')):
+        for variant in (distill_toml(seed=7), distill_toml(eval_every=250), distill_toml(microbatch_rows=128)):
             self.assertEqual(self.load(variant).identity, config.identity)
         self.assertEqual(self.load(distill_toml(microbatch_rows=128)).distill.effective_microbatch_rows, 128)
         # Every hashed field changes the hash; an integer data_fraction normalizes to the float.
@@ -232,7 +231,7 @@ class DistillConfigTests(unittest.TestCase):
                                            hashes={"model": FF_HASH, "distill": distill_config_hash(HYPER)}),
             "stale distill hash": distill_toml(hashes={"model": model_config_hash(STUDENT), "distill": "0" * 64}),
             "PPO hash key": distill_toml(hashes={"model": model_config_hash(STUDENT), "ppo": "0" * 64}),
-            "both data sources": distill_toml(data='chunks = ["a"]\nmanifest = "b.json"'),
+            "shard paths in the config": distill_toml(extra='[data]\nchunks = ["a"]\n'),
             "fraction above one": distill_toml(hyper=replace(HYPER, data_fraction=0.5)).replace(
                 "data_fraction = 0.5", "data_fraction = 1.5"),
             "microbatch above batch": distill_toml(microbatch_rows=1024),
@@ -247,23 +246,60 @@ class DistillConfigTests(unittest.TestCase):
 
     def test_dataset_manifest_and_data_fraction_prefix(self):
         chunks = [write_chunk(self.folder, 1008, 2), write_chunk(self.folder, 1000, 3, rows=lambda index: index - 999)]
-        _write(self.folder, "dataset.json", json.dumps({
-            "schema": "spire-learn-distill-dataset-v1", "chunks": [chunk.name for chunk in chunks]}))
-        config = self.load(distill_toml(data='manifest = "dataset.json"'))
-        self.assertEqual(dataset_chunks(config), tuple(chunk.resolve() for chunk in chunks))
-        dataset = discover_dataset(dataset_chunks(config))
+        manifest = build_dataset_manifest(chunks, relative_to=self.folder)
+        self.assertEqual(manifest["schema"], "spire-learn-distill-dataset-v1")
+        self.assertEqual([item["path"] for item in manifest["chunks"]], ["chunk-1008", "chunk-1000"])
+        self.assertEqual(manifest["chunks"][0]["chunk_manifest_sha256"],
+                         hashlib.sha256((chunks[0] / "chunk-manifest.json").read_bytes()).hexdigest())
+        path = _write(self.folder, "dataset.json", json.dumps(manifest))
+        resolved, digest = load_dataset_manifest(path)
+        self.assertEqual(resolved, tuple(chunk.resolve() for chunk in chunks))
+        self.assertEqual(digest, hashlib.sha256(path.read_bytes()).hexdigest())
+        dataset = open_dataset(path)
+        self.assertEqual(dataset.manifest_sha256, digest)
+        self.assertEqual(dataset.identity()["dataset_manifest_sha256"], digest)
         self.assertEqual([ref.index for ref in dataset.train], [1000, 1001, 1002, 1008, 1009])
         self.assertEqual([ref.rows for ref in dataset.train], [1, 2, 3, 3, 3])
         self.assertEqual([ref.index for ref in dataset.validation], [1000, 1001, 1002, 1008, 1009])
         self.assertEqual([ref.index for ref in dataset.train_prefix(0.4)], [1000, 1001])
         self.assertEqual([ref.index for ref in dataset.train_prefix(1.0)], [1000, 1001, 1002, 1008, 1009])
         self.assertEqual(dataset.identity()["train_rows"], 12)
+        # Absolute paths work too; a chunk listed twice or an unfinished chunk is refused.
+        self.assertEqual(load_dataset_manifest(_write(self.folder, "absolute.json", json.dumps(
+            build_dataset_manifest(chunks))))[0], resolved)
+        with self.assertRaisesRegex(Exception, "twice"):
+            build_dataset_manifest([chunks[0], chunks[0]])
+        with self.assertRaisesRegex(Exception, "not a finished"):
+            build_dataset_manifest([self.folder / "missing"])
         # A shard listed twice, or a shard directory that differs from its chunk manifest, is refused.
         with self.assertRaisesRegex(Exception, "two chunks"):
             discover_dataset([chunks[1], write_chunk(self.folder / "again", 1002, 1)])
         (chunks[0] / "train" / "shard-001008" / "manifest.json").write_text("{}")
         with self.assertRaisesRegex(Exception, "differs from its chunk manifest"):
             discover_dataset(chunks)
+        # A changed chunk manifest no longer matches the dataset manifest.
+        chunk_manifest = chunks[1] / "chunk-manifest.json"
+        chunk_manifest.write_text(chunk_manifest.read_text() + " ")
+        with self.assertRaisesRegex(Exception, "differs from the dataset manifest"):
+            load_dataset_manifest(path)
+        for bad in ({"schema": "x", "chunks": manifest["chunks"]}, {"schema": manifest["schema"], "chunks": []},
+                    {"schema": manifest["schema"], "chunks": ["chunk-1000"]}):
+            with self.subTest(bad=bad), self.assertRaisesRegex(Exception, "dataset manifest is"):
+                load_dataset_manifest(_write(self.folder, "bad.json", json.dumps(bad)))
+
+    def test_timing_summary_names_each_part(self):
+        timing = timing_summary(device="cuda:0", rows=1000, train_wall=10.0, train_load=4.0, train_model=5.0,
+                                eval_wall=3.0, eval_load=1.0, eval_model=1.5, wall=20.0, gpu_wait_seconds=2.5)
+        self.assertEqual(timing, {
+            "train_wall_seconds": 10.0, "train_load_seconds": 4.0, "train_model_seconds": 5.0,
+            "eval_wall_seconds": 3.0, "eval_load_seconds": 1.0, "eval_model_seconds": 1.5,
+            "train_eval_wall_seconds": 13.0, "gpu_step_seconds": 6.5, "gpu_wait_seconds": 2.5,
+            "wall_seconds": 20.0, "rows_per_second": 100.0, "model_rows_per_second": 200.0})
+        cpu = timing_summary(device="cpu", rows=0, train_wall=0.0, train_load=0.0, train_model=0.0,
+                             eval_wall=0.0, eval_load=0.0, eval_model=0.0, wall=1.0, gpu_wait_seconds=0)
+        self.assertIsNone(cpu["gpu_step_seconds"])
+        self.assertEqual((cpu["rows_per_second"], cpu["model_rows_per_second"]), (0.0, 0.0))
+        self.assertNotIn("gpu_seconds", timing)
 
     def test_domain_seeds_are_distinct_and_stable(self):
         seeds = {domain: domain_seed(1, domain) for domain in ("policy", "minibatch", "curriculum", "controller")}

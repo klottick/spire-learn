@@ -3,19 +3,23 @@
 
 Run it through ``runtime_container.py`` (with ``--gpu <uuid>`` for a CUDA config):
 
-    distill_train_entry.py --config CONFIG.toml --output OUTPUT [--descriptor COMPACT.json]
-                           [--gpu-wait MIN_FREE_BYTES:POLL_SECONDS:MAX_TOTAL_SECONDS]
+    distill_train_entry.py --config CONFIG.toml --dataset DATASET.json --output OUTPUT
+                           [--descriptor COMPACT.json] [--gpu-wait MIN_FREE_BYTES:POLL_SECONDS:MAX_TOTAL_SECONDS]
 
-``CONFIG`` is a ``load_distill_config`` TOML; its ``[data]`` table names the label chunk dirs or a
-dataset manifest. ``OUTPUT`` is a fresh (or empty) directory under the config's ``output_root``; when
+``CONFIG`` is a ``load_distill_config`` TOML. ``DATASET`` is a dataset manifest written by
+``distill_train.build_dataset_manifest`` on the host: each chunk directory with the sha256 of its
+``chunk-manifest.json``. At start-up every chunk-manifest hash is checked and every shard is
+verified (structure and file hashes); any mismatch refuses the run before training. The manifest's
+sha256 is run metadata. ``OUTPUT`` is a fresh (or empty) directory under the config's ``output_root``; when
 ``SPIRE_LEARN_RUNNER_OUTPUT`` is set it must be that directory. The compact combat descriptor comes
 from ``--descriptor`` (a captured descriptor JSON) or, by default, from the installed Gym without a
 reset; either way it must match the config's fingerprint and every chunk's observation schema.
 
-``gpu_wait`` yields the shared GPU: before training and at every validation interval the entry
-waits until ``MIN_FREE_BYTES`` are free, polling every ``POLL_SECONDS``, for at most
-``MAX_TOTAL_SECONDS`` in total; waits are excluded from GPU time and reported. Faults stop the run
-(exit 1); nothing is retried.
+``gpu_wait`` yields the shared GPU and is required for a CUDA config: before qualification,
+before training and at every validation interval the entry waits until ``MIN_FREE_BYTES`` are free,
+polling every ``POLL_SECONDS``, for at most ``MAX_TOTAL_SECONDS`` in total. Wait events are written
+to ``train_log.jsonl`` as they happen; waits are excluded from the timing figures and reported.
+Faults stop the run (exit 1); nothing is retried.
 
 Writes ``train_log.jsonl`` (per-step and per-validation events), ``summary.json`` (rows per second,
 GPU time and waits, peak VRAM and RSS, every validation, the chosen and final checkpoints) and the
@@ -64,6 +68,13 @@ class GpuGate:
         self.waited_seconds = 0.0
         self.events: list[dict[str, object]] = []
 
+    def set_journal(self, journal: Callable[[Mapping[str, object]], None] | None) -> None:
+        """Send later events to ``journal`` (None detaches); events so far are replayed first."""
+        self._journal = journal or (lambda event: None)
+        if journal is not None:
+            for event in self.events:
+                journal(event)
+
     def wait(self, stage: str) -> None:
         if self._settings is None:
             return
@@ -78,6 +89,8 @@ class GpuGate:
                 self._note({"event": "gpu_wait", "stage": stage, "free_bytes": free, "min_free_bytes": minimum})
             if self.waited_seconds + (self._clock() - started) >= cap:
                 self.waited_seconds += self._clock() - started
+                self._note({"event": "gpu_wait_exhausted", "stage": stage,
+                            "total_waited_seconds": round(self.waited_seconds, 3)})
                 raise GpuWaitExhausted(f"gpu_wait exhausted at {stage}")
             self._sleep(poll)
         if started is not None:
@@ -173,6 +186,16 @@ def _check_output(output: Path, config) -> None:
         raise ValueError("--output must be a fresh or empty directory")
 
 
+def finalize_summary(summary: dict, gate: GpuGate, *, cpu_seconds: float, entry_wall_seconds: float) -> dict:
+    """Add the entry's wait and process timing to the trainer's summary (pure)."""
+    summary["gpu_waits"] = list(gate.events)
+    timing = summary["timing"]
+    timing["gpu_wait_seconds"] = float(gate.waited_seconds)
+    timing["cpu_seconds"] = cpu_seconds
+    timing["entry_wall_seconds"] = entry_wall_seconds
+    return summary
+
+
 def _write_summary(output: Path, summary: Mapping[str, object]) -> None:
     path = output / SUMMARY
     with path.open("x", encoding="utf-8") as handle:
@@ -183,6 +206,7 @@ def _write_summary(output: Path, summary: Mapping[str, object]) -> None:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--dataset", type=Path, required=True, help="dataset manifest (build_dataset_manifest)")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--descriptor", type=Path, help="captured compact descriptor JSON (default: the Gym's)")
     parser.add_argument("--gpu-wait", type=parse_gpu_wait, metavar="MIN_FREE_BYTES:POLL_SECONDS:MAX_TOTAL_SECONDS")
@@ -192,27 +216,33 @@ def main(argv=None) -> int:
     from spire_learn.neural.device import (
         plan_runtime_device, qualify_runtime_device, require_runtime_execution_gate,
     )
-    from spire_learn.neural.distill_train import dataset_chunks, discover_dataset, train_student
+    from spire_learn.neural.distill_train import open_dataset, train_student, verify_dataset
 
     config = load_distill_config(args.config)
+    if config.device.startswith("cuda") and args.gpu_wait is None:
+        parser.error("a CUDA config needs --gpu-wait: the GPU is shared, so gating is mandatory")
     _check_output(args.output, config)
     plan = plan_runtime_device(config)
     require_runtime_execution_gate(plan)
-    dataset = discover_dataset(dataset_chunks(config))
+    started = time.monotonic()
+    cpu_started = time.process_time()
+    dataset = open_dataset(args.dataset)
     schema = load_schema(config, args.descriptor)
     check_observation(dataset, schema)
+    verified_rows = verify_dataset(dataset, schema)
 
     import torch
 
+    # torch.cuda.mem_get_info follows the existing baseline_entry gpu_wait convention.
     gate = GpuGate(args.gpu_wait, device=plan.device,
                    free_bytes=lambda: int(torch.cuda.mem_get_info(0)[0]),
                    release=torch.cuda.empty_cache)
-    started = time.monotonic()
-    cpu_started = time.process_time()
     gate.wait("qualify")
     device_report = qualify_runtime_device(torch, plan)
     provenance = {"learner": _git_state(), "gym": _gym_state(), "device": device_report,
                   "config": str(config.source), "descriptor": None if args.descriptor is None else str(args.descriptor),
+                  "dataset_manifest": str(args.dataset), "dataset_manifest_sha256": dataset.manifest_sha256,
+                  "verified_rows": verified_rows,
                   "torch_version": torch.__version__,
                   "note": "Supervised training is seeded; GPU nondeterminism is not claimed away."}
     args.output.mkdir(parents=True, exist_ok=True)
@@ -229,9 +259,8 @@ def main(argv=None) -> int:
             print(failure["error"], file=sys.stderr)
             return 1
         raise
-    summary["gpu_waits"] = gate.events
-    summary["timing"]["cpu_seconds"] = time.process_time() - cpu_started
-    summary["timing"]["entry_wall_seconds"] = time.monotonic() - started
+    finalize_summary(summary, gate, cpu_seconds=time.process_time() - cpu_started,
+                     entry_wall_seconds=time.monotonic() - started)
     _write_summary(args.output, summary)
     print(json.dumps({"status": summary["status"], "chosen": summary["chosen"],
                       "rows_per_second": summary["timing"]["rows_per_second"]}, sort_keys=True))

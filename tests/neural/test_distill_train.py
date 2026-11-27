@@ -50,7 +50,59 @@ def distill_config(hyper: DistillHyperparameters, *, seed=3, eval_every=2) -> Di
         environment_revision="fixture", standard_view_layout="compact",
         standard_view_preset="standard-combat-compact-v1", standard_view_fingerprint="fixture",
         output_root=Path("."), device="cpu", runtime_gpu_uuid=None, seed=seed, eval_every=eval_every,
-        chunks=(), dataset_manifest=None, model=TINY, distill=hyper, identity=identity(hyper))
+        model=TINY, distill=hyper, identity=identity(hyper))
+
+
+class FixedPolicy:
+    """A stub student: the same per-action logits for every row, constant value heads."""
+
+    def __init__(self, torch, preference: dict[int, float], width: int, *, values=0.5, aux=(0.25, -0.5)):
+        from spire_learn.neural.model import PolicyOutput
+
+        self.torch, self.output_type = torch, PolicyOutput
+        self.logits = torch.zeros(width)
+        for action, logit in preference.items():
+            self.logits[action] = logit
+        self.value, self.aux = values, aux
+        self.training = True
+
+    def eval(self):
+        self.training = False
+        return self
+
+    def train(self, mode=True):
+        self.training = mode
+        return self
+
+    def __call__(self, batch):
+        rows = batch.action_mask.shape[0]
+        torch = self.torch
+        return self.output_type(self.logits.expand(rows, -1).clone(), torch.full((rows,), self.value),
+                                torch.tensor([list(self.aux)] * rows))
+
+
+class GateSpy:
+    """A gate that records its stages and emits one wait event per stage through its journal."""
+
+    def __init__(self):
+        self.stages, self.waited_seconds, self._journal = [], 0.0, None
+        self.events = [{"event": "gpu_wait", "stage": "qualify"}]
+
+    def set_journal(self, journal):
+        self._journal = journal
+        if journal is not None:
+            for event in self.events:
+                journal(event)
+
+    def wait(self, stage):
+        self.stages.append(stage)
+        event = {"event": "gpu_wait", "stage": stage}
+        self.events.append(event)
+        if self._journal is not None:
+            self._journal(event)
+
+    def release(self):
+        return None
 
 
 def _grads(policy, torch) -> list:
@@ -345,6 +397,106 @@ class DistillTrainTests(unittest.TestCase):
         self.assertTrue(self.torch.equal(state, self.torch.random.get_rng_state()))
         self.assertTrue(np.all(np.asarray(first) >= 0))
 
+    # --- validation metrics ------------------------------------------------------------------
+
+    def test_validation_metrics_by_hand(self):
+        torch, np = self.torch, self.np
+        # Every frame: 0 searched with a partial tie (4 and 9 at 0.1; the teacher chose 4),
+        # 1 single legal, 2 all-way tie, 3 refused, 4 turn-cap prefix, 5 searched.
+        ref = self.write("validation", 1001, list(range(6)), run="run-m")
+        shards = self.shard_set(ref)
+        width = self.frames[0].tensors["action_mask"].shape[0]
+        # The student prefers 9 (frame 0: the other tied best), 11 (frame 5: worse than 7) and
+        # 5 (frame 4: the teacher's choice); it takes index 0-first legal elsewhere.
+        stub = FixedPolicy(torch, {9: 3.0, 11: 2.0, 5: 1.0}, width)
+        tau = 0.1
+        result = self.train.evaluate(stub, shards, tau=tau, batch_rows=4)
+        self.assertTrue(stub.training)  # mode restored
+        labels = {index: self.labels(index, self.kinds[index], run="run-m") for index in range(6)}
+        picks = {0: 9, 4: 5, 5: 11}
+        regrets = {index: max(labels[index].values) - labels[index].values[labels[index].legal.index(pick)]
+                   for index, pick in picks.items()}
+        self.assertEqual(regrets[0], 0.0)
+        self.assertEqual(regrets[4], 0.0)
+        self.assertGreater(regrets[5], 0.0)
+        metrics = result.metrics
+        self.assertEqual(metrics["regret_rows"], 3)  # the tie, single-legal and refused rows are excluded
+        self.assertEqual(result.regret_rows, [regrets[0], regrets[4], regrets[5]])
+        self.assertAlmostEqual(metrics["regret"], sum(regrets.values()) / 3, places=12)
+        # Strict: only frame 4 picks the teacher's choice; tie-aware also counts frame 0's tie.
+        self.assertEqual(labels[0].choice, 4)
+        self.assertAlmostEqual(metrics["strict_agreement"], 1 / 3, places=12)
+        self.assertAlmostEqual(metrics["tie_aware_agreement"], 2 / 3, places=12)
+        # Policy loss: cross-entropy to softmax(v / tau) on the policy rows 0, 4 and 5.
+        cross_entropy = []
+        for index in (0, 4, 5):
+            legal = labels[index].legal
+            scaled = np.asarray(labels[index].values) / tau
+            target = np.exp(scaled - scaled.max())
+            target /= target.sum()
+            logits = stub.logits[legal].double()
+            log_probs = (logits - torch.logsumexp(logits, dim=0)).numpy()
+            cross_entropy.append(-float((target * log_probs).sum()))
+        self.assertAlmostEqual(metrics["policy_loss"], sum(cross_entropy) / 3, places=5)
+        # Value losses on the value rows 0, 1, 2 and 5 (outcome by index % 3: win, death, escaped).
+        value_rows = [index for index in range(6) if labels[index].value_ok]
+        self.assertEqual(value_rows, [0, 1, 2, 5])
+        outcome = {"win": 1.0, "death": -1.0, "escaped": 0.0}
+        expected = {
+            "outcome_mse": np.mean([(0.5 - outcome[labels[i].outcome]) ** 2 for i in value_rows]),
+            "hp_kept_mse": np.mean([(0.25 - labels[i].hp_kept) ** 2 for i in value_rows]),
+            "realised_v2_mse": np.mean([(-0.5 - labels[i].realised_v2) ** 2 for i in value_rows]),
+        }
+        for name, value in expected.items():
+            self.assertAlmostEqual(metrics[name], float(value), places=5, msg=name)
+        self.assertAlmostEqual(metrics["value_loss"], sum(expected.values()) / 3, places=5)
+        self.assertAlmostEqual(metrics["loss"], metrics["policy_loss"] + metrics["value_loss"], places=9)
+        self.assertEqual((metrics["policy_rows"], metrics["value_rows"], metrics["rows"]), (3, 4, 6))
+        self.assertEqual(shards.open_shards, 0)  # validation unmaps its shards
+
+    def test_label_codes_follow_distill_data(self):
+        from spire_learn.neural.distill_data import OUTCOMES, ROOT_KINDS
+
+        searched, targets = self.train.label_codes()
+        self.assertEqual(searched, ROOT_KINDS.index("searched"))
+        self.assertEqual(targets, {OUTCOMES.index("win"): 1.0, OUTCOMES.index("death"): -1.0,
+                                   OUTCOMES.index("escaped"): 0.0})
+        self.assertNotIn(OUTCOMES.index("none"), targets)
+        self.assertEqual(set(self.train.OUTCOME_TARGETS) | {"none"}, set(OUTCOMES))
+        # A negative or unknown outcome code on a value row is refused.
+        np = self.np
+        labels = self.train.ShardSet((self.shard_a,), self.schema).labels[0]
+        for code in (-1, OUTCOMES.index("none"), len(OUTCOMES)):
+            broken = self.train.ShardLabels(**{**labels.__dict__, "outcome": np.full_like(labels.outcome, code)})
+            with self.subTest(code=code), self.assertRaises(self.train.DistillError):
+                broken._check()
+        # A policy row with a non-finite value is refused (the vectorised check).
+        values = labels.values.copy()
+        values[labels.legal_offsets[0]] = np.nan
+        with self.assertRaises(self.train.DistillError):
+            self.train.ShardLabels(**{**labels.__dict__, "values": values})._check()
+        labels._check()
+
+    def test_verify_dataset_refuses_tampering(self):
+        import shutil
+
+        copy = self.root / "verify" / "shard"
+        shutil.copytree(self.shard_a.path, copy)
+        ref = self.train.ShardRef("train", 1000, copy, self.shard_a.rows,
+                                  self.train._file_sha256(copy / "manifest.json"))
+        dataset = self.train.Dataset(chunks=(), chunk_manifest_sha256={}, train=(ref,), validation=())
+        self.assertEqual(self.train.verify_dataset(dataset, self.schema), self.shard_a.rows)
+        target = copy / "action_mask.npy"
+        data = bytearray(target.read_bytes())
+        data[-1] ^= 1
+        target.write_bytes(bytes(data))
+        with self.assertRaisesRegex(self.train.DistillError, "fails verification"):
+            self.train.verify_dataset(dataset, self.schema)
+        stale = self.train.Dataset(chunks=(), chunk_manifest_sha256={}, validation=(),
+                                   train=(self.train.ShardRef("train", 1000, copy, 6, "0" * 64),))
+        with self.assertRaisesRegex(self.train.DistillError, "manifest differs"):
+            self.train.verify_dataset(stale, self.schema)
+
     # --- training run ------------------------------------------------------------------------
 
     def test_final_step_evaluated(self):
@@ -356,7 +508,9 @@ class DistillTrainTests(unittest.TestCase):
         dataset = self.train.Dataset(chunks=(), chunk_manifest_sha256={}, train=(self.shard_a, self.shard_b),
                                      validation=(self.validation,))
         output = self.root / "run"
-        summary = self.train.train_student(config, self.schema, dataset, output, log_every=1)
+        spy = GateSpy()
+        summary = self.train.train_student(config, self.schema, dataset, output, log_every=1, gate=spy)
+        self.assertEqual(spy.stages, ["train-start", "eval-2", "eval-4", "eval-5"])
         # Evaluated every eval_every steps and at the last step, which is not a multiple.
         self.assertEqual([item["step"] for item in summary["evaluations"]], [2, 4, 5])
         self.assertEqual(summary["final"]["step"], 5)
@@ -366,6 +520,16 @@ class DistillTrainTests(unittest.TestCase):
         self.assertEqual(summary["run_metadata"]["train_shards"], [1000])
         events = [json.loads(line) for line in (output / "train_log.jsonl").read_text().splitlines()]
         self.assertEqual([event["step"] for event in events if event["event"] == "validation"], [2, 4, 5])
+        # Wait events reach the log as they happen, including one from before the log existed.
+        self.assertEqual([event["stage"] for event in events if event["event"] == "gpu_wait"],
+                         ["qualify", "train-start", "eval-2", "eval-4", "eval-5"])
+        timing = summary["timing"]
+        self.assertIsNone(timing["gpu_step_seconds"])
+        self.assertNotIn("gpu_seconds", timing)
+        for name in ("train_load_seconds", "train_model_seconds", "eval_load_seconds", "eval_model_seconds"):
+            self.assertGreater(timing[name], 0.0, name)
+        self.assertLessEqual(timing["train_load_seconds"] + timing["train_model_seconds"],
+                             timing["train_wall_seconds"] + 1e-6)
         for evaluation in summary["evaluations"]:
             for key in ("regret", "strict_agreement", "tie_aware_agreement", "policy_loss", "outcome_mse",
                         "hp_kept_mse", "realised_v2_mse", "value_loss"):

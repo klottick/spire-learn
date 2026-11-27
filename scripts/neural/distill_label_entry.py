@@ -533,6 +533,7 @@ def run_chunk(args, output: Path) -> dict:
     written = {series: {} for series in SERIES}
     counts = _empty_counts()
     fight_cpu = fight_wall = 0.0
+    fight_timings = []
 
     def writers(index):
         if index not in open_shards:
@@ -564,6 +565,11 @@ def run_chunk(args, output: Path) -> dict:
         _count(counts, result)
         fight_cpu += result["cpu_seconds"]
         fight_wall += result["wall_seconds"]
+        fight_timings.append({
+            "shard": result["shard"], "local": result["local"], "series": result["series"],
+            "fight_type": result["fight_type"], "outcome": result["outcome"],
+            "censor_reason": result["censor_reason"], "decisions": result["decisions"],
+            "cpu_seconds": result["cpu_seconds"], "wall_seconds": result["wall_seconds"]})
         remaining[result["shard"]] -= 1
         while pending_close and remaining[pending_close[0]] == 0:
             close(pending_close.pop(0))
@@ -583,10 +589,11 @@ def run_chunk(args, output: Path) -> dict:
                        "profile": descriptor["profile_id"]},
     }
     _write_json_atomic(output / REPORT, {
-        "schema": "spire-learn-distill-label-report-v1", "parallel": args.parallel,
+        "schema": "spire-learn-distill-label-report-v2", "parallel": args.parallel,
         "fight_cpu_seconds": fight_cpu, "fight_wall_seconds": fight_wall,
         "run_wall_seconds": perf_counter() - wall_start, "gpu_seconds": 0,
-        "searched_rows": searched, "fights": sum(counts["fights"].values())})
+        "searched_rows": searched, "fights": sum(counts["fights"].values()),
+        "fight_timings": sorted(fight_timings, key=lambda row: (row["shard"], row["local"]))})
     _write_json_atomic(output / CHUNK_MANIFEST, manifest)
     return manifest
 

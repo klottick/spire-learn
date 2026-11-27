@@ -451,7 +451,8 @@ class StandardTurnCapGateTests(unittest.TestCase):
         from scripts.neural import gated_tests_entry as entry
 
         for flag, name in (("--distill-train", "tests.neural.test_distill_train"),
-                           ("--model", "tests.neural.test_model.DistillValueHeadTests")):
+                           ("--model", "tests.neural.test_model.DistillValueHeadTests"),
+                           ("--student-eval", "tests.neural.test_model.StudentEvalTests")):
             with self.subTest(flag=flag), patch.dict(os.environ, {"SPIRE_LEARN_RUN_NATIVE_INTEGRATION": "1"}), \
                  patch.object(unittest.defaultTestLoader, "loadTestsFromName", return_value=_Suite(1)) as load:
                 self.assertEqual(entry.main([flag]), 0)

@@ -198,6 +198,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--distill-train": "tests.neural.test_distill_train",
         # Only the distillation value-head class: the module's other tests stay in the tensor suite.
         "--model": "tests.neural.test_model.DistillValueHeadTests",
+        # The student evaluation seam's torch tests (registry build, reflex argmax, timing); no skips.
+        "--student-eval": "tests.neural.test_model.StudentEvalTests",
     }
     if len(argv) == 1 and argv[0] in native_suites:
         if os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") != "1":

@@ -442,6 +442,15 @@ class LabelChunkNativeTests(unittest.TestCase):
         self.assertEqual(provenance["mixed_checkpoint_sha256"], label.checkpoint_sha256(self.checkpoint)["sha256"])
         self.assertIn("revision", provenance["learner"])
 
+        report = json.loads((whole / label.REPORT).read_text())
+        self.assertEqual(report["schema"], "spire-learn-distill-label-report-v2")
+        timings = report["fight_timings"]
+        self.assertEqual(len(timings), 4)
+        self.assertEqual([(row["shard"], row["local"]) for row in timings],
+                         sorted((row["shard"], row["local"]) for row in timings))
+        self.assertAlmostEqual(sum(row["cpu_seconds"] for row in timings), report["fight_cpu_seconds"])
+        self.assertEqual(sum(row["decisions"] for row in timings), sum(counts["decisions"].values()))
+
         for index in (1000, 1001):
             with self.data.ShardReader(whole / "train" / label.shard_name(index), self.schema) as reader:
                 reader.verify()

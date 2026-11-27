@@ -12,13 +12,11 @@ Importing this module imports neither torch nor numpy.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import asdict
-import hashlib
-import json
 from pathlib import Path
 
 from spire_learn.contracts import ContractError
 from spire_learn.neural.config import LEARNER_IDENTITY_IDS, STANDARD_LEARNER_IDENTITY_IDS, WINLOSS_OBJECTIVE_ID
+from spire_learn.neural.config import model_config_hash as _model_config_hash
 from spire_learn.neural.contracts import CombatFrame, ModelConfig, NeuralIdentity
 from spire_learn.neural.schema import CombatSchema
 
@@ -27,10 +25,8 @@ _SEED_LIMIT = 2 ** 63
 
 
 def model_config_hash(model_config: ModelConfig) -> str:
-    """The identity's ``config_hashes["model"]``: the canonical hash of the model settings."""
-    encoded = json.dumps(asdict(model_config), ensure_ascii=False, sort_keys=True,
-                         separators=(",", ":"), allow_nan=False).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    """The identity's ``config_hashes["model"]``: the canonical hash of ``model_config_hash_payload``."""
+    return _model_config_hash(model_config)
 
 
 def standard_ff_identity(model_config: ModelConfig, raw_mode_mapping: str, *,

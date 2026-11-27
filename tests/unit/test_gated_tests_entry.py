@@ -447,6 +447,19 @@ class StandardTurnCapGateTests(unittest.TestCase):
             # Native routes, not the tensor suite: no sampled-row ledger reservation.
             self.assertNotIn(module, entry.MODULES)
 
+    def test_selects_only_the_distill_train_module_and_the_value_head_class(self):
+        from scripts.neural import gated_tests_entry as entry
+
+        for flag, name in (("--distill-train", "tests.neural.test_distill_train"),
+                           ("--model", "tests.neural.test_model.DistillValueHeadTests")):
+            with self.subTest(flag=flag), patch.dict(os.environ, {"SPIRE_LEARN_RUN_NATIVE_INTEGRATION": "1"}), \
+                 patch.object(unittest.defaultTestLoader, "loadTestsFromName", return_value=_Suite(1)) as load:
+                self.assertEqual(entry.main([flag]), 0)
+            load.assert_called_once_with(name)
+        # The trainer tests are a native route, not the tensor suite (no sampled-row reservation).
+        self.assertNotIn("tests.neural.test_distill_train", entry.MODULES)
+        self.assertEqual(entry.MODULES, MODULES)
+
     def test_native_route_requires_opt_in(self):
         from scripts.neural import gated_tests_entry as entry
 

@@ -41,7 +41,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from hashlib import sha256
 import json
 import math
@@ -58,6 +58,7 @@ if __package__ in (None, ""):
     sys.path[:0] = [str(_ROOT / "src"), str(_ROOT)]
 
 from scripts.neural import search_teacher_entry as entry
+from spire_learn.neural.config import model_config_hash_payload
 from spire_learn.neural.contracts import ModelConfig
 from spire_learn.neural.scenario_support import content_sha256, json_value
 from spire_learn.neural.search_one_move import terminal_score
@@ -518,7 +519,7 @@ def run_chunk(args, output: Path) -> dict:
         "mixed_seed_rule": "H(seed, 'mixed', shard, local)", "seed_hash": "first 16 hex digits of content_sha256",
         "mixed_every": args.mixed_every, "mixed_rule": "(shard * 256 + local) % mixed_every == mixed_every - 1",
         "mixed_checkpoint_sha256": None if mixed is None else mixed["sha256"],
-        "mixed_model_config": None if mixed is None else asdict(MIXED_MODEL_CONFIG),
+        "mixed_model_config": None if mixed is None else model_config_hash_payload(MIXED_MODEL_CONFIG),
         "turn_cap": TURN_CAP, "fight_cap": FIGHT_CAP, "kept_prefix_max": KEPT_PREFIX_MAX,
         "roundtrip_every": args.roundtrip_every, "case_limit": args.case_limit,
         "holdout_runs": len(holdout), "holdout_sha256": content_sha256(sorted(holdout)),

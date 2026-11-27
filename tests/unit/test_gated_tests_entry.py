@@ -424,6 +424,15 @@ class StandardTurnCapGateTests(unittest.TestCase):
             self.assertEqual(entry.main(["--search-value-native"]), 0)
         load.assert_called_once_with("tests.integration.test_search_value_native")
 
+    def test_selects_only_the_distill_data_module(self):
+        from scripts.neural import gated_tests_entry as entry
+
+        with patch.dict(os.environ, {"SPIRE_LEARN_RUN_NATIVE_INTEGRATION": "1"}), \
+             patch.object(unittest.defaultTestLoader, "loadTestsFromName", return_value=_Suite(1)) as load:
+            self.assertEqual(entry.main(["--distill-data"]), 0)
+        load.assert_called_once_with("tests.neural.test_distill_data")
+        self.assertNotIn("tests.neural.test_distill_data", entry.MODULES)
+
     def test_native_route_requires_opt_in(self):
         from scripts.neural import gated_tests_entry as entry
 

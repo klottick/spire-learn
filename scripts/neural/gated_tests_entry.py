@@ -190,6 +190,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         "--padding-trim": "tests.integration.test_padding_trim_native",
         "--sampled-validation": "tests.integration.test_sampled_validation_native",
+        "--distill-data": "tests.neural.test_distill_data",
     }
     if len(argv) == 1 and argv[0] in native_suites:
         if os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") != "1":

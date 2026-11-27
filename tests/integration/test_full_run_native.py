@@ -100,6 +100,69 @@ class RunRootTests(unittest.TestCase):
                 env.close()
         self.assertGreaterEqual(compared, 40, f"{compared} compared roots, {refused} refused")
 
+    def test_real_run_root_refusal_is_a_counted_fallback(self):
+        """A Neow boss swap to Runic Dome on a fixed off-panel seed refuses a real Run root within a few moves.
+
+        The refusal is ``RunUnsupportedBoundaryError`` with the bare class text; ``RunSearchRoot`` keeps it a
+        refusal and ``_decision`` plays the teacher's fallback on it.
+        """
+        np, full = self.np, self.full
+        from spire_lab.gymnasium import RunEnv
+        from spire_learn.neural import search_view
+        from spire_learn.neural.gym_contracts import STANDARD_COMPACT_PRESET
+        from spire_learn.neural.schema import parse_lifecycle
+        from spire_learn.neural.views import STANDARD_COMBAT_V1
+
+        _, revision, _, _ = full._check_gym(None)
+        context = full.PlayContext(player_kind="teacher", teacher=None, checkpoint=None, mapping=None,
+                                   priority_path=str(ROOT / full.PRIORITY_PATH), gym_revision=revision)
+        teacher, _, _ = full.entry._teacher(TEACHERS, "current-v2", None, allow_uncalibrated=True)
+        unsupported, _, _ = search_view._native_errors()
+        ordinal = full.RUN_PANEL_SEED_OFFSET + 1_000_000 + 102  # off the panel and past every smoke ordinal
+        env = RunEnv(full.CHARACTER, full.ASCENSION, profile="standard", partition=full.PARTITION)
+        try:
+            bridge, view, heuristic, _, _ = full._resources(context, env)
+            flags, rng = full.RoomFlags(), random.Random(102)
+            observation, _ = env.reset(seed=full.environment_seed_for(full.PARTITION, replica=0, ordinal=ordinal))
+            dome = heuristic.vocab["relic"].index("runic_dome")
+            for step in range(200):
+                combat = env.combat_view()
+                lifecycle = parse_lifecycle(combat["info"], view=STANDARD_COMBAT_V1)
+                legal = [int(i) for i in np.flatnonzero(observation["action_mask"])]
+                if step == 0:
+                    action = next(i for i in legal if heuristic._name("neow_reward", heuristic._cell(
+                        observation, "offers", heuristic._cell(observation, "actions", i, "source_row"),
+                        "neow_reward")) == "boss_swap")
+                elif lifecycle.active:
+                    relics = [int(observation["relics"][r][0]) for r in range(len(observation["relics_occupied"]))
+                              if observation["relics_occupied"][r]]
+                    self.assertIn(dome, relics)
+                    arrays = bridge.arrays(combat["obs"])
+                    root = full.RunSearchRoot(env)
+                    try:
+                        root.public_search(step, observation="compact", capacity_preset=STANDARD_COMPACT_PRESET,
+                                           limits={"max_live_branches": 1, "max_branches": 1,
+                                                   "max_steps_per_branch": 1, "max_total_steps": 1}).close()
+                    except unsupported as error:
+                        text = str(error)
+                        self.assertIs(type(error), unsupported)
+                        self.assertEqual(full.root_refusal(error), text)
+                        self.assertEqual(search_view.refusal_class(error), text)
+                        self.assertIn(text, search_view.ROOT_REFUSAL_CLASSES)
+                        kind, move, *_ = full.entry._decision(root, arrays, legal, view, teacher, rng, step)
+                        self.assertEqual(kind, text)
+                        self.assertIn(move, legal)
+                        print(json.dumps({"forced_refusal": text, "decision": step}))
+                        return
+                    action = view.playout_choice(arrays, rng, "no-potions-v2")
+                else:
+                    action = heuristic.choose(observation, legal, flags).action
+                observation, _, terminated, _, _ = env.step(action)
+                self.assertFalse(terminated)
+        finally:
+            env.close()
+        self.fail("no Run root was refused within 200 decisions")
+
     def test_curse_list_matches_card_metadata(self):
         from spire_lab import _native
         from spire_learn.neural.noncombat_heuristic import CardPriority
@@ -140,7 +203,7 @@ class SmokeTests(unittest.TestCase):
         for fight in fights:
             self.assertIn(fight["outcome"], ("victory", "death", "escaped", "censored"))
             for key in ("case_id", "steps", "hp_start", "max_hp_start", "potions_start", "potion_hp_spent",
-                        "cpu_seconds", "wall_seconds"):
+                        "end_state", "cpu_seconds", "wall_seconds"):
                 self.assertIn(key, fight)
         provenance = summary["provenance"]
         self.assertEqual(provenance["combat_player"], combat_player)
@@ -150,6 +213,9 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(provenance["priority"]["sha256"],
                          full.CardPriority.load(ROOT / full.PRIORITY_PATH).sha256)
         self.assertEqual((provenance["turn_cap"], provenance["fight_cap"], provenance["run_cap"]), (500, 1024, 10_000))
+        self.assertTrue(provenance["priority_preregistered"])
+        self.assertIn("parallel", provenance)
+        self.assertEqual({provenance["thread_pin"][name] for name in full.label._THREAD_VARIABLES}, {"1"})
         self.assertEqual(summary["aggregates"]["runs"], runs)
         self.assertNotIn("cpu_seconds", json.dumps(summary["aggregates"]))
         return rows, summary

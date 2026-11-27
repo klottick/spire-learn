@@ -74,6 +74,8 @@ CHARACTER = "ironclad"
 ASCENSION = 20
 OUTPUT_ROOT = Path("artifacts/development/neural-combat/full-run")
 PRIORITY_PATH = Path("configs/neural/full-run/ironclad-priority-v1.json")
+# The pre-registered priority list for gate R1; any other file is refused unless --smoke.
+PRIORITY_SHA256 = "9dd28b208c16e6fb05daced54ca264d287c9437c95d8aad4500e861448f36548"
 VICTORY_TERMINALS = ("act3_no_keys", "heart_victory")
 CENSOR_REASONS = ("turn_cap", "fight_cap", "run_cap")
 PANEL_SETTINGS = {
@@ -213,10 +215,21 @@ class RunSearchRoot:
         except state_error as error:
             raise RunFault(f"RunStateError at a live combat root: {type(error).__name__}: {str(error)[:120]}") from error
         except unsupported as error:
-            refusal = search_view.refusal_class(error)
+            refusal = root_refusal(error)
             if refusal not in search_view.ROOT_REFUSAL_CLASSES:
                 raise RunFault(f"undocumented root refusal class: {refusal!r}") from error
             raise
+
+
+def root_refusal(error: BaseException) -> str:
+    """The class of a Run root refusal: the error text exactly, the one place it is normalised.
+
+    Gym v1.2.5 raises ``RunUnsupportedBoundaryError(u.reason())`` (crates/spire-python/src/run_env.rs:39) with
+    ``u.reason()`` a static class string (crates/spire-core/src/combat/belief.rs:61-75; mapped at
+    crates/spire-env/src/public_search.rs:32 and :34): no prefix, no detail and under 80 characters, so the text
+    is the class and ``search_view.refusal_class`` (which keeps the first 80 characters) returns the same string.
+    """
+    return str(error)
 
 
 # --- one run --------------------------------------------------------------------------------
@@ -233,6 +246,21 @@ def _boss_node(heuristic, observation) -> bool:
     return heuristic._name("map_kind", heuristic._cell(observation, "map_nodes", row, "kind")) == "boss"
 
 
+def fight_resource_fields(view, start, end) -> dict:
+    """The teacher entry's resource fields of one fight, and ``end_state``.
+
+    ``end`` is the settled state read at the first boundary after the fight (``entry._resources``); None when
+    the next boundary is already another combat, where no boundary shows the settled state: then the end fields
+    are None and ``end_state`` is ``"unavailable"``, never read from the next combat.
+    """
+    if end is not None:
+        return {**entry._resource_fields(view, start, end), "end_state": "settled"}
+    hp_start, max_hp_start, held = start
+    return {"hp_start": int(hp_start), "max_hp_start": int(max_hp_start), "max_hp_end": None,
+            "potions_start": sum(held.values()), "potions_end": None, "potion_hp_spent": None,
+            "end_state": "unavailable"}
+
+
 def noncombat_move(heuristic, observation, legal, flags: RoomFlags, rules: Counter, fallbacks: Counter) -> int:
     """The heuristic's move at a non-combat boundary; every rule is tallied and every fallback counted."""
     choice = heuristic.choose(observation, legal, flags)
@@ -245,8 +273,6 @@ def noncombat_move(heuristic, observation, legal, flags: RoomFlags, rules: Count
 
 def play_run(env, job: RunJob, context: PlayContext) -> dict:
     """Play one whole run; returns ``{"run", "fights", "timing"}``. Faults raise."""
-    import numpy as np
-
     from spire_learn.neural.schema import parse_lifecycle
     from spire_learn.neural.views import STANDARD_COMBAT_V1
 
@@ -281,6 +307,7 @@ def play_run(env, job: RunJob, context: PlayContext) -> dict:
                  "roots": Counter(), "cpu": process_time(), "wall": perf_counter()}
 
     def finish_fight(lifecycle, end_view, censor_reason=None):
+        """Close the fight; ``end_view`` None when no boundary shows its settled state (a combat follows directly)."""
         nonlocal fight
         last_exit = lifecycle.last_exit
         if censor_reason is None:
@@ -289,14 +316,14 @@ def play_run(env, job: RunJob, context: PlayContext) -> dict:
             outcome, hp = last_exit["outcome"], last_exit.get("hp_after_cleanup")
         else:
             outcome, hp = "censored", None
-        end = entry._resources(view, bridge.arrays(end_view))
+        end = None if end_view is None else entry._resources(view, bridge.arrays(end_view))
         fights.append({
             "case_id": f"{job.run_id}/fight-{len(fights):03d}", "run": job.index, "run_id": job.run_id,
             "act": fight["act"], "floor": fight["floor"], "boss": fight["boss"],
             "encounter": None if censor_reason else last_exit.get("encounter"),
             "outcome": outcome, "censor_reason": censor_reason, "steps": fight["steps"],
             "hp_after_cleanup": None if hp is None else int(hp),
-            **entry._resource_fields(view, fight["start"], end),
+            **fight_resource_fields(view, fight["start"], end),
             "roots": dict(fight["roots"]),
             "cpu_seconds": process_time() - fight["cpu"], "wall_seconds": perf_counter() - fight["wall"],
         })
@@ -308,7 +335,7 @@ def play_run(env, job: RunJob, context: PlayContext) -> dict:
         act_max, floor_max = max(act_max, act), max(floor_max, floor)
         combat = env.combat_view()
         lifecycle = parse_lifecycle(combat["info"], view=STANDARD_COMBAT_V1)
-        legal = [int(index) for index in np.flatnonzero(observation["action_mask"])]
+        legal = [index for index, flag in enumerate(observation["action_mask"]) if flag]
         if not legal:
             raise RunFault(f"{job.run_id} has a live boundary without a legal action at decision {decisions}")
         if decisions == RUN_CAP:
@@ -321,7 +348,9 @@ def play_run(env, job: RunJob, context: PlayContext) -> dict:
             if view.legal(compact) != legal:
                 raise RunFault(f"{job.run_id}: the bridged combat legal set differs from the Run's legal indices")
             if fight is not None and fight["visit"] != lifecycle.active_visit:
-                finish_fight(lifecycle, combat["obs"])  # a combat that follows another without a room between
+                # A combat that follows another with no boundary between: the next combat's first view is not
+                # the previous fight's settled state, so its end resources are recorded as unavailable.
+                finish_fight(lifecycle, None)
             if fight is None:
                 start_fight(lifecycle, compact)
             turn = entry._public_turn(compact, turn_column)
@@ -477,6 +506,8 @@ def run_chunk(args, output: Path) -> dict:
         checkpoint = label.checkpoint_sha256(Path(value))
     gym_build, live_revision, live, mapping = _check_gym(teacher)
     priority = CardPriority.load(args.priority)
+    if not args.smoke and priority.sha256 != PRIORITY_SHA256:
+        raise ValueError("--priority is not the pre-registered priority list (only --smoke may use another)")
 
     first, count = args.runs
     if not args.smoke and first + count > RUN_PANEL_SIZE:
@@ -509,7 +540,10 @@ def run_chunk(args, output: Path) -> dict:
         "character": CHARACTER, "ascension": ASCENSION, "creation": "experienced", "neow": "full",
         "capacity_preset": compact["semantics"]["capacity_preset"], "compact_fingerprint": compact["fingerprint"],
         "combat_view_fingerprint": live.standard_combat_fingerprint,
-        "victory_terminals": list(VICTORY_TERMINALS), "gpu_seconds": 0,
+        "victory_terminals": list(VICTORY_TERMINALS), "gpu_seconds": 0, "parallel": args.parallel,
+        "priority_preregistered": priority.sha256 == PRIORITY_SHA256,
+        "thread_pin": {**{name: os.environ.get(name) for name in label._THREAD_VARIABLES},
+                       "torch_threads": 1 if checkpoint else None},
     }
 
     output.mkdir(parents=True)
@@ -545,13 +579,16 @@ def main(argv=None):
     parser.add_argument("--parallel", type=entry._positive, default=1)
     args = parser.parse_args(argv)
 
-    output = (_ROOT / args.output).resolve()
+    given = _ROOT / args.output
+    if given.exists() or given.is_symlink():
+        parser.error("--output already exists; each chunk is written to a fresh directory")
+    output = given.resolve()
     if not output.is_relative_to((_ROOT / OUTPUT_ROOT).resolve()):
         parser.error(f"--output must resolve under {OUTPUT_ROOT}/")
     expected = os.environ.get("SPIRE_LEARN_RUNNER_OUTPUT")
     if expected and not output.is_relative_to(Path(expected).resolve()):
         parser.error("--output must be inside SPIRE_LEARN_RUNNER_OUTPUT")
-    if output.exists() or output.is_symlink():
+    if output.exists():
         parser.error("--output already exists; each chunk is written to a fresh directory")
     if not 0 <= args.seed < 1 << 64:
         parser.error("--seed must be an unsigned 64-bit integer")
@@ -562,7 +599,18 @@ def main(argv=None):
         parser.error("--teachers is only for teacher:<name>")
     if args.parallel > CHUNK_RUNS:
         parser.error(f"--parallel must be at most {CHUNK_RUNS}")
+    first, count = args.runs
+    if not args.smoke and first + count > RUN_PANEL_SIZE:
+        parser.error(f"--runs must lie inside the {RUN_PANEL_SIZE}-run panel (indices 0..{RUN_PANEL_SIZE - 1}) "
+                     "unless --smoke")
     args.priority = (_ROOT / args.priority).resolve()
+    try:
+        priority_sha256 = label._file_sha256(args.priority)
+    except OSError as error:
+        parser.error(f"--priority cannot be read: {error}")
+    if not args.smoke and priority_sha256 != PRIORITY_SHA256:
+        parser.error(f"--priority sha256 {priority_sha256} is not the pre-registered {PRIORITY_SHA256}; "
+                     "only --smoke may play another list")
     if args.teachers is not None:
         args.teachers = (_ROOT / args.teachers).resolve()
     if kind == "checkpoint":

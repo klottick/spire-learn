@@ -150,6 +150,100 @@ class TotalityTests(HeuristicTestCase):
                 self.assertEqual(choice.action, proceed)
                 self.assertIn(choice.action, boundary.legal)
 
+    def _legal_non_potion(self, boundary, choice):
+        self.assertIn(choice.action, boundary.legal)
+        verb = boundary.obs["actions"][choice.action][boundary._column("actions", "verb")]
+        self.assertNotIn(VOCAB["verb"][verb], ("use_potion", "discard_potion"))
+        self.assertEqual(choice.fallback, choice.rule.startswith("fallback:"))
+        return VOCAB["verb"][verb]
+
+    def test_choose_total_over_every_selection_operation(self):
+        """Every operation on a structured selection: a legal non-potion move or a counted fallback, never a
+        cancel while a select or confirm is legal, and no reselection loop while the selection advances."""
+        cards = ["regret", "strike", "defend", "clash", ("bash", False), "offering", "anger"]
+        for operation in VOCAB["selection_operation"]:
+            for confirm in (False, True):
+                with self.subTest(operation=operation, confirm=confirm):
+                    boundary = Boundary("event", event="living_wall")
+                    boundary.potion(0, "fire_potion")
+                    actions = boundary.selection(operation, cards, required=2, confirm=confirm)
+                    cancel = actions[-1]
+                    family = SELECTION_RULES[operation]
+                    seen = set()
+                    for _ in range(len(cards) + 2):
+                        verb_column = boundary._column("actions", "verb")
+                        open_moves = any(VOCAB["verb"][boundary.obs["actions"][i][verb_column]] in ("select", "confirm")
+                                         for i in boundary.legal)
+                        choice = self.pick(boundary)
+                        verb = self._legal_non_potion(boundary, choice)
+                        if open_moves:
+                            self.assertNotEqual(choice.action, cancel)
+                            self.assertEqual(choice.fallback, family in ("fallback", "combat"))
+                        if confirm and family not in ("fallback", "combat"):
+                            self.assertEqual(verb, "confirm")
+                        if verb != "select":
+                            break
+                        self.assertNotIn(choice.action, seen)
+                        seen.add(choice.action)
+                        # The engine marks the picked row selected; it is no longer a candidate.
+                        row = boundary.obs["actions"][choice.action][boundary._column("actions", "source_row")]
+                        boundary.set("selection", row, selected=1)
+                        boundary.obs["action_mask"][choice.action] = 0
+                        boundary.legal.remove(choice.action)
+                    else:
+                        self.fail(f"{operation} kept selecting")
+        named = {"select_permanent": (True, "strike"), "event_choose": (False, "regret"),
+                 "relic_equip": (False, "offering")}
+        for operation, (fallback, card) in named.items():
+            with self.subTest(named=operation):
+                boundary = Boundary("event")
+                boundary.potion(0, "fire_potion")
+                actions = boundary.selection(operation, ["strike", "regret", "offering", "bash"])
+                choice = self.pick(boundary)
+                expected = ["strike", "regret", "offering", "bash"].index(card)
+                self.assertEqual((choice.action, choice.fallback), (actions[expected], fallback))
+
+    def test_choose_total_over_every_room(self):
+        """Every room on a boundary with many legal kinds: a legal non-potion move or a counted fallback."""
+        for room in VOCAB["room"]:
+            with self.subTest(room=room):
+                boundary = Boundary(room, event="golden_shrine", hp=50, max_hp=80)
+                boundary.potion(0, "fire_potion")
+                boundary.action("use_potion", group="potions", row=0)
+                keys = {boundary.choose(key) for key in ("sapphire", "emerald")}
+                for kind in ("monster", "elite"):
+                    boundary.node(kind)
+                boundary.card("strike")
+                boundary.choose("neow_blessing", neow_reward="three_cards")
+                boundary.choose("event_option", event_stage=0, event_option=0, param0=50)
+                for choice in ("gold", "relic", "card_reward", "potion", "open_chest", "rest", "smith", "recall",
+                               "purge", "leave", "skip", "act3_continue", "proceed"):
+                    boundary.choose(choice, **({"amount": 10} if choice == "gold" else {}))
+                boundary.choose("card", card_kind="offering", price=10)
+                choice = self.pick(boundary, RoomFlags())
+                self._legal_non_potion(boundary, choice)
+                if not choice.fallback:
+                    self.assertNotIn(choice.action, keys)
+        for room in ("act3_ready", "act4_ready", "act2_ready", "act3_boss_complete", "checkpoint_complete"):
+            with self.subTest(transition=room):
+                boundary = Boundary(room)
+                boundary.potion(0, "fire_potion")
+                boundary.choose("sapphire")
+                boundary.choose("ruby" if "ruby" in VOCAB["choice"] else "emerald")
+                proceed = boundary.choose("proceed")
+                choice = self.pick(boundary)
+                self.assertEqual((choice.action, choice.rule, choice.fallback), (proceed, "transition", False))
+
+    def test_act3_ending_skips_keys(self):
+        """Without keys the Act 3 ending is act3_continue (Gym act3_end.rs:100-112); a lower-index key is skipped."""
+        boundary = Boundary("act3_ending", act=3, floor=51)
+        boundary.potion(0, "fire_potion")
+        boundary.choose("sapphire")
+        boundary.choose("emerald")
+        cont = boundary.choose("act3_continue")
+        choice = self.pick(boundary)
+        self.assertEqual((choice.action, choice.rule, choice.fallback), (cont, "transition", False))
+
     def test_priority_list_validates_against_descriptor(self):
         self.assertEqual(self.priority.id, "ironclad-priority-v1")
         self.assertLess(self.priority.rank("offering"), self.priority.rank("strike"))
@@ -378,13 +472,13 @@ class RuleTests(HeuristicTestCase):
 
 class FallbackTests(HeuristicTestCase):
     def test_fallback_is_declared_on_the_choice(self):
-        boundary = Boundary("act3_ending")
-        boundary.choose("act3_continue")
-        boundary.choose("sapphire")
+        boundary = Boundary("act2_ready")
+        boundary.choose("joust_owner")
+        boundary.choose("joust_murderer")
         choice = self.pick(boundary)
         self.assertTrue(choice.fallback)
         self.assertEqual(choice.action, 0)
-        self.assertEqual(choice.rule, "fallback:act3_ending")
+        self.assertEqual(choice.rule, "fallback:act2_ready")
         boundary = Boundary("rewards")
         boundary.potion(0, "fire_potion")
         boundary.selection("scry", ["strike", "defend"], cancel=False)

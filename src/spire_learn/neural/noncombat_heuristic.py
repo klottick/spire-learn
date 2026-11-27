@@ -29,7 +29,9 @@ Rules (Task 4 brief, verbatim values):
   the smallest HP plus max-HP loss (ties: the highest ``event_option``); if all are lethal, the smallest
   loss anyway.
 - Neow: the first blessing without an HP or max-HP cost. Boss relics: the first listed.
-- Transition rooms: the single non-potion action, else ``proceed``.
+- Transition rooms: the single non-potion action, else ``proceed``, else ``act3_continue`` (the Act 3 ending
+  without keys); a key is never taken.
+- Keys are never taken: events and the fallback skip a key choice while anything else is legal.
 - Anything else: the declared fallback, the lowest legal index that is not a potion verb, marked
   ``fallback`` on the ``Choice`` so the harness counts and reports it. No legal action, or only potion
   verbs, raises ``HeuristicError``.
@@ -48,6 +50,8 @@ PRIORITY_SCHEMA = "spire-learn-card-priority-v1"
 
 POTION_VERBS = ("use_potion", "discard_potion")
 SELECTION_VERBS = ("select", "confirm", "cancel")
+# Key choices (the Ruby key is Recall, a campfire choice): keys are skipped, so runs end at Act 3.
+KEY_CHOICES = ("sapphire", "emerald", "ruby")
 
 REST_HP = 0.55       # map: rest ranks first below this HP share
 ELITE_HP = 0.70      # map: an elite drops below shop below this HP share
@@ -87,7 +91,8 @@ MAP_ORDER = ("rest", "treasure", "monster", "question", "shop", "elite", "boss")
 REWARD_ORDER = ("gold", "relic", "card_reward", "potion", "open_chest", "proceed")
 CARD_REWARD_PASS = ("singing_bowl", "skip", "leave")
 CAMPFIRE_OTHER = ("recall", "lift", "toke", "dig")
-TRANSITION_CHOICES = ("proceed",)
+# The Act 3 ending without keys is Proceed, then act3_continue stages 1-4 (Gym act3_end.rs:100-112); keys are never taken.
+TRANSITION_CHOICES = ("proceed", "act3_continue")
 HP_LOSS = frozenset({"damage_taken", "hp_lost"})
 MAX_HP_LOSS = frozenset({"max_hp_lost"})
 NEOW_HP_COSTS = frozenset({"max_hp_loss", "current_hp_loss"})
@@ -265,7 +270,9 @@ class NoncombatHeuristic:
 
     @staticmethod
     def _fallback(actions, where: str) -> Choice:
-        return Choice(actions[0]["index"], f"fallback:{where}", fallback=True)
+        """The lowest legal non-potion index; a key only when nothing else is legal."""
+        keyless = [item for item in actions if item["choice"] not in KEY_CHOICES] or actions
+        return Choice(keyless[0]["index"], f"fallback:{where}", fallback=True)
 
     @staticmethod
     def _first(actions, choice: str):
@@ -450,7 +457,7 @@ class NoncombatHeuristic:
         hp, max_hp = self._scalar(observation, "player", "hp") or 0, self._scalar(observation, "player", "max_hp") or 0
         share = self._hp_share(observation)
         options = []
-        for item in actions:
+        for item in [item for item in actions if item["choice"] not in KEY_CHOICES] or actions:
             hp_loss, max_hp_loss, curse, option = self._option_cost(observation, event, item)
             excluded = (curse
                         or (event == "knowing_skull" and option in KNOWING_SKULL_EXCLUDED)
@@ -465,6 +472,6 @@ class NoncombatHeuristic:
 
 
 __all__ = [
-    "CAMPFIRE_OTHER", "CardPriority", "Choice", "HEURISTIC_ID", "HeuristicError", "MAP_ORDER",
+    "CAMPFIRE_OTHER", "CardPriority", "Choice", "HEURISTIC_ID", "HeuristicError", "KEY_CHOICES", "MAP_ORDER",
     "NoncombatHeuristic", "POTION_VERBS", "REWARD_ORDER", "ROOM_RULES", "RoomFlags", "SELECTION_RULES",
 ]

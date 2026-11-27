@@ -9,6 +9,12 @@ groups in ``optional_known_empty_groups`` also keep their full ``_known`` array
 (``<group>.known_full``), single-row groups and ``action_mask`` are dense. Every label lives in a
 separate ``labels.*`` file, so a trainer can build batches from observation files alone.
 
+Label conventions: ``played`` is always a legal action. ``choice`` is the teacher's pick and is
+legal too, except that a refused root (the search refused it; no teacher choice exists) stores
+``CHOICE_NONE`` (-1) with ``policy_ok`` false. Unsearched roots (single legal action, refused)
+store NaN ``values``; ``value_ok`` false stores NaN ``hp_kept`` and ``realised_v2``; every NaN is the
+canonical quiet NaN so shard bytes are deterministic.
+
 Only the host-importable modules must stay free of numpy: nothing imported at startup may import
 this module.
 """
@@ -19,7 +25,9 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
+import shutil
 from typing import Iterable, Mapping, Sequence
 
 import numpy as np
@@ -35,6 +43,8 @@ HOLDOUT_FRACTION = 0.05
 _HOLDOUT_DOMAIN = b"spire-learn-distill-validation-v1:"
 
 # Enums stored as int8 in the label files (the index in the tuple is the stored value).
+CHOICE_NONE = -1
+_INT32_LIMIT = 2 ** 31
 ROOT_KINDS = ("searched", "single_legal", "refused")
 OUTCOMES = ("win", "death", "escaped", "none")
 
@@ -62,10 +72,7 @@ def validation_runs(train_run_ids: Iterable[str]) -> frozenset[str]:
         raise ValueError("run ids must be non-empty strings")
     ranked = sorted(
         ids,
-        key=lambda run_id: (
-            int.from_bytes(hashlib.sha256(_HOLDOUT_DOMAIN + run_id.encode()).digest()[:8], "big"),
-            run_id,
-        ),
+        key=lambda run_id: int.from_bytes(hashlib.sha256(_HOLDOUT_DOMAIN + run_id.encode()).digest(), "big"),
     )
     return frozenset(ranked[:round(HOLDOUT_FRACTION * len(ids))])
 
@@ -203,24 +210,46 @@ class StoredLabels:
     turn: int
 
 
+def _canonical(value: float) -> float:
+    return math.nan if math.isnan(value) else value
+
+
 def _label_record(labels: DecisionLabels, frame_mask: np.ndarray) -> dict[str, object]:
     legal = [int(action) for action in labels.legal]
     if legal != [int(a) for a in np.flatnonzero(frame_mask)]:
         raise ShardError("labels.legal must equal the frame's action_mask legal set")
+    if labels.root not in ROOT_KINDS or labels.outcome not in OUTCOMES:
+        raise ShardError("unknown root kind or outcome")
+    searched = labels.root == "searched"
     if labels.values is None:
         values = [math.nan] * len(legal)
     else:
-        values = [float(v) for v in labels.values]
+        values = [_canonical(float(v)) for v in labels.values]
         if len(values) != len(legal):
             raise ShardError("labels.values needs one value per legal action")
-    if labels.choice not in legal or labels.played not in legal:
-        raise ShardError("choice and played must be legal actions")
-    if labels.root not in ROOT_KINDS or labels.outcome not in OUTCOMES:
-        raise ShardError("unknown root kind or outcome")
+    if searched and not all(math.isfinite(v) for v in values):
+        raise ShardError("a searched root needs a finite value for every legal action")
+    if not searched and not all(math.isnan(v) for v in values):
+        raise ShardError("an unsearched root must store NaN values")
+    if labels.policy_ok and not searched:
+        raise ShardError("policy_ok requires a searched root")
+    played, choice = int(labels.played), int(labels.choice)
+    if played not in legal:
+        raise ShardError("played must be a legal action")
+    if choice == CHOICE_NONE:
+        if labels.root != "refused" or labels.policy_ok:
+            raise ShardError("choice -1 is only for a refused root with policy_ok false")
+    elif choice not in legal:
+        raise ShardError("choice must be a legal action")
+    scalars = {}
     for name in ("hp_kept", "realised_v2"):
         value = float(getattr(labels, name))
-        if labels.value_ok != math.isfinite(value):
-            raise ShardError(f"{name} must be finite exactly when value_ok is true")
+        if math.isinf(value) or (math.isnan(value) == bool(labels.value_ok)):
+            raise ShardError(f"{name} must be finite exactly when value_ok is true (and never infinite)")
+        scalars[name] = _canonical(value)
+    for name in ("samples", "turn"):
+        if not 0 <= int(getattr(labels, name)) < _INT32_LIMIT:
+            raise ShardError(f"{name} must be in [0, 2**31)")
     case = tuple(int(part) for part in labels.case)
     if len(case) != 2 or min(case) < 0:
         raise ShardError("case must be (shard index, local index)")
@@ -228,9 +257,9 @@ def _label_record(labels: DecisionLabels, frame_mask: np.ndarray) -> dict[str, o
         raise ShardError("research_seed must fit uint64")
     return {
         "legal": legal, "values": values, "samples": int(labels.samples),
-        "choice": int(labels.choice), "played": int(labels.played),
+        "choice": choice, "played": played,
         "root": ROOT_KINDS.index(labels.root), "outcome": OUTCOMES.index(labels.outcome),
-        "hp_kept": float(labels.hp_kept), "realised_v2": float(labels.realised_v2),
+        "hp_kept": scalars["hp_kept"], "realised_v2": scalars["realised_v2"],
         "value_ok": bool(labels.value_ok), "policy_ok": bool(labels.policy_ok),
         "research_seed": int(labels.research_seed), "case": case,
         "run_hash": run_hash(labels.run_id), "turn": int(labels.turn),
@@ -330,50 +359,103 @@ class ShardWriter:
         return spec is not None and spec.occupied_key is None
 
     def close(self) -> dict[str, object]:
+        """Write the shard atomically (temp sibling, manifest last, rename); retry-safe on failure."""
         if self._closed:
             raise ShardError("shard writer is closed")
+        if self._path.exists():
+            raise FileExistsError(f"shard path exists: {self._path}")
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        temp = self._path.with_name(f"{self._path.name}.tmp-{os.getpid()}")
+        shutil.rmtree(temp, ignore_errors=True)
+        try:
+            temp.mkdir()
+            files: dict[str, dict[str, object]] = {}
+            if self._rows:
+                for name, array in sorted(self._arrays().items()):
+                    target = temp / f"{name}.npy"
+                    np.save(target, array, allow_pickle=False)
+                    files[name] = {
+                        "sha256": _file_sha256(target), "dtype": array.dtype.str, "shape": list(array.shape),
+                    }
+            manifest = {
+                "schema": SHARD_SCHEMA,
+                "observation": _schema_identity(self._schema),
+                "rows": self._rows,
+                "files": files,
+                "provenance": self._provenance,
+            }
+            with (temp / MANIFEST).open("wb") as handle:
+                handle.write(_json_bytes(manifest))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.rename(temp, self._path)
+        except BaseException:
+            shutil.rmtree(temp, ignore_errors=True)
+            raise
         self._closed = True
-        self._path.mkdir(parents=True, exist_ok=False)
-        files: dict[str, dict[str, object]] = {}
-        if self._rows:
-            for name, array in sorted(self._arrays().items()):
-                target = self._path / f"{name}.npy"
-                np.save(target, array, allow_pickle=False)
-                files[name] = {
-                    "sha256": _file_sha256(target), "dtype": array.dtype.str, "shape": list(array.shape),
-                }
-        manifest = {
-            "schema": SHARD_SCHEMA,
-            "observation": _schema_identity(self._schema),
-            "rows": self._rows,
-            "files": files,
-            "provenance": self._provenance,
-        }
-        (self._path / MANIFEST).write_bytes(_json_bytes(manifest))
         return manifest
 
 
 # --- reader ----------------------------------------------------------------------------------
 
+def _expected_observation_files(schema: CombatSchema) -> set[str]:
+    row_groups, single_groups = _layout(schema)
+    view = schema.view
+    names = {"action_mask"}
+    for spec in row_groups:
+        names |= {f"{spec.key}.{kind}" for kind in ("offsets", "rows", "values", "known")}
+        if spec.key in view.optional_known_empty_groups:
+            names.add(f"{spec.key}.known_full")
+    for spec in single_groups:
+        names |= {f"{spec.key}.values", f"{spec.key}.known"}
+    return names
+
+
+_LABEL_NAMES = {f"{LABEL_PREFIX}{name}" for name in _LABEL_FILES}
+_PER_ROW_LABELS = _LABEL_NAMES - {"labels.legal_offsets", "labels.legal", "labels.values"}
+
+
 class ShardReader:
-    """Read-only, memory-mapped access to one shard."""
+    """Read-only access to one shard; arrays are memory-mapped lazily on first use."""
 
     def __init__(self, path: Path | str, schema: CombatSchema | None = None):
         self.path = Path(path)
         try:
-            self.manifest = json.loads((self.path / MANIFEST).read_text())
-        except (OSError, ValueError) as error:
+            manifest = json.loads((self.path / MANIFEST).read_text())
+            if manifest.get("schema") != SHARD_SCHEMA:
+                raise ShardError("shard schema is not accepted")
+            rows, files, observation = manifest["rows"], manifest["files"], manifest["observation"]
+            if type(rows) is not int or rows < 0 or not isinstance(files, dict):
+                raise ShardError("shard manifest is malformed")
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
             raise ShardError(f"unreadable shard manifest: {error}") from None
-        if self.manifest.get("schema") != SHARD_SCHEMA:
-            raise ShardError("shard schema is not accepted")
-        self.rows: int = self.manifest["rows"]
+        self.manifest = manifest
+        self.rows: int = rows
         self.schema = schema
-        if schema is not None and self.manifest["observation"] != _schema_identity(schema):
+        if schema is not None and observation != _schema_identity(schema):
             raise ShardError("shard observation schema does not match the given CombatSchema")
-        self._arrays = {
-            name: np.load(self.path / f"{name}.npy", mmap_mode="r", allow_pickle=False)
-            for name in self.manifest["files"]
-        }
+        self._cache: dict[str, np.ndarray] = {}
+
+    def __enter__(self) -> "ShardReader":
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Release every mapped file; later access re-opens lazily."""
+        for array in self._cache.values():
+            mapped = getattr(array, "_mmap", None)
+            if mapped is not None:
+                try:
+                    mapped.close()
+                except (BufferError, ValueError):
+                    pass  # a live view still holds it; the cache drop lets it be collected
+        self._cache.clear()
+
+    @property
+    def open_files(self) -> int:
+        return len(self._cache)
 
     def __len__(self) -> int:
         return self.rows
@@ -387,41 +469,86 @@ class ShardReader:
         return tuple(name for name in self.manifest["files"] if name.startswith(LABEL_PREFIX))
 
     def array(self, name: str) -> np.ndarray:
-        return self._arrays[name]
+        if name not in self.manifest["files"]:
+            raise ShardError(f"shard has no file {name}")
+        if name not in self._cache:
+            try:
+                self._cache[name] = np.load(self.path / f"{name}.npy", mmap_mode="r", allow_pickle=False)
+            except (OSError, ValueError, EOFError) as error:
+                raise ShardError(f"shard file {name} is unreadable: {error}") from None
+        return self._cache[name]
 
-    def verify(self) -> None:
-        """Hashes, shapes and CSR structure; raises ``ShardError`` on any mismatch."""
+    def verify(self, schema: CombatSchema | None = None) -> None:
+        """Hashes, required files, shapes, CSR structure and label codes; only ``ShardError`` escapes."""
+        schema = schema or self.schema
+        try:
+            self._verify(schema)
+        except ShardError:
+            raise
+        except (OSError, ValueError, KeyError, IndexError, TypeError) as error:
+            raise ShardError(f"shard fails verification: {type(error).__name__}: {error}") from None
+
+    def _verify(self, schema: CombatSchema | None) -> None:
         listed = self.manifest["files"]
         on_disk = {p.name for p in self.path.iterdir()} - {MANIFEST}
         if on_disk != {f"{name}.npy" for name in listed}:
             raise ShardError("shard directory files differ from its manifest")
-        for name, entry in listed.items():
-            if _file_sha256(self.path / f"{name}.npy") != entry["sha256"]:
-                raise ShardError(f"shard file {name} fails its sha256")
-            array = self._arrays[name]
-            if array.dtype.str != entry["dtype"] or list(array.shape) != entry["shape"]:
-                raise ShardError(f"shard file {name} dtype/shape differs from its manifest")
         if self.rows == 0:
             if listed:
                 raise ShardError("a zero-row shard lists files")
             return
-        for name in listed:
-            if name.endswith(".offsets"):
-                offsets = self._arrays[name]
-                stem = name[:-len(".offsets")]
-                total = len(self._arrays[f"{stem}.rows"])
-                if (len(offsets) != self.rows + 1 or offsets[0] != 0 or offsets[-1] != total
-                        or np.any(np.diff(offsets) < 0)):
-                    raise ShardError(f"{name} is not a valid offsets array")
-        legal_offsets = self._arrays["labels.legal_offsets"]
-        if (len(legal_offsets) != self.rows + 1 or legal_offsets[-1] != len(self._arrays["labels.legal"])
-                or len(self._arrays["labels.values"]) != len(self._arrays["labels.legal"])):
-            raise ShardError("labels.legal_offsets is inconsistent")
-        for name in self.label_files:
-            if name in ("labels.legal", "labels.values", "labels.legal_offsets"):
+        required = set(_LABEL_NAMES)
+        if schema is not None:
+            required |= _expected_observation_files(schema)
+        if missing := required - set(listed):
+            raise ShardError(f"shard manifest lacks required files: {sorted(missing)}")
+        for name, entry in listed.items():
+            if _file_sha256(self.path / f"{name}.npy") != entry["sha256"]:
+                raise ShardError(f"shard file {name} fails its sha256")
+            array = self.array(name)
+            if array.dtype.str != entry["dtype"] or list(array.shape) != entry["shape"]:
+                raise ShardError(f"shard file {name} dtype/shape differs from its manifest")
+        rows = self.rows
+        stems = {name[:-len(".offsets")] for name in listed if name.endswith(".offsets")}
+        for name in self.observation_files:
+            stem, _, kind = name.rpartition(".")
+            if kind == "offsets" or (stem in stems and kind in ("rows", "values", "known")):
                 continue
-            if len(self._arrays[name]) != self.rows:
+            if kind == "rows":
+                raise ShardError(f"{name} has no matching CSR files")
+            if len(self.array(name)) != rows:
+                raise ShardError(f"dense file {name} does not have one entry per decision")
+        for stem in stems:
+            offsets = self.array(f"{stem}.offsets")
+            if len(offsets) != rows + 1 or offsets[0] != 0 or np.any(np.diff(offsets) < 0):
+                raise ShardError(f"{stem}.offsets is not a valid offsets array")
+            for kind in ("rows", "values", "known"):
+                if f"{stem}.{kind}" not in listed or len(self.array(f"{stem}.{kind}")) != offsets[-1]:
+                    raise ShardError(f"{stem}.{kind} length differs from its offsets")
+        legal_offsets = self.array("labels.legal_offsets")
+        legal = self.array("labels.legal")
+        if (len(legal_offsets) != rows + 1 or legal_offsets[0] != 0 or np.any(np.diff(legal_offsets) < 0)
+                or legal_offsets[-1] != len(legal) or len(self.array("labels.values")) != len(legal)):
+            raise ShardError("labels.legal_offsets is inconsistent")
+        for name in _PER_ROW_LABELS:
+            if len(self.array(name)) != rows:
                 raise ShardError(f"{name} does not have one entry per decision")
+        root, outcome = self.array("labels.root"), self.array("labels.outcome")
+        if root.min() < 0 or root.max() >= len(ROOT_KINDS) or outcome.min() < 0 or outcome.max() >= len(OUTCOMES):
+            raise ShardError("label enum code out of range")
+        row_of = np.repeat(np.arange(rows), np.diff(legal_offsets))
+        for name, allow_none in (("labels.played", False), ("labels.choice", True)):
+            column = np.asarray(self.array(name))
+            hits = np.bincount(row_of, weights=(legal == column[row_of]), minlength=rows)
+            absent = hits < 1
+            if allow_none:
+                none = column == CHOICE_NONE
+                if np.any(none & ((np.asarray(root) != ROOT_KINDS.index("refused"))
+                                  | np.asarray(self.array("labels.policy_ok")))):
+                    raise ShardError("choice -1 is only valid for a refused root with policy_ok false")
+                absent &= ~none
+            if np.any(absent):
+                raise ShardError(f"{name} is not a legal action of its row")
 
     def _check_index(self, index: int) -> int:
         if not 0 <= index < self.rows:
@@ -436,12 +563,12 @@ class ShardReader:
             if name.endswith(".offsets"):
                 continue
             stem, _, kind = name.rpartition(".")
-            offsets = self._arrays.get(f"{stem}.offsets") if kind in ("rows", "values", "known") else None
-            if name == "action_mask" or kind == "known_full" or offsets is None:
-                arrays[name] = self._arrays[name][index]
+            offsets = f"{stem}.offsets" in self.manifest["files"] and kind in ("rows", "values", "known")
+            if offsets:
+                bounds = self.array(f"{stem}.offsets")
+                arrays[name] = self.array(name)[int(bounds[index]):int(bounds[index + 1])]
             else:
-                low, high = int(offsets[index]), int(offsets[index + 1])
-                arrays[name] = self._arrays[name][low:high]
+                arrays[name] = self.array(name)[index]
         return arrays
 
     def frame(self, index: int, schema: CombatSchema | None = None) -> CombatFrame:
@@ -452,18 +579,20 @@ class ShardReader:
 
     def labels(self, index: int) -> StoredLabels:
         index = self._check_index(index)
-        a = self._arrays
-        low, high = int(a["labels.legal_offsets"][index]), int(a["labels.legal_offsets"][index + 1])
+        a = self.array
+        offsets = a("labels.legal_offsets")
+        low, high = int(offsets[index]), int(offsets[index + 1])
+        case = a("labels.case")[index]
         return StoredLabels(
-            legal=a["labels.legal"][low:high], values=a["labels.values"][low:high],
-            samples=int(a["labels.samples"][index]), choice=int(a["labels.choice"][index]),
-            played=int(a["labels.played"][index]), root=ROOT_KINDS[int(a["labels.root"][index])],
-            outcome=OUTCOMES[int(a["labels.outcome"][index])],
-            hp_kept=float(a["labels.hp_kept"][index]), realised_v2=float(a["labels.realised_v2"][index]),
-            value_ok=bool(a["labels.value_ok"][index]), policy_ok=bool(a["labels.policy_ok"][index]),
-            research_seed=int(a["labels.research_seed"][index]),
-            case=(int(a["labels.case"][index][0]), int(a["labels.case"][index][1])),
-            run_hash=int(a["labels.run_hash"][index]), turn=int(a["labels.turn"][index]),
+            legal=a("labels.legal")[low:high], values=a("labels.values")[low:high],
+            samples=int(a("labels.samples")[index]), choice=int(a("labels.choice")[index]),
+            played=int(a("labels.played")[index]), root=ROOT_KINDS[int(a("labels.root")[index])],
+            outcome=OUTCOMES[int(a("labels.outcome")[index])],
+            hp_kept=float(a("labels.hp_kept")[index]), realised_v2=float(a("labels.realised_v2")[index]),
+            value_ok=bool(a("labels.value_ok")[index]), policy_ok=bool(a("labels.policy_ok")[index]),
+            research_seed=int(a("labels.research_seed")[index]),
+            case=(int(case[0]), int(case[1])),
+            run_hash=int(a("labels.run_hash")[index]), turn=int(a("labels.turn")[index]),
         )
 
 
@@ -475,7 +604,7 @@ def expand_decision(shard: ShardReader, index: int, schema: CombatSchema) -> Com
 
 
 __all__ = [
-    "SHARD_SCHEMA", "ROOT_KINDS", "OUTCOMES", "ShardError", "ShardWriter", "ShardReader",
+    "SHARD_SCHEMA", "CHOICE_NONE", "ROOT_KINDS", "OUTCOMES", "ShardError", "ShardWriter", "ShardReader",
     "DecisionLabels", "StoredLabels", "encode_decision", "decode_decision", "expand_decision",
     "run_hash", "validation_runs",
 ]

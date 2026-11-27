@@ -26,11 +26,14 @@ decision's own root). Mixed and censored fights get no value targets. Delta 6: a
 the turn cap keeps its decisions from earlier public turns as policy-only rows when there are at
 most KEPT_PREFIX_MAX of them (none otherwise); a fight that hits the fight cap keeps nothing.
 
-Every ROUNDTRIP_EVERY-th decision (by research seed) that is stored is re-read from the written
-shard and must expand to the Gym's compact observation byte for byte; a mismatch is an error, as
-is any Gym fault. ``chunk-manifest.json`` (deterministic: hashes, counts, provenance) is written
-last; ``report.json`` holds run-time measurements. A failed call leaves no chunk manifest; rerun
-the chunk into a fresh --output. ``verify_chunk`` (stdlib only) checks a finished chunk.
+Row r of every written shard with ``r % ROUNDTRIP_EVERY == 0`` (so row 0 of every non-empty
+shard) is re-read from disk and must expand to the Gym's compact observation byte for byte (by
+sha256 of the snapshot bytes taken in the worker); a mismatch is an error, as is any Gym fault and
+any root refusal outside ``search_view.ROOT_REFUSAL_CLASSES``. ``chunk-manifest.json``
+(deterministic: hashes, counts, provenance) is written last; ``report.json`` holds run-time
+measurements. A failed call leaves no chunk manifest; rerun the chunk into a fresh --output under
+``artifacts/development/neural-combat/distill/``. ``verify_chunk`` (stdlib only) checks a finished
+chunk's files, counts and provenance against what the caller meant to produce.
 """
 
 from __future__ import annotations
@@ -59,7 +62,7 @@ from spire_learn.neural.contracts import ModelConfig
 from spire_learn.neural.scenario_support import content_sha256, json_value
 from spire_learn.neural.search_one_move import terminal_score
 from spire_learn.neural.search_value import RootContext
-from spire_learn.neural.search_view import View
+from spire_learn.neural.search_view import ROOT_REFUSAL_CLASSES, View
 from spire_learn.neural.standard_stream import run_split
 
 # Pinned plan constants.
@@ -81,6 +84,12 @@ FIGHT_TYPES = ("teacher", "mixed")
 CAPS = ("turn_cap", "step_cap")
 _OUTCOME_LABELS = {"victory": "win", "death": "death", "escaped": "escaped"}
 _THREAD_VARIABLES = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+OUTPUT_ROOT = Path("artifacts/development/neural-combat/distill")
+# What verify_chunk compares: the chunk range, then these provenance fields of the chunk and every shard.
+EXPECTED_PROVENANCE = ("seed", "teacher", "config_sha256", "recipe_sha256", "states_table_sha256",
+                       "mixed_checkpoint_sha256", "mixed_every", "roundtrip_every", "case_limit",
+                       "gym_revision", "rules_epoch")
+EXPECTED_KEYS = ("first_shard", "shard_count", *EXPECTED_PROVENANCE)
 
 
 class RoundTripError(RuntimeError):
@@ -131,7 +140,6 @@ class LabelContext:
     teacher: object
     gym_revision: str
     schema_fingerprint: str | None
-    roundtrip_every: int
     mixed_checkpoint: str | None
     mixed_mapping: str | None
 
@@ -179,7 +187,22 @@ def plan_jobs(shards, holdout, *, seed: int, mixed_every: int, case_limit: int |
 # --- one fight -----------------------------------------------------------------------------
 
 def _root_kind(root: str) -> str:
-    return root if root in ("searched", "single_legal") else "refused"
+    if root in ("searched", "single_legal"):
+        return root
+    if root not in ROOT_REFUSAL_CLASSES:
+        raise RuntimeError(f"Unknown root class {root!r}: not a search root, a single legal action "
+                           "or a known Gym refusal")
+    return "refused"
+
+
+def frame_digest(schema_fingerprint: str, tensors) -> str:
+    """sha256 over a frame's fingerprint and every tensor's name, dtype, shape and bytes, in name order."""
+    digest = sha256(schema_fingerprint.encode())
+    for name in sorted(tensors):
+        item = tensors[name]
+        digest.update(f"\0{name}\0{item.dtype}\0{list(item.shape)}\0".encode())
+        digest.update(item.data)
+    return digest.hexdigest()
 
 
 def _end_values(rule, view, records, final_observation, info, outcome):
@@ -199,9 +222,8 @@ def _end_values(rule, view, records, final_observation, info, outcome):
                      for record in records]
 
 
-def label_fight(env, job: FightJob, view, schema, turn_column, teacher, *, player=None,
-                roundtrip_every: int = ROUNDTRIP_EVERY) -> dict:
-    """Play and label one fight; returns its stored rows (encoded) and counts."""
+def label_fight(env, job: FightJob, view, schema, turn_column, teacher, *, player=None) -> dict:
+    """Play and label one fight; returns its stored rows ``(encoded arrays, labels, Gym frame digest)``."""
     from spire_learn.neural.distill_data import CHOICE_NONE, DecisionLabels, encode_decision
     from spire_learn.neural.snapshot import snapshot_common
 
@@ -237,7 +259,7 @@ def label_fight(env, job: FightJob, view, schema, turn_column, teacher, *, playe
             all_tie = len(set(ordered)) == 1
         records.append({
             "arrays": encode_decision(frame, schema),
-            "frame": frame if decision["research_seed"] % roundtrip_every == 0 else None,
+            "digest": frame_digest(frame.schema_fingerprint, frame.tensors),
             "legal": legal, "values": ordered, "samples": samples,
             "choice": CHOICE_NONE if kind == "refused" else int(choice), "played": int(decision["choice"]),
             "root": kind, "refusal": root if kind == "refused" else None, "all_tie": all_tie,
@@ -268,7 +290,7 @@ def label_fight(env, job: FightJob, view, schema, turn_column, teacher, *, playe
     hp_kept = end["cleanup"] / fight["max_hp_start"] if value_ok and records else math.nan
     realised = end.get("realised_v2", [math.nan] * len(records))
     position = {id(record): index for index, record in enumerate(records)}
-    rows, roundtrip = [], []
+    rows = []
     for record in kept:
         labels = DecisionLabels(
             legal=record["legal"], values=record["values"], samples=record["samples"], choice=record["choice"],
@@ -276,13 +298,11 @@ def label_fight(env, job: FightJob, view, schema, turn_column, teacher, *, playe
             realised_v2=realised[position[id(record)]] if value_ok else math.nan, value_ok=value_ok,
             policy_ok=record["policy_ok"], research_seed=record["research_seed"], case=(job.shard, job.local),
             run_id=job.run_id, turn=record["turn"])
-        if record["frame"] is not None:  # plain values: a CombatFrame does not cross process boundaries
-            roundtrip.append((len(rows), record["frame"].schema_fingerprint, dict(record["frame"].tensors)))
-        rows.append((record["arrays"], labels))
+        rows.append((record["arrays"], labels, record["digest"]))
     return {
         "shard": job.shard, "local": job.local, "series": job.series,
         "fight_type": "mixed" if job.mixed else "teacher", "outcome": fight["outcome"], "censor_reason": censor,
-        "decisions": len(records), "dropped": len(records) - len(kept), "rows": rows, "roundtrip": roundtrip,
+        "decisions": len(records), "dropped": len(records) - len(kept), "rows": rows,
         "roots": dict(Counter(record["root"] for record in kept)),
         "refusals": dict(Counter(record["refusal"] for record in kept if record["refusal"])),
         "all_tie": sum(record["all_tie"] for record in kept),
@@ -331,7 +351,7 @@ def _label_job(item):
         schema = _schema_for(descriptor, context.gym_revision, context.schema_fingerprint)
         player = _player_for(context, schema) if job.mixed else None
         return label_fight(env, job, View(descriptor), schema, _turn_column(descriptor), context.teacher,
-                           player=player, roundtrip_every=context.roundtrip_every)
+                           player=player)
 
 
 def _results(items, parallel):
@@ -365,10 +385,10 @@ def checkpoint_sha256(path: Path) -> dict:
 
 
 def check_roundtrip(reader, expected) -> int:
-    """Each ``(row, schema fingerprint, tensors)``: the stored row must expand to exactly those Gym bytes."""
-    for row, fingerprint, tensors in expected:
+    """Each ``(row, digest)``: the stored row must expand to the Gym frame with that ``frame_digest``."""
+    for row, digest in expected:
         stored = reader.frame(row)
-        if stored.schema_fingerprint != fingerprint or dict(stored.tensors) != tensors:
+        if frame_digest(stored.schema_fingerprint, stored.tensors) != digest:
             raise RoundTripError(f"shard {reader.path.name} row {row} does not expand to the Gym's observation")
     return len(expected)
 
@@ -406,7 +426,7 @@ def _count(counts: dict, result: dict) -> None:
     counts["decisions"][kind] += result["decisions"]
     counts["rows"][result["series"]] += rows
     counts["rows_by_fight_type"][kind] += rows
-    counts["value_rows"] += sum(labels.value_ok for _, labels in result["rows"])
+    counts["value_rows"] += sum(labels.value_ok for _, labels, _ in result["rows"])
     for root, n in result["roots"].items():
         counts["roots"][root] += n
     for refusal, n in result["refusals"].items():
@@ -504,7 +524,6 @@ def run_chunk(args, output: Path) -> dict:
         "holdout_runs": len(holdout), "holdout_sha256": content_sha256(sorted(holdout)),
     }
     context = LabelContext(teacher=teacher, gym_revision=live_revision, schema_fingerprint=schema.schema_fingerprint,
-                           roundtrip_every=args.roundtrip_every,
                            mixed_checkpoint=None if mixed is None else str(args.mixed_checkpoint),
                            mixed_mapping=mapping if mixed else None)
 
@@ -537,11 +556,11 @@ def run_chunk(args, output: Path) -> dict:
     pending_close = list(range(first, first + count))
     for result in _results([(job, context) for job in jobs], args.parallel):
         state = writers(result["shard"])[result["series"]]
-        for row, fingerprint, tensors in result["roundtrip"]:
-            state["roundtrip"].append((state["rows"] + row, fingerprint, tensors))
-        for arrays, labels in result["rows"]:
+        for arrays, labels, digest in result["rows"]:
+            if state["rows"] % args.roundtrip_every == 0:  # row r of the shard, independent of chunking
+                state["roundtrip"].append((state["rows"], digest))
             state["writer"].add(decode_decision(arrays, schema), labels)
-        state["rows"] += len(result["rows"])
+            state["rows"] += 1
         _count(counts, result)
         fight_cpu += result["cpu_seconds"]
         fight_wall += result["wall_seconds"]
@@ -572,32 +591,72 @@ def run_chunk(args, output: Path) -> dict:
     return manifest
 
 
-def verify_chunk(path: Path, *, first: int | None = None, count: int | None = None) -> dict:
-    """A finished chunk's manifest after checking every shard file hash (stdlib only, no numpy)."""
+def chunk_expectation(*, first_shard, shard_count, seed, teacher, config_sha256, recipe_sha256,
+                      states_table_sha256, mixed_checkpoint_sha256, mixed_every, roundtrip_every,
+                      gym_revision, rules_epoch, case_limit=None) -> dict:
+    """What a driver means to produce for one chunk (``case_limit`` stays None for real labels)."""
+    return dict(first_shard=first_shard, shard_count=shard_count, seed=seed, teacher=teacher,
+                config_sha256=config_sha256, recipe_sha256=recipe_sha256, states_table_sha256=states_table_sha256,
+                mixed_checkpoint_sha256=mixed_checkpoint_sha256, mixed_every=mixed_every,
+                roundtrip_every=roundtrip_every, case_limit=case_limit, gym_revision=gym_revision,
+                rules_epoch=rules_epoch)
+
+
+def _check_provenance(what, provenance, expected):
+    for key in EXPECTED_PROVENANCE:
+        if key not in provenance or provenance[key] != expected[key]:
+            raise ChunkError(f"{what} {key} is {provenance.get(key)!r}, expected {expected[key]!r}")
+
+
+def verify_chunk(path: Path, expected) -> dict:
+    """A finished chunk's manifest, once it holds exactly what ``expected`` describes (stdlib only, no numpy).
+
+    ``expected`` (see ``chunk_expectation``) names every key of ``EXPECTED_KEYS``. The chunk and every shard
+    must record that range and provenance, every shard file must match its hash, and the chunk's per-shard
+    rows and row counts must agree with the shard manifests.
+    """
     path = Path(path)
+    if set(expected) != set(EXPECTED_KEYS):
+        raise ValueError(f"expected must name exactly {sorted(EXPECTED_KEYS)}")
     try:
         manifest = json.loads((path / CHUNK_MANIFEST).read_text())
         if manifest.get("schema") != CHUNK_SCHEMA:
             raise ChunkError("not a distillation label chunk")
         start, size = manifest["first_shard"], manifest["shard_count"]
-        if (first is not None and start != first) or (count is not None and size != count):
-            raise ChunkError("chunk covers a different shard range")
-        expected = {shard_name(index) for index in range(start, start + size)}
+        if (start, size) != (expected["first_shard"], expected["shard_count"]):
+            raise ChunkError(f"chunk covers shards {start}:{size}, expected "
+                             f"{expected['first_shard']}:{expected['shard_count']}")
+        _check_provenance("chunk", manifest["provenance"], expected)
+        names = [shard_name(index) for index in range(start, start + size)]
+        counts = manifest["counts"]
         for series in SERIES:
             shards = manifest["shards"][series]
-            if set(shards) != expected or {p.name for p in (path / series).iterdir()} != expected:
+            if set(shards) != set(names) or {p.name for p in (path / series).iterdir()} != set(names):
                 raise ChunkError(f"{series} series does not hold exactly the chunk's shards")
-            for name, item in shards.items():
-                directory = path / series / name
+            for index, name in zip(range(start, start + size), names):
+                item, directory = shards[name], path / series / name
                 if _file_sha256(directory / "manifest.json") != item["manifest_sha256"]:
                     raise ChunkError(f"{series}/{name} manifest fails its sha256")
-                files = json.loads((directory / "manifest.json").read_text())["files"]
+                shard = json.loads((directory / "manifest.json").read_text())
+                _check_provenance(f"{series}/{name}", shard["provenance"], expected)
+                if (shard["provenance"].get("series"), shard["provenance"].get("shard_index")) != (series, index):
+                    raise ChunkError(f"{series}/{name} records another series or shard index")
+                if shard["rows"] != item["rows"]:
+                    raise ChunkError(f"{series}/{name} holds {shard['rows']} rows, the chunk records {item['rows']}")
+                files = shard["files"]
                 if {p.name for p in directory.iterdir()} != {"manifest.json", *(f"{n}.npy" for n in files)}:
                     raise ChunkError(f"{series}/{name} files differ from its manifest")
                 for file, entry_ in files.items():
                     if _file_sha256(directory / f"{file}.npy") != entry_["sha256"]:
                         raise ChunkError(f"{series}/{name}/{file} fails its sha256")
-    except (OSError, ValueError, KeyError, TypeError) as error:
+            if sum(shards[name]["rows"] for name in names) != counts["rows"][series]:
+                raise ChunkError(f"{series} shard rows disagree with the chunk's row count")
+        total = sum(counts["rows"].values())
+        if (sum(counts["rows_by_fight_type"].values()) != total or sum(counts["roots"].values()) != total
+                or counts["fights"] != {kind: counts["fights"][kind] for kind in FIGHT_TYPES}
+                or sum(counts["fights"].values()) != sum(counts["fights_by_series"].values())):
+            raise ChunkError("chunk counts are inconsistent")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         if isinstance(error, ChunkError):
             raise
         raise ChunkError(f"chunk {path} fails verification: {error}") from None
@@ -633,7 +692,7 @@ def main(argv=None):
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--mixed-checkpoint", type=Path, help="checkpoint directory of the mixed-fight player")
     parser.add_argument("--mixed-every", type=_non_negative, default=MIXED_EVERY)
-    parser.add_argument("--output", type=Path, required=True, help="a fresh chunk directory under artifacts/")
+    parser.add_argument("--output", type=Path, required=True, help=f"a fresh chunk directory under {OUTPUT_ROOT}/")
     parser.add_argument("--parallel", type=entry._positive, default=1)
     parser.add_argument("--roundtrip-every", type=entry._positive, default=ROUNDTRIP_EVERY)
     parser.add_argument("--case-limit", type=entry._positive,
@@ -641,8 +700,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     output = (_ROOT / args.output).resolve()
-    if not output.is_relative_to((_ROOT / "artifacts").resolve()):
-        parser.error("--output must resolve under artifacts/")
+    if not output.is_relative_to((_ROOT / OUTPUT_ROOT).resolve()):
+        parser.error(f"--output must resolve under {OUTPUT_ROOT}/")
     expected = os.environ.get("SPIRE_LEARN_RUNNER_OUTPUT")
     if expected and not output.is_relative_to(Path(expected).resolve()):
         parser.error("--output must be inside SPIRE_LEARN_RUNNER_OUTPUT")

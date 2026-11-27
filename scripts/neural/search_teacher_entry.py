@@ -255,7 +255,8 @@ def play_fight(env, case, view, turn_column, teacher, *, research_seed,
     - ``chooser(observation, legal, teacher_result, rng) -> action`` picks the move to play;
       ``teacher_result`` is ``_decision``'s tuple ``(root, choice, values, cpu_seconds,
       refusals, simulations)`` and ``rng`` the fight's teacher Random. The move must be legal.
-      A decision row's ``choice`` is the move actually played.
+      A decision row's ``choice`` is the move actually played; the distillation label entry keeps the
+      teacher's choice (from ``teacher_result``) separately from the played move.
     - ``observer(observation, decision, turn)`` sees each decision row with the decision's own
       observation and public turn, before the move is stepped.
     - ``finisher(final_observation, info, outcome, censor_reason)`` sees the fight's end state

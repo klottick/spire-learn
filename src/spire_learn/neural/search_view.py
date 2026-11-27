@@ -150,6 +150,26 @@ def _native_contract():
     return contract_for_revision(_native.build_info().get('revision'))
 
 
+# Every root refusal class ``refusal_class`` can return for a Gym v1.2.5 (rules epoch gym-1.2.4)
+# ``UnsupportedBoundary`` at a public search root: the reasons of spire-core ``combat::belief::Unsupported``
+# (``reason()``) and its ``DisallowedContinuation`` labels, all under 80 characters. A ``state: `` class or
+# any other text is outside this set.
+ROOT_REFUSAL_CLASSES = frozenset({
+    # Unsupported::reason()
+    'the combat does not maintain public knowledge', 'the combat has ended', 'the combat is faulted',
+    'the combat is not at a published decision', 'hidden intents are not modelled', 'a card read a hidden intent',
+    'an executed enemy move was not identifiable', 'a hidden pre-rolled value was shown by damage',
+    'draw knowledge exceeds the exact model', 'a pre-rolled value has no consistent set',
+    # Unsupported::DisallowedContinuation labels
+    'a nested card play holds an enemy target', 'enemy spawn or replacement in progress',
+    'a rolled enemy branch awaits its move', 'a queued repeat holds a randomly chosen target',
+    'a queued Distilled Chaos play holds a random target', 'a queued Havoc play holds a random target',
+    'a queued Mayhem play holds a random target', 'a Flask of Poison bounce holds a randomly chosen target',
+    'an Alchemize proposal is held', 'Defect Chaos holds sampled orb rolls', 'generated cards are held unoffered',
+    'stream identity outside the gameplay derivation', 'actor stream without a slot', 'entry stream owner missing',
+})
+
+
 def refusal_class(error: BaseException) -> str:
     """The class of a root refusal: the Gym's reason text (it names a class of reason, never a value).
 

@@ -140,7 +140,7 @@ class LabelRuleTests(unittest.TestCase):
             shard=1000, local=local, series=series, mixed=mixed,
             research_seed=label.research_seed(9, 1000, local), mixed_seed=label.mixed_seed(9, 1000, local))
 
-    def run_fight(self, fight, decide, *, job=None, player=None, roundtrip_every=50):
+    def run_fight(self, fight, decide, *, job=None, player=None):
         script = iter(decide) if not callable(decide) else None
 
         def fake_decision(env, observation, legal, view, teacher, rng, seed):
@@ -148,12 +148,12 @@ class LabelRuleTests(unittest.TestCase):
 
         with patch.object(self.label.entry, "_decision", side_effect=fake_decision):
             return self.label.label_fight(fight, job or self.job(), self.obs.view, self.schema, self.obs.turn_column,
-                                          TEACHER, player=player, roundtrip_every=roundtrip_every)
+                                          TEACHER, player=player)
 
     def write(self, results, name="s"):
         writer = self.data.ShardWriter(Path(self.temp.name) / name, self.schema, {"test": name})
         for result in results:
-            for arrays, labels in result["rows"]:
+            for arrays, labels, _ in result["rows"]:
                 writer.add(self.data.decode_decision(arrays, self.schema), labels)
         writer.close()
         reader = self.data.ShardReader(Path(self.temp.name) / name, self.schema)
@@ -211,7 +211,7 @@ class LabelRuleTests(unittest.TestCase):
         self.assertTrue(any(by_player) and not all(by_player))
         played = [0 if flag else 2 for flag in by_player]
         self.assertEqual(fight.actions, played)
-        labels = [labels for _, labels in result["rows"]]
+        labels = [labels for _, labels, _ in result["rows"]]
         self.assertEqual([l.played for l in labels], played)
         self.assertEqual([l.choice for l in labels], [2] * 8)  # the teacher labels every decision
         self.assertTrue(all(l.policy_ok for l in labels))
@@ -222,7 +222,7 @@ class LabelRuleTests(unittest.TestCase):
         fight = FakeFight(lambda i: self.obs.make(turn=1), length=3, final=self.obs.make(turn=1, cleanup=30),
                           cleanup=30)
         result = self.run_fight(fight, self.default, job=self.job(local=4, mixed=True), player=FakePlayer())
-        labels = [labels for _, labels in result["rows"]]
+        labels = [labels for _, labels, _ in result["rows"]]
         self.assertEqual(len(labels), 3)
         self.assertTrue(all(not l.value_ok and math.isnan(l.hp_kept) and math.isnan(l.realised_v2)
                             and l.outcome == "win" for l in labels))
@@ -240,7 +240,7 @@ class LabelRuleTests(unittest.TestCase):
         with patch.object(label, "TURN_CAP", 4), patch.object(label, "KEPT_PREFIX_MAX", 3):
             result = self.run_fight(FakeFight(turns), self.default)
         self.assertEqual((result["censor_reason"], result["decisions"], result["dropped"]), ("turn_cap", 7, 4))
-        labels = [labels for _, labels in result["rows"]]
+        labels = [labels for _, labels, _ in result["rows"]]
         self.assertEqual([l.turn for l in labels], [1, 1, 1])
         self.assertTrue(all(l.policy_ok and not l.value_ok and l.outcome == "none" and math.isnan(l.hp_kept)
                             for l in labels))
@@ -283,7 +283,7 @@ class LabelRuleTests(unittest.TestCase):
             return self.run_fight(fight, self.default), final
 
         result, final = play("victory", 40)
-        labels = [labels for _, labels in result["rows"]]
+        labels = [labels for _, labels, _ in result["rows"]]
         # 0.55 + 0.4 * 40/80 + 0.4 * (1.5 * (85 - 80) - spent) / 80; spent 12 + 30, then 30.
         for got, expected in zip([l.realised_v2 for l in labels], [0.5775, 0.6375]):
             self.assertAlmostEqual(got, expected, places=12)
@@ -293,7 +293,7 @@ class LabelRuleTests(unittest.TestCase):
         self.assertEqual([(l.outcome, l.hp_kept, l.value_ok) for l in labels], [("win", 0.5, True)] * 2)
 
         died, _ = play("death", None)
-        self.assertEqual([(l.outcome, l.hp_kept, l.realised_v2) for _, l in died["rows"]], [("death", 0.0, -1.0)] * 2)
+        self.assertEqual([(l.outcome, l.hp_kept, l.realised_v2) for _, l, _ in died["rows"]], [("death", 0.0, -1.0)] * 2)
         escaped, _ = play("escaped", 40)
         self.assertAlmostEqual(escaped["rows"][0][1].realised_v2, -0.1725, places=12)
         self.assertEqual(escaped["rows"][0][1].outcome, "escaped")
@@ -305,13 +305,13 @@ class LabelRuleTests(unittest.TestCase):
     def test_single_legal_refused_and_all_tie_rows(self):
         observations = [self.obs.make(turn=1, legal=(2,)), self.obs.make(turn=1, legal=(0, 1)),
                         self.obs.make(turn=1, legal=(0, 1)), self.obs.make(turn=2, legal=(0, 1))]
-        script = [("single_legal", 2, None, None, 0, None), ("runic_dome", 0, None, None, 0, None),
+        script = [("single_legal", 2, None, None, 0, None), ("a card read a hidden intent", 0, None, None, 0, None),
                   searched({0: 0.5, 1: 0.5}, choice=1), searched({0: 0.25, 1: 0.75})]
         fight = FakeFight(lambda i: observations[i], length=4, final=self.obs.make(turn=2, cleanup=30), cleanup=30)
         result = self.run_fight(fight, script)
         self.assertEqual(fight.actions, [2, 0, 1, 1])
         self.assertEqual((result["roots"], result["refusals"], result["all_tie"]),
-                         ({"single_legal": 1, "refused": 1, "searched": 2}, {"runic_dome": 1}, 1))
+                         ({"single_legal": 1, "refused": 1, "searched": 2}, {"a card read a hidden intent": 1}, 1))
         reader = self.write([result])
         rows = [reader.labels(index) for index in range(4)]
         self.assertEqual([(r.root, r.choice, r.played, r.policy_ok) for r in rows],
@@ -325,21 +325,36 @@ class LabelRuleTests(unittest.TestCase):
         self.assertEqual([r.samples for r in rows], [0, 0, 32, 32])
 
     def test_roundtrip_assertion_fires_on_mismatch(self):
+        from spire_learn.neural.contracts import BufferArray
+
         label = self.label
         fight = FakeFight(lambda i: self.obs.make(turn=1, hp=50 - i), length=3, final=self.obs.make(turn=1, cleanup=30),
                           cleanup=30)
-        result = self.run_fight(fight, self.default, roundtrip_every=1)
-        self.assertEqual([row for row, *_ in result["roundtrip"]], [0, 1, 2])
-        reader = self.write([result])
-        self.assertEqual(label.check_roundtrip(reader, result["roundtrip"]), 3)
-        _, fingerprint, other = result["roundtrip"][1]
-        with self.assertRaises(label.RoundTripError):
-            label.check_roundtrip(reader, [(0, fingerprint, other)])
-        # The snapshot kept for the check is exactly the Gym arrays.
-        tensors = result["roundtrip"][0][2]
+        result = self.run_fight(fight, self.default)
+        digests = [digest for *_, digest in result["rows"]]
+        # Each row carries the digest of exactly the Gym arrays of its decision.
         raw = self.obs.make(turn=1, hp=50)
-        self.assertEqual(set(tensors), set(raw))
-        self.assertTrue(all(tensors[k].data == self.np.ascontiguousarray(raw[k]).tobytes() for k in raw))
+        tensors = {k: BufferArray(str(v.dtype), tuple(v.shape), self.np.ascontiguousarray(v).tobytes())
+                   for k, v in raw.items()}
+        self.assertEqual(digests[0], label.frame_digest(self.schema.schema_fingerprint, tensors))
+        self.assertEqual(len(set(digests)), 3)
+        reader = self.write([result])
+        self.assertEqual(label.check_roundtrip(reader, list(enumerate(digests))), 3)
+        with self.assertRaises(label.RoundTripError):
+            label.check_roundtrip(reader, [(0, digests[1])])
+
+    def test_unknown_root_class_raises(self):
+        script = [("state: the session is closed", 0, None, None, 0, None)]
+        fight = FakeFight(lambda i: self.obs.make(turn=1), length=1, final=self.obs.make(turn=1, cleanup=30), cleanup=30)
+        with self.assertRaisesRegex(RuntimeError, "Unknown root class"):
+            self.run_fight(fight, script)
+        from spire_learn.neural.search_view import ROOT_REFUSAL_CLASSES
+
+        self.assertTrue(all(len(text) < 80 and not text.startswith("state: ") for text in ROOT_REFUSAL_CLASSES))
+        self.assertLessEqual({"a card read a hidden intent", "draw knowledge exceeds the exact model",
+                              "a nested card play holds an enemy target", "a queued Distilled Chaos play holds a random target",
+                              "an executed enemy move was not identifiable", "a hidden pre-rolled value was shown by damage"},
+                             ROOT_REFUSAL_CLASSES)
 
 
 def _native_ready():
@@ -367,23 +382,32 @@ class LabelChunkNativeTests(unittest.TestCase):
             "SPIRE_LEARN_RUNNER_OUTPUT", ROOT / "artifacts"))
         cls.root = Path(cls.parent.name)
         recipe = load_recipe(cls.RECIPE)
-        teacher, _, _ = label.entry._teacher(cls.TEACHERS, "current-v2", None)
-        _, revision, _, mapping = label._check_gym(recipe, teacher)
+        teacher, teacher_sha, _ = label.entry._teacher(cls.TEACHERS, "current-v2", None)
+        _, revision, live, mapping = label._check_gym(recipe, teacher)
         shard = generate_standard_shard(recipe, split="train", shard_index=1000, validate=gym_validator(recipe=recipe))
         descriptor = label.entry.preflight([json_value(shard.manifest["cases"][0])], "train")
         cls.schema = parse_combat_descriptor(descriptor, revision=revision)
         cls.checkpoint = save_fixture_checkpoint(
             cls.root / "mixed-checkpoint", cls.schema, label.MIXED_MODEL_CONFIG,
             standard_ff_identity(label.MIXED_MODEL_CONFIG, mapping))
+        cls.identity = dict(teacher="current-v2", config_sha256=teacher_sha, states_table_sha256=recipe.table_sha256,
+                            recipe_sha256=label._file_sha256(cls.RECIPE), gym_revision=revision,
+                            rules_epoch=live.rules_epoch)
 
     @classmethod
     def tearDownClass(cls):
         cls.parent.cleanup()
 
-    def label_chunk(self, name, shards, *, parallel=1, mixed_every=2, roundtrip_every=1, limit=2):
+    def expect(self, first, count, *, seed=20261127, mixed_every=2, roundtrip_every=1, case_limit=2):
+        return self.label.chunk_expectation(
+            first_shard=first, shard_count=count, seed=seed, mixed_every=mixed_every, roundtrip_every=roundtrip_every,
+            case_limit=case_limit, mixed_checkpoint_sha256=self.label.checkpoint_sha256(self.checkpoint)["sha256"]
+            if mixed_every else None, **self.identity)
+
+    def label_chunk(self, name, shards, *, parallel=1, mixed_every=2, roundtrip_every=1, limit=2, seed=20261127):
         output = self.root / name
         argv = ["--recipe", str(self.RECIPE), "--teacher", "current-v2", "--teachers", str(self.TEACHERS),
-                "--allow-uncalibrated", "--shards", shards, "--seed", "20261127", "--mixed-every", str(mixed_every),
+                "--allow-uncalibrated", "--shards", shards, "--seed", str(seed), "--mixed-every", str(mixed_every),
                 "--output", str(output), "--parallel", str(parallel), "--roundtrip-every", str(roundtrip_every),
                 "--case-limit", str(limit)]
         if mixed_every:
@@ -404,7 +428,7 @@ class LabelChunkNativeTests(unittest.TestCase):
                 name = label.shard_name(index)
                 self.assertEqual(self.shard_files(whole / series / name), self.shard_files(part / series / name))
 
-        manifest = label.verify_chunk(whole, first=1000, count=2)
+        manifest = label.verify_chunk(whole, self.expect(1000, 2))
         counts = manifest["counts"]
         self.assertEqual(sum(counts["fights"].values()), 4)
         self.assertGreaterEqual(counts["fights"]["mixed"], 1)
@@ -432,10 +456,56 @@ class LabelChunkNativeTests(unittest.TestCase):
                     if labels.root == "searched":
                         self.assertTrue(self.np.isfinite(labels.values).all())
 
-        victim = next((whole / "train" / label.shard_name(1000)).glob("labels.*.npy"))
-        victim.write_bytes(victim.read_bytes() + b"\0")
+        self.check_verification(whole)
+
+    def check_verification(self, whole):
+        import shutil
+
+        label = self.label
+        refused = {
+            "a --case-limit smoke chunk": self.expect(1000, 2, case_limit=None),
+            "another range": self.expect(1001, 2), "another seed": self.expect(1000, 2, seed=7),
+            "another mixed rate": self.expect(1000, 2, mixed_every=5),
+            "another round-trip rate": self.expect(1000, 2, roundtrip_every=50),
+            "another teacher config": {**self.expect(1000, 2), "config_sha256": "0" * 64},
+        }
+        for what, expected in refused.items():
+            with self.subTest(what), self.assertRaises(label.ChunkError):
+                label.verify_chunk(whole, expected)
+        with self.assertRaises(ValueError):
+            label.verify_chunk(whole, {"seed": 20261127})  # every expected key must be named
+
+        # A different-seed chunk at the same range is refused; it verifies against its own seed. With the
+        # default --roundtrip-every 50, row 0 of each non-empty shard is re-read.
+        other = self.label_chunk("other-seed", "1000:2", mixed_every=0, roundtrip_every=50, limit=1, seed=7)
+        mine = self.expect(1000, 2, seed=7, mixed_every=0, roundtrip_every=50, case_limit=1)
+        manifest = label.verify_chunk(other, mine)
+        non_empty = sum(item["rows"] > 0 for series in label.SERIES for item in manifest["shards"][series].values())
+        self.assertEqual(manifest["counts"]["roundtrips"], non_empty)
         with self.assertRaises(label.ChunkError):
-            label.verify_chunk(whole)
+            label.verify_chunk(other, self.expect(1000, 2, mixed_every=0, roundtrip_every=50, case_limit=1))
+
+        def tampered(name, edit):
+            copy = self.root / name
+            shutil.copytree(whole, copy)
+            chunk = json.loads((copy / label.CHUNK_MANIFEST).read_text())
+            edit(copy, chunk)
+            (copy / label.CHUNK_MANIFEST).write_text(json.dumps(chunk))
+            return copy
+
+        def more_rows(copy, chunk):
+            chunk["counts"]["rows"]["train"] += 1
+
+        def shard_rows(copy, chunk):
+            chunk["shards"]["train"][label.shard_name(1000)]["rows"] += 1
+
+        def file_bytes(copy, chunk):
+            victim = next((copy / "train" / label.shard_name(1000)).glob("labels.*.npy"))
+            victim.write_bytes(victim.read_bytes() + b"\0")
+
+        for name, edit in (("counts", more_rows), ("rows", shard_rows), ("bytes", file_bytes)):
+            with self.subTest(tamper=name), self.assertRaises(label.ChunkError):
+                label.verify_chunk(tampered(f"tampered-{name}", edit), self.expect(1000, 2))
 
     def test_roundtrip_mismatch_stops_the_chunk(self):
         from spire_learn.neural import distill_data
@@ -458,11 +528,16 @@ class LabelChunkNativeTests(unittest.TestCase):
         label = self.label
         base = ["--recipe", str(self.RECIPE), "--teacher", "current-v2", "--teachers", str(self.TEACHERS),
                 "--allow-uncalibrated", "--seed", "1", "--output", str(self.root / "never")]
-        for extra in (["--shards", "999:1", "--mixed-every", "0"],
-                      ["--shards", "1000:1"],  # mixed fights need the checkpoint
-                      ["--shards", "1000:1", "--mixed-every", "0", "--mixed-checkpoint", str(self.checkpoint)]):
-            with self.subTest(extra=extra), self.assertRaises(SystemExit), patch("sys.stderr", io.StringIO()):
+        outside = ROOT / "artifacts/development/neural-combat/not-distill/never"
+        for extra, message in ((["--shards", "999:1", "--mixed-every", "0"], "starts at shard 1000"),
+                               (["--shards", "1000:1", "--mixed-every", "0", "--output", str(outside)],
+                                "under artifacts/development/neural-combat/distill/"),
+                               (["--shards", "1000:1"], "--mixed-checkpoint is required"),
+                               (["--shards", "1000:1", "--mixed-every", "0", "--mixed-checkpoint", str(self.checkpoint)],
+                                "needs a positive --mixed-every")):
+            with self.subTest(extra=extra), self.assertRaises(SystemExit), patch("sys.stderr", io.StringIO()) as err:
                 label.main(base + extra)
+            self.assertIn(message, err.getvalue())
         self.assertFalse((self.root / "never").exists())
 
 

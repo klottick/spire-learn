@@ -12,7 +12,10 @@ consistency
   set, terminal state or root differs from the record is an error. Reported:
   top-choice agreement, and mean value lost both ways: run A's value of its own
   choice minus run A's value of run B's choice, and the same from run B's side.
-  The decisions must cover fights.jsonl and summary.json from the same directory
+  Tie-aware agreement counts run B's choice in run A's top-valued set; the
+  non-tie agreement is top-choice agreement over decisions whose run A top
+  value is held by one action. --allow-uncalibrated replays a teacher marked
+  uncalibrated and records that in the provenance. The decisions must cover fights.jsonl and summary.json from the same directory
   (one fight per case, its step count of decision rows), every case must be in
   the rebuilt panel, and the native Gym's revision, dirty state and source digest
   must equal the run's. Needs the native Gym.
@@ -226,9 +229,16 @@ def compare(recorded, choice_b, values_b):
     choice_a = recorded["choice"]
     if choice_a not in a or choice_b not in b:
         raise ReplayMismatch("A recorded or replayed choice is not among the searched actions")
+    best = max(a.values())
+    top_a = {action for action, value in a.items() if value == best}
+    non_tie = len(top_a) == 1
     return {"agree": choice_a == choice_b,
             "lost_a": a[choice_a] - a[choice_b],
-            "lost_b": b[choice_b] - b[choice_a]}
+            "lost_b": b[choice_b] - b[choice_a],
+            # Tie-aware: B's choice is in A's top-valued set; non-tie decisions have one A top action.
+            "tie_aware_agreement": choice_b in top_a,
+            "non_tie_decisions": int(non_tie),
+            "non_tie_agreement": (choice_a == choice_b) if non_tie else None}
 
 
 def _check_legal(row, legal):
@@ -281,8 +291,13 @@ def summarize_consistency(results):
         raise AuditInputError("No audited decisions")
     agreements = sum(result["agree"] for result in results)
     disagreeing = [result for result in results if not result["agree"]]
+    non_tie = [result for result in results if result["non_tie_decisions"]]
     return {
         "decisions": n, "agreements": agreements, "top_choice_agreement": agreements / n,
+        "tie_aware_agreement": sum(result["tie_aware_agreement"] for result in results) / n,
+        "non_tie_decisions": len(non_tie),
+        "non_tie_agreement": (sum(result["non_tie_agreement"] for result in non_tie) / len(non_tie)
+                              if non_tie else None),
         "mean_value_lost_run_a": sum(result["lost_a"] for result in results) / n,
         "mean_value_lost_run_b": sum(result["lost_b"] for result in results) / n,
         "mean_value_lost_run_a_when_disagreeing": (
@@ -323,7 +338,9 @@ def run_consistency(args, output):
     fights = _jsonl(args.decisions.parent / "fights.jsonl")
     check_decisions("Teacher run", summary, _fight_steps("Teacher run", fights), rows, by_case)
 
-    teacher, teacher_sha, _ = entry._teacher(args.teachers, args.teacher, provenance["panel"])
+    allow_uncalibrated = getattr(args, "allow_uncalibrated", False) is True
+    teacher, teacher_sha, _ = entry._teacher(args.teachers, args.teacher, provenance["panel"],
+                                             allow_uncalibrated=allow_uncalibrated)
     if teacher_sha != provenance["config_sha256"]:
         raise AuditInputError("Teacher config differs from the one that produced the decisions")
     if _file_sha256(args.recipe) != provenance["recipe_sha256"]:
@@ -372,6 +389,7 @@ def run_consistency(args, output):
             "gym_revision": provenance.get("gym_revision"),
             **{key: provenance.get(key) for key in SHARED_PROVENANCE},
             "parallel": args.parallel, "workers": 1, "gpu_seconds": 0,
+            **({"uncalibrated_allowed": True} if allow_uncalibrated else {}),
         },
     }
     _write_json(output, report)
@@ -1009,6 +1027,8 @@ def main(argv=None):
     consistency.add_argument("--recipe", type=Path, required=True, help="recipe the run used")
     consistency.add_argument("--parallel", type=entry._positive, default=1)
     consistency.add_argument("--output", type=Path, required=True, help="aggregate JSON under artifacts/")
+    consistency.add_argument("--allow-uncalibrated", action="store_true",
+                             help="replay a teacher marked uncalibrated (recorded in provenance)")
 
     report = commands.add_parser("report", help="aggregate teacher runs: strength, roots, G1, choice, stop rule",
                                  description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

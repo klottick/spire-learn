@@ -741,6 +741,33 @@ class ConsistencyTests(unittest.TestCase):
         self.assertEqual((summary["decisions"], summary["agreements"], summary["top_choice_agreement"]), (2, 2, 1.0))
         self.assertEqual((summary["mean_value_lost_run_a"], summary["mean_value_lost_run_b"]), (0.0, 0.0))
 
+    def test_tie_aware_consistency_keys(self):
+        tie = audit.compare(searched(1, {0: 0.6, 1: 0.6, 2: 0.1}, 0), 1, {"0": [0.5, 8], "1": [0.7, 8], "2": [0.1, 8]})
+        self.assertEqual((tie["agree"], tie["tie_aware_agreement"], tie["non_tie_decisions"],
+                          tie["non_tie_agreement"]), (False, True, 0, None))
+        self.assertAlmostEqual(tie["lost_a"], 0.0)
+        self.assertAlmostEqual(tie["lost_b"], 0.2)
+        recorded = searched(1, {0: 0.2, 1: 0.6}, 1)
+        agree = audit.compare(recorded, 1, {"0": [0.5, 8], "1": [0.9, 8]})
+        differ = audit.compare(recorded, 0, {"0": [0.9, 8], "1": [0.5, 8]})
+        self.assertEqual((agree["tie_aware_agreement"], agree["non_tie_decisions"], agree["non_tie_agreement"]),
+                         (True, 1, True))
+        self.assertEqual((differ["tie_aware_agreement"], differ["non_tie_decisions"], differ["non_tie_agreement"]),
+                         (False, 1, False))
+        # Run B tied but A did not: only A's top-valued set counts.
+        b_tied = audit.compare(recorded, 0, {"0": [0.9, 8], "1": [0.9, 8]})
+        self.assertEqual((b_tied["tie_aware_agreement"], b_tied["non_tie_decisions"]), (False, 1))
+
+        timing = {"cpu_seconds": 0.5, "simulations": 16, "branch_refusals": 0}
+        summary = audit.summarize_consistency([{**r, **timing} for r in (tie, agree, differ)])
+        self.assertEqual((summary["decisions"], summary["agreements"]), (3, 1))
+        self.assertAlmostEqual(summary["top_choice_agreement"], 1 / 3)
+        self.assertAlmostEqual(summary["tie_aware_agreement"], 2 / 3)
+        self.assertEqual((summary["non_tie_decisions"], summary["non_tie_agreement"]), (2, 0.5))
+        only_ties = audit.summarize_consistency([{**tie, **timing}])
+        self.assertEqual((only_ties["tie_aware_agreement"], only_ties["non_tie_decisions"],
+                          only_ties["non_tie_agreement"]), (1.0, 0, None))
+
     def test_replay_follows_recorded_prefix_and_searches_with_next_seed(self):
         def decide(env, observation, legal, view, teacher, rng, seed):
             return "searched", legal[0], {str(a): [0.5, 8] for a in legal}, 0.2, 0, 16
@@ -855,7 +882,7 @@ class ConsistencyRunTests(unittest.TestCase):
             "schema": "spire-learn-search-teacher-entry-v1", "cases": len(self.fights),
             "roots": dict(Counter(r["root"] for r in self.rows)), "provenance": self.provenance}))
 
-    def consistency(self, sample=3):
+    def consistency(self, sample=3, extra=()):
         self.write()
         fights = {}
 
@@ -872,9 +899,9 @@ class ConsistencyRunTests(unittest.TestCase):
         gym = SimpleNamespace(_native=SimpleNamespace(build_info=lambda: self.build))
         argv = ["consistency", "--decisions", str(self.run / "decisions.jsonl"), "--sample", str(sample), "--seed", "4",
                 "--teacher", "tree-3x", "--teachers", "teachers.json", "--recipe", str(self.recipe),
-                "--output", str(self.root / "artifacts/consistency.json")]
+                "--output", str(self.root / "artifacts/consistency.json"), *extra]
         with patch.dict(sys.modules, {"spire_lab": gym}), \
-             patch.object(audit.entry, "_teacher", return_value=("teacher", "cfg", True)), \
+             patch.object(audit.entry, "_teacher", return_value=("teacher", "cfg", True)) as teacher_loader, \
              patch.object(audit.entry, "load_recipe", return_value=SimpleNamespace(gym_revision=self.recipe_revision)), \
              patch.object(audit.entry, "build_panel", return_value={"manifest": {"cases": self.panel_cases}}), \
              patch.object(audit.entry, "preflight") as preflight, \
@@ -883,6 +910,7 @@ class ConsistencyRunTests(unittest.TestCase):
              patch.object(audit.entry, "_decision", side_effect=decide), \
              redirect_stdout(io.StringIO()) as stdout:
             run_main(self.root, argv)
+        self.teacher_loader = teacher_loader
         preflight.assert_called_once()
         self.assertEqual({cid: f.actions for cid, f in fights.items()},
                          {"p-case-alpha": [1, 0], "p-case-beta": [0, 1]})
@@ -903,6 +931,24 @@ class ConsistencyRunTests(unittest.TestCase):
         self.assertEqual(report["provenance"]["sample_sha256"], audit.entry.content_sha256(
             [["p-case-alpha", 0], ["p-case-alpha", 1], ["p-case-beta", 1]]))
         self.assertEqual((report["provenance"]["split"], report["provenance"]["audit_only"]), ("selection", True))
+
+    def test_consistency_allow_uncalibrated(self):
+        report = json.loads(self.consistency()[0])
+        self.teacher_loader.assert_called_once_with(
+            self.root / "teachers.json", "tree-3x", "selection", allow_uncalibrated=False)
+        self.assertNotIn("uncalibrated_allowed", report["provenance"])
+        # The tie-aware keys reach the written report.
+        self.assertEqual((report["tie_aware_agreement"], report["non_tie_decisions"]), (2 / 3, 3))
+        (self.root / "artifacts/consistency.json").unlink()
+        report = json.loads(self.consistency(extra=["--allow-uncalibrated"])[0])
+        self.teacher_loader.assert_called_once_with(
+            self.root / "teachers.json", "tree-3x", "selection", allow_uncalibrated=True)
+        self.assertIs(report["provenance"]["uncalibrated_allowed"], True)
+        # The real loader still refuses an uncalibrated teacher on a panel without the flag.
+        teachers = audit.entry._ROOT / "configs/neural/search-teacher-gym-1.2.4/teachers-v2.json"
+        with self.assertRaisesRegex(ValueError, "uncalibrated"):
+            audit.entry._teacher(teachers, "current-v2", "selection")
+        self.assertFalse(audit.entry._teacher(teachers, "current-v2", "selection", allow_uncalibrated=True)[2])
 
     def test_consistency_run_refuses_records_that_do_not_cover_the_fights(self):
         # A decisions file truncated after alpha's first step; the summary roots agree with it.

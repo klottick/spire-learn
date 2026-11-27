@@ -193,6 +193,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--distill-data": "tests.neural.test_distill_data",
         "--distill-native": "tests.integration.test_distill_label_native",
         "--policy-player": "tests.neural.test_policy_player",
+        "--compact-bridge": "tests.neural.test_compact_bridge",
+        "--full-run-native": "tests.integration.test_full_run_native",
     }
     if len(argv) == 1 and argv[0] in native_suites:
         if os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") != "1":

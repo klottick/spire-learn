@@ -507,16 +507,16 @@ class StudentEvalTests(unittest.TestCase):
         mask = torch.tensor([[0, 1, 0, 1], [1, 1, 1, 0], [0, 1, 1, 0]], dtype=torch.int8)
         logits = torch.tensor([[9.0, 1.0, 7.0, 2.0],   # the illegal maxima never win
                                [0.5, 3.0, 3.0, 9.0],   # a tie goes to the lower index
-                               [5.0, -inf, 1.0, 0.0]])  # a -inf legal logit is passed over
+                               [-inf, 0.0, 1.0, nan]])  # non-finite illegal logits are ignored
         self.assertEqual(reflex_argmax(logits, mask).tolist(), [3, 1, 2])
         self.assertEqual(reflex_argmax(logits, mask).dtype, torch.int64)
-        for row, why in (([9.0, -inf, 7.0, -inf], "no finite"), ([0.0, 4.0, 0.0, nan], "NaN"),
-                         ([0.0, 4.0, 0.0, inf], "NaN or \\+inf")):
+        # FF's rule: any non-finite legal logit raises, a lone legal -inf included (never picked around).
+        for row in ([9.0, -inf, 7.0, -inf], [9.0, 4.0, 7.0, -inf], [0.0, 4.0, 0.0, nan], [0.0, 4.0, 0.0, inf]):
             bad = logits.clone()
             bad[0] = torch.tensor(row)
-            with self.subTest(row=row), self.assertRaisesRegex(ContractError, why):
+            with self.subTest(row=row), self.assertRaisesRegex(ContractError, "not finite"):
                 reflex_argmax(bad, mask)
-        with self.assertRaisesRegex(ContractError, "no finite"):
+        with self.assertRaisesRegex(ContractError, "empty"):
             reflex_argmax(logits, torch.tensor([[0, 0, 0, 0], [1, 1, 1, 0], [0, 1, 1, 0]], dtype=torch.int8))
         # A real student whose legal logits are all -inf raises on the evaluation path
         # (runner._DeterministicPolicy over the family-built policy), never returning an action.
@@ -532,7 +532,7 @@ class StudentEvalTests(unittest.TestCase):
                 _DeterministicPolicy(policy).act(self.frames, generator=None)
             with self.assertRaises(ContractError):
                 policy.act(self.frames, generator=None, deterministic=True)
-            with self.assertRaisesRegex(ContractError, "no finite"):
+            with self.assertRaisesRegex(ContractError, "not finite"):
                 reflex_argmax(dead, batch.action_mask)
 
     def test_ff_family_build_matches_build_policy(self):

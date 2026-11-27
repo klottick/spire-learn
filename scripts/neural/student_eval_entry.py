@@ -300,8 +300,9 @@ def run_student_eval(root: Path, plan_path: Path, student: Path, output: Path, *
                 journal.write('inference_fault', **summary['inference_fault'])
         else:
             summary['inference_skipped'] = f"evaluation status {evaluated.get('status')!r}"
+        # Panel rows are the product; a timing fault is recorded but leaves a complete panel complete.
         summary['result'] = ('complete' if evaluated.get('status') == 'complete'
-                             and 'evaluation_fault' not in summary and 'inference' in summary else 'incomplete')
+                             and 'evaluation_fault' not in summary else 'incomplete')
     except BaseException as interrupt:
         summary['interrupted'] = type(interrupt).__name__
         summary['result'] = 'interrupted'

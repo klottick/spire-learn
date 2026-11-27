@@ -12,8 +12,9 @@ the only family registered here; Task 10 registers the transformer with ``regist
 ``action_id`` and ``objective_id`` that match the request. An unregistered ``model_id`` is refused,
 never defaulted to FF.
 
-``reflex_argmax`` is the student evaluation's action rule: the argmax over legal actions, lowest
-index on ties, and a ``ContractError`` (a fault, not a loss) when a legal set has no finite logit.
+``reflex_argmax`` is the student evaluation's action rule, FF's rule exactly: the argmax over legal
+actions, lowest index on ties, and a ``ContractError`` (a fault, not a loss) when a legal set is
+empty or holds any non-finite logit.
 
 Importing this module imports neither torch nor numpy.
 """
@@ -154,11 +155,11 @@ def build_family_policy(model_id: str, schema, model_config, /, **options) -> An
 
 
 def reflex_argmax(logits: Any, action_mask: Any) -> Any:
-    """Per row, the legal action with the largest finite logit (lowest index on ties); int64.
+    """Per row, the legal action with the largest logit (lowest index on ties); int64.
 
-    Illegal actions never win. A row whose legal set is empty or has no finite logit raises a
-    ``ContractError``: a student that cannot act is a fault, never a loss. A NaN or +inf legal
-    logit also raises (the argmax would be ill-defined).
+    FF's rule exactly: illegal actions never win, and a row with an empty legal set or any
+    non-finite legal logit (NaN, +inf or -inf) raises a ``ContractError``. A student that cannot
+    act is a fault, never a loss, and a legal ``-inf`` is never silently picked around.
     """
     import torch
 
@@ -167,13 +168,11 @@ def reflex_argmax(logits: Any, action_mask: Any) -> Any:
     mask = action_mask.to(dtype=torch.bool)
     if tuple(mask.shape) != tuple(logits.shape):
         raise ContractError("action_mask shape must match the logits")
-    legal_logits = logits.masked_select(mask)
-    if torch.isnan(legal_logits).any().item() or torch.isposinf(legal_logits).any().item():
-        raise ContractError("a legal action logit is NaN or +inf")
-    finite_legal = mask & torch.isfinite(logits)
-    if not finite_legal.any(dim=-1).all().item():
-        raise ContractError("a legal set has no finite logit: the student cannot act")
-    return logits.masked_fill(~finite_legal, -torch.inf).argmax(dim=-1).to(dtype=torch.int64)
+    if not mask.any(dim=-1).all().item():
+        raise ContractError("a legal set is empty: the student cannot act")
+    if not torch.isfinite(logits.masked_select(mask)).all().item():
+        raise ContractError("a legal action logit is not finite: the student cannot act")
+    return logits.masked_fill(~mask, -torch.inf).argmax(dim=-1).to(dtype=torch.int64)
 
 
 def median_forward_seconds(forward: Callable[[], Any], *, passes: int = 1000, warmup: int = 50,

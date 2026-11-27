@@ -1371,7 +1371,7 @@ def _standard_panel_deps(fakes, reports, log, *, cases=4, busy_at=None):
 
 class StudentEvalSummaryTests(unittest.TestCase):
     def _run(self, directory, reports_cycle, *, panel="selection", fail_at=None, raise_at=None, busy_at=None,
-             raise_error=None):
+             raise_error=None, timing_error=None):
         from scripts.neural import student_eval_entry as entry
 
         directory = Path(directory)
@@ -1393,6 +1393,10 @@ class StudentEvalSummaryTests(unittest.TestCase):
             deps["evaluate"] = evaluate
         else:
             deps, clock, case_ids = _standard_panel_deps(fakes, reports, fakes.log, busy_at=busy_at)
+        if timing_error is not None:
+            def measure_inference(config, checkpoint, gate):
+                raise timing_error
+            deps["measure_inference"] = measure_inference
         output = directory / f"out-{panel}"
         summary = entry.run_student_eval(ROOT, plan_path, student, output, panel=panel, dependencies=deps,
                                          clock=clock)
@@ -1497,6 +1501,13 @@ class StudentEvalSummaryTests(unittest.TestCase):
         self.assertEqual(written["result"], "incomplete")
         self.assertNotIn("inference", written)
         self.assertFalse(any(entry[0] == "measure_inference" for entry in fakes.log))
+        # An inference timing fault after a complete panel is recorded; the panel result stays complete.
+        with tempfile.TemporaryDirectory() as directory:
+            summary, written, *_ = self._run(directory, ["win"], timing_error=RuntimeError("driver refused"))
+        self.assertEqual(written["evaluations"]["final"]["status"], "complete")
+        self.assertEqual(written["inference_fault"], {"type": "RuntimeError", "message": "driver refused"})
+        self.assertNotIn("inference", written)
+        self.assertEqual(written["result"], "complete")
         # A failed case report stops the panel as an operational failure.
         with tempfile.TemporaryDirectory() as directory:
             summary, written, *_ = self._run(directory, ["win"], fail_at=2)

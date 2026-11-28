@@ -149,5 +149,32 @@ class SummaryTests(unittest.TestCase):
                                              "cpu_seconds": 30.5, "entry_wall_seconds": 40.0})
 
 
+class OpenFileLimitTests(unittest.TestCase):
+    def _run(self, soft, hard, wanted=65536):
+        calls = []
+        result = entry.raise_open_file_limit(wanted, getrlimit=lambda _: (soft, hard),
+                                             setrlimit=lambda _, limits: calls.append(limits))
+        return result, calls
+
+    def test_raises_the_container_default(self):
+        result, calls = self._run(1024, 524288)
+        self.assertEqual(calls, [(65536, 524288)])
+        self.assertEqual(result, {"soft": 65536, "hard": 524288})
+
+    def test_never_exceeds_the_hard_limit(self):
+        result, calls = self._run(1024, 4096)
+        self.assertEqual(calls, [(4096, 4096)])
+        self.assertEqual(result["soft"], 4096)
+
+    def test_leaves_a_higher_soft_limit_alone(self):
+        result, calls = self._run(524288, 524288)
+        self.assertEqual(calls, [])
+        self.assertEqual(result, {"soft": 524288, "hard": 524288})
+
+    def test_unlimited_hard_limit(self):
+        import resource
+        result, calls = self._run(1024, resource.RLIM_INFINITY)
+        self.assertEqual(calls, [(65536, resource.RLIM_INFINITY)])
+
 if __name__ == "__main__":
     unittest.main()

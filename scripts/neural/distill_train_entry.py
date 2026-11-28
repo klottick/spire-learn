@@ -188,6 +188,25 @@ def _check_output(output: Path, config) -> None:
         raise ValueError("--output must be a fresh or empty directory")
 
 
+# Every shard file is memory-mapped, and each map holds a descriptor (about 76 per shard), so the
+# reader's open-shard window alone exceeds the container's default soft limit of 1,024.
+OPEN_FILES_WANTED = 65536
+
+
+def raise_open_file_limit(wanted: int = OPEN_FILES_WANTED, *, getrlimit=None, setrlimit=None) -> dict:
+    """Raise the soft RLIMIT_NOFILE towards ``wanted``, never above the hard limit; returns both limits."""
+    import resource
+
+    getrlimit = getrlimit or resource.getrlimit
+    setrlimit = setrlimit or resource.setrlimit
+    soft, hard = getrlimit(resource.RLIMIT_NOFILE)
+    target = wanted if hard == resource.RLIM_INFINITY else min(wanted, hard)
+    if soft != resource.RLIM_INFINITY and soft < target:
+        setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+        soft = target
+    return {"soft": soft, "hard": hard}
+
+
 def finalize_summary(summary: dict, gate: GpuGate, *, cpu_seconds: float, entry_wall_seconds: float) -> dict:
     """Add the entry's wait and process timing to the trainer's summary (pure)."""
     summary["gpu_waits"] = list(gate.events)
@@ -224,6 +243,7 @@ def main(argv=None) -> int:
     if config.device.startswith("cuda") and args.gpu_wait is None:
         parser.error("a CUDA config needs --gpu-wait: the GPU is shared, so gating is mandatory")
     _check_output(args.output, config)
+    raise_open_file_limit()
     plan = plan_runtime_device(config)
     require_runtime_execution_gate(plan)
     started = time.monotonic()

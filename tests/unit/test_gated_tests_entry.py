@@ -461,6 +461,17 @@ class StandardTurnCapGateTests(unittest.TestCase):
         self.assertNotIn("tests.neural.test_distill_train", entry.MODULES)
         self.assertEqual(entry.MODULES, MODULES)
 
+    def test_selects_only_the_transformer_module(self):
+        from scripts.neural import gated_tests_entry as entry
+
+        with patch.dict(os.environ, {"SPIRE_LEARN_RUN_NATIVE_INTEGRATION": "1"}), \
+             patch.object(unittest.defaultTestLoader, "loadTestsFromName", return_value=_Suite(1)) as load:
+            self.assertEqual(entry.main(["--transformer"]), 0)
+        load.assert_called_once_with("tests.neural.test_transformer")
+        # A native route, not the tensor suite (no sampled-row reservation).
+        self.assertNotIn("tests.neural.test_transformer", entry.MODULES)
+        self.assertEqual(entry.MODULES, MODULES)
+
     def test_native_route_requires_opt_in(self):
         from scripts.neural import gated_tests_entry as entry
 

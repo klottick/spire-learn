@@ -1,7 +1,8 @@
 """Supervised distillation of search-teacher labels into a combat student.
 
 The trainer reads the labelled decision shards of ``distill_data`` (chunk directories written by
-``scripts/neural/distill_label_entry.py``) and fits a ``value_heads = 3`` FF student:
+``scripts/neural/distill_label_entry.py``) and fits a three-value-head student of the identity's model
+family (``model_families``: the FF student, or the entity transformer of ``transformer``):
 
 * **Policy:** cross-entropy to ``softmax(v / tau)`` over the legal actions, on ``policy_ok`` rows.
 * **Value:** three MSE terms with weight 1/3 each, on ``value_ok`` rows: the outcome head
@@ -973,12 +974,13 @@ def _rng_state(policy_generator, batch_order: BatchOrder, seed: int) -> dict[str
 
 
 def build_student(config: DistillConfig, schema, *, device: str):
-    from spire_learn.neural.model import build_policy
+    """The student of the identity's model family (FF: exactly ``build_policy``; or the transformer)."""
+    from spire_learn.neural.model_families import build_family_policy
 
     identity = config.identity
-    return build_policy(schema, config.model, seed=domain_seed(config.seed, "policy"), device=device,
-                        objective_id=DISTILL_OBJECTIVE_ID, model_id=identity.model_id,
-                        features_id=identity.features_id)
+    return build_family_policy(identity.model_id, schema, config.model, seed=domain_seed(config.seed, "policy"),
+                               device=device, objective_id=DISTILL_OBJECTIVE_ID, model_id=identity.model_id,
+                               features_id=identity.features_id)
 
 
 def _save(path: Path, *, policy, optimizer, policy_generator, batch_order, config: DistillConfig,

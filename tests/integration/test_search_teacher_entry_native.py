@@ -14,13 +14,13 @@ from scripts.neural import search_teacher_entry as entry
 class TeacherEntryNativeTests(unittest.TestCase):
     def test_current_and_uncalibrated_tree_on_identical_training_fights(self):
         root = entry._ROOT
-        recipe = root / "configs/neural/baalorlord-standard-gym-1.2.0/recipe.json"
-        defaults = root / "configs/neural/search-teacher-gym-1.2.0/teachers.json"
+        recipe = root / "configs/neural/baalorlord-standard-gym-1.2.4/recipe.json"
+        defaults = root / "configs/neural/search-teacher-gym-1.2.4/teachers.json"
         parent = Path(os.environ.get("SPIRE_LEARN_RUNNER_OUTPUT", root / "artifacts"))
         with tempfile.TemporaryDirectory(prefix="teacher-entry-", dir=parent) as temp:
             output = Path(temp)
             configs = json.loads(defaults.read_text())
-            configs["teachers"]["tree-1x"]["config"].update(simulations=48, worlds=4)
+            configs["teachers"]["tree-1x"]["config"].update(worlds=4)
             teachers = output / "teachers.json"
             teachers.write_text(json.dumps(configs))
             results = {}

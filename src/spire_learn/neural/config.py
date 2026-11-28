@@ -65,6 +65,14 @@ TRANSFORMER_MODEL_ID = "spire-learn-combat-entity-transformer-v1"
 TRANSFORMER_FEATURES_ID = "spire-learn-combat-features-entity-v1"
 TRANSFORMER_LEARNER_IDENTITY_IDS = (TRANSFORMER_MODEL_ID, TRANSFORMER_FEATURES_ID, LEARNER_IDENTITY_IDS[2])
 TRANSFORMER_PARAMETER_CAP = 16_000_000  # delta 10; the FF cap stays 10,000,000
+# The card-metadata entity transformer (S3): S2 plus the Gym's static public card metadata on the
+# card tokens. Its model and features ids differ from S2's, so S2 and S3 checkpoints never cross.
+TRANSFORMER_CARDMETA_MODEL_ID = "spire-learn-combat-entity-transformer-cardmeta-v1"
+TRANSFORMER_CARDMETA_FEATURES_ID = "spire-learn-combat-features-entity-cardmeta-v1"
+TRANSFORMER_CARDMETA_LEARNER_IDENTITY_IDS = (
+    TRANSFORMER_CARDMETA_MODEL_ID, TRANSFORMER_CARDMETA_FEATURES_ID, LEARNER_IDENTITY_IDS[2])
+# The Gym card metadata (spire-lab-card-metadata-v1) the S3 features are built from; part of its config hash.
+CARD_METADATA_FINGERPRINT = "effbb810d345e906f6e20b47bd972e35d72ef48141378d54bd28b54afac5f406"
 NUMBER_ENCODINGS = ("bucket", "scaled", "sinusoidal")
 # The plan's sizes as (layers, width, heads); every size is pre-norm.
 TRANSFORMER_SIZES = {"small": (2, 128, 4), "medium": (4, 256, 8), "large": (6, 384, 8)}
@@ -340,12 +348,13 @@ def _identity(raw: object, *, model_hash: str, ppo_hash: str | None = None, cont
         config_hashes=hashes,
     )
     learner_ids = (identity.model_id, identity.features_id, identity.action_id)
-    if (learner_ids not in (LEARNER_IDENTITY_IDS[:3], STANDARD_LEARNER_IDENTITY_IDS, TRANSFORMER_LEARNER_IDENTITY_IDS)
+    if (learner_ids not in (LEARNER_IDENTITY_IDS[:3], STANDARD_LEARNER_IDENTITY_IDS, TRANSFORMER_LEARNER_IDENTITY_IDS,
+                            TRANSFORMER_CARDMETA_LEARNER_IDENTITY_IDS)
             or identity.objective_id not in objective_ids):
         raise ValueError("identity must use the supported combat learner model/features/action/objective IDs")
     if learner_ids == STANDARD_LEARNER_IDENTITY_IDS and not set(mappings) <= _STANDARD_MODES:
         raise ValueError("the Standard learner identity declares only standard-standalone/standard-run mappings")
-    if learner_ids == TRANSFORMER_LEARNER_IDENTITY_IDS:
+    if learner_ids in (TRANSFORMER_LEARNER_IDENTITY_IDS, TRANSFORMER_CARDMETA_LEARNER_IDENTITY_IDS):
         # A distillation student only (its PPO arm is deferred, delta 16), on standalone decisions.
         if identity.objective_id != DISTILL_OBJECTIVE_ID:
             raise ValueError(f"the entity transformer identity uses the {DISTILL_OBJECTIVE_ID} objective only")
@@ -444,17 +453,61 @@ def _parse_transformer(table: dict[str, object]) -> TransformerConfig:
     return TransformerConfig(**_exact_keys(table, _TRANSFORMER_FIELDS, "transformer"))
 
 
+@dataclass(frozen=True)
+class TransformerCardMetaConfig:
+    """The card-metadata entity transformer's settings (the ``[transformer_cardmeta]`` table).
+
+    The size fields are ``TransformerConfig``'s. ``card_metadata_fingerprint`` names the Gym card
+    metadata the card features are built from; it must be ``CARD_METADATA_FINGERPRINT`` and is part
+    of the model-config hash, so a different metadata revision is a different model.
+    """
+
+    layers: int
+    width: int
+    heads: int
+    number_encoding: str
+    value_heads: int = 3
+    card_metadata_fingerprint: str = CARD_METADATA_FINGERPRINT
+
+    def __post_init__(self) -> None:
+        self.transformer()  # the size fields' validation is TransformerConfig's
+        if self.card_metadata_fingerprint != CARD_METADATA_FINGERPRINT:
+            raise ContractError("TransformerCardMetaConfig card_metadata_fingerprint must be the pinned Gym card "
+                                f"metadata fingerprint {CARD_METADATA_FINGERPRINT}")
+
+    def transformer(self) -> TransformerConfig:
+        """The S2 configuration with the same size."""
+        return TransformerConfig(layers=self.layers, width=self.width, heads=self.heads,
+                                 number_encoding=self.number_encoding, value_heads=self.value_heads)
+
+
+def transformer_cardmeta_size(name: str, number_encoding: str) -> TransformerCardMetaConfig:
+    """The ``small``/``medium``/``large`` card-metadata configuration with ``number_encoding``."""
+    size = transformer_size(name, number_encoding)
+    return TransformerCardMetaConfig(layers=size.layers, width=size.width, heads=size.heads,
+                                     number_encoding=size.number_encoding)
+
+
+_TRANSFORMER_CARDMETA_FIELDS = _TRANSFORMER_FIELDS | {"card_metadata_fingerprint"}
+
+
+def _parse_transformer_cardmeta(table: dict[str, object]) -> TransformerCardMetaConfig:
+    return TransformerCardMetaConfig(**_exact_keys(table, _TRANSFORMER_CARDMETA_FIELDS, "transformer_cardmeta"))
+
+
 # Model-family tables an evaluation config may carry, keyed by TOML table name. ``model`` is the
 # feed-forward ModelConfig (its trim flags are handled by the loader); ``transformer`` is the
 # entity transformer's TransformerConfig. PPO and calibration configs use [model] only.
-KNOWN_MODEL_TABLES = ("model", "transformer")
+KNOWN_MODEL_TABLES = ("model", "transformer", "transformer_cardmeta")
 MODEL_FAMILY_TABLES: dict[str, Callable[[dict[str, object]], object]] = {
     "model": _parse_ff_model, "transformer": _parse_transformer,
+    "transformer_cardmeta": _parse_transformer_cardmeta,
 }
 # The learner (model, features, action) ids each model table may declare.
 MODEL_TABLE_LEARNERS: dict[str, tuple[tuple[str, str, str], ...]] = {
     "model": (LEARNER_IDENTITY_IDS[:3], STANDARD_LEARNER_IDENTITY_IDS),
     "transformer": (TRANSFORMER_LEARNER_IDENTITY_IDS,),
+    "transformer_cardmeta": (TRANSFORMER_CARDMETA_LEARNER_IDENTITY_IDS,),
 }
 
 
@@ -476,7 +529,7 @@ def _model_table_name(raw: dict[str, object]) -> str:
     tables = [name for name in KNOWN_MODEL_TABLES if name in raw]
     if len(tables) != 1:
         raise ValueError("a distillation evaluation config declares exactly one model table: "
-                         "[model] or [transformer]")
+                         "[model], [transformer] or [transformer_cardmeta]")
     if tables[0] not in MODEL_FAMILY_TABLES:
         raise ValueError(f"the [{tables[0]}] model table has no registered model family")
     return tables[0]
@@ -909,7 +962,7 @@ class DistillConfig:
     runtime_gpu_uuid: str | None
     seed: int
     eval_every: int
-    model: ModelConfig  # or TransformerConfig when model_table is "transformer"
+    model: ModelConfig  # or the family's config (TransformerConfig, TransformerCardMetaConfig)
     distill: DistillHyperparameters
     identity: NeuralIdentity
     # The TOML table the student came from: "model" (the FF student) or "transformer".
@@ -933,8 +986,9 @@ def load_distill_config(path: Path) -> DistillConfig:
             raw = tomllib.load(stream)
     except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise ValueError(f"cannot read distillation config {source}: {exc}") from exc
-    # Exactly one student table: [model] (the FF student) or [transformer].
-    model_table = "transformer" if isinstance(raw, dict) and "transformer" in raw and "model" not in raw else "model"
+    # Exactly one student table: [model] (the FF student), [transformer] or [transformer_cardmeta].
+    model_table = next((name for name in KNOWN_MODEL_TABLES[1:]
+                        if isinstance(raw, dict) and name in raw and "model" not in raw), "model")
     required = {"schema", "mode", "output_root", "device", "seed", "eval_every", "environment",
                 model_table, "distill", "identity"}
     if isinstance(raw, dict) and raw.get("device") == "cuda:0":
@@ -980,7 +1034,9 @@ def load_distill_config(path: Path) -> DistillConfig:
         if model.value_heads != 3:
             raise ValueError("a distillation student has three value heads (model.value_heads = 3)")
     else:
-        model = _parse_transformer(raw["transformer"])  # value_heads is always 3
+        if not isinstance(raw[model_table], dict):
+            raise ValueError(f"[{model_table}] must be a table")
+        model = MODEL_FAMILY_TABLES[model_table](dict(raw[model_table]))  # value_heads is always 3
     distill_raw = raw["distill"]
     distill_fields = set(_DISTILL_HASHED)
     if isinstance(distill_raw, dict) and "microbatch_rows" in distill_raw:
@@ -993,10 +1049,10 @@ def load_distill_config(path: Path) -> DistillConfig:
         component_hashes={"model": model_config_hash(model),
                           DISTILL_HASH_KEY: distill_config_hash(hyperparameters)},
         objective_ids=(DISTILL_OBJECTIVE_ID,))
-    student = STANDARD_LEARNER_IDENTITY_IDS if model_table == "model" else TRANSFORMER_LEARNER_IDENTITY_IDS
+    student = STANDARD_LEARNER_IDENTITY_IDS if model_table == "model" else MODEL_TABLE_LEARNERS[model_table][0]
     if (identity.model_id, identity.features_id, identity.action_id) != student:
-        raise ValueError(f"the [{model_table}] distillation student uses the "
-                         f"{'Standard FF' if model_table == 'model' else 'entity transformer'} learner identity")
+        raise ValueError(f"the [{model_table}] distillation student uses its own learner identity "
+                         f"({', '.join(student)})")
     if set(identity.accepted_raw_mode_mappings) != {"standard-standalone"}:
         raise ValueError("the distillation identity maps standard-standalone only")
 
@@ -1032,12 +1088,18 @@ __all__ = [
     "MODEL_FAMILY_TABLES",
     "MODEL_TABLE_LEARNERS",
     "NUMBER_ENCODINGS",
+    "CARD_METADATA_FINGERPRINT",
+    "TRANSFORMER_CARDMETA_FEATURES_ID",
+    "TRANSFORMER_CARDMETA_LEARNER_IDENTITY_IDS",
+    "TRANSFORMER_CARDMETA_MODEL_ID",
     "TRANSFORMER_FEATURES_ID",
     "TRANSFORMER_LEARNER_IDENTITY_IDS",
     "TRANSFORMER_MODEL_ID",
     "TRANSFORMER_PARAMETER_CAP",
     "TRANSFORMER_SIZES",
+    "TransformerCardMetaConfig",
     "TransformerConfig",
+    "transformer_cardmeta_size",
     "transformer_size",
     "NeuralBudget",
     "NeuralConfig",

@@ -202,6 +202,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--student-eval": "tests.neural.test_model.StudentEvalTests",
         # The entity transformer (S2): build, tokens, references, scoring, checkpoints, the runtime path.
         "--transformer": "tests.neural.test_transformer",
+        # The card-metadata transformer (S3): features, the S2 equivalence, checkpoints, trainer, the runtime path.
+        "--transformer-cardmeta": "tests.neural.test_transformer_cardmeta",
+        # The committed card-metadata snapshot against the pinned Gym's live descriptor, and S3 on the real snapshot.
+        "--card-metadata-live": "tests.integration.test_card_metadata_live",
     }
     if len(argv) == 1 and argv[0] in native_suites:
         if os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") != "1":

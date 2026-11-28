@@ -51,6 +51,27 @@ id, under the distillation objective only. The parameter count is computed from 
 torch is imported; a configuration over ``TRANSFORMER_PARAMETER_CAP`` (16,000,000) is refused, and
 the built module must have exactly the computed count.
 
+**Card metadata (S3).** ``build_transformer_cardmeta_policy`` is the same network with the Gym's
+static public card metadata (``spire-lab-card-metadata-v1``, a committed snapshot pinned by its
+fingerprint) added to the card tokens of ``combat_cards``, ``permanent_cards`` and
+``combat_card_offers``. It is public, static, run-independent game data: no seed, RNG or hidden
+order. A card token's code (its ``card`` vocabulary index) joins to the metadata row of that id;
+``padding``, an unknown code and an unknown card give an all-zero vector. The vector is one linear map
+(per group) of:
+
+* the card's own fields: ``has_row``, one-hot ``color``, ``rarity`` and ``type``, multi-hot ``tags``;
+* the face at the card's upgrade level, ``faces[min(max(upgrades, 0), len(faces) - 1)]`` (offers have
+  no upgrades: level 0): ``has_face`` (0 for a card with no faces), multi-hot ``keywords``, one-hot
+  cost kind (``int``, ``x``, ``unplayable``, ``unresolved``) and the cost number (``scaled``, 0 for a
+  non-integer cost), one-hot target (``enemy``, ``untargeted``, ``unresolved``), and for each of
+  ``base_damage``, ``base_block`` and ``magic_number`` a presence bit and the ``scaled`` value
+  (``sign(x) * log1p(|x|)``, 0 when null).
+
+The live card row (cost, upgrades, damage and so on) is still embedded as in S2; the metadata is
+the printed face, never a replacement for an observation. The tables are built once from the
+snapshot into non-persistent buffers, so the state dict holds parameters only; the snapshot's
+fingerprint is a field of ``TransformerCardMetaConfig`` and so part of the config hash.
+
 Importing this module imports neither torch nor numpy.
 """
 
@@ -59,14 +80,17 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import functools
+import json
 import math
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
 from spire_learn.contracts import ContractError
 from spire_learn.neural.config import (
-    DISTILL_OBJECTIVE_ID, LEARNER_IDENTITY_IDS, TRANSFORMER_FEATURES_ID, TRANSFORMER_MODEL_ID,
-    TRANSFORMER_PARAMETER_CAP, TransformerConfig, model_config_hash,
+    CARD_METADATA_FINGERPRINT, DISTILL_OBJECTIVE_ID, LEARNER_IDENTITY_IDS, TRANSFORMER_CARDMETA_FEATURES_ID,
+    TRANSFORMER_CARDMETA_MODEL_ID, TRANSFORMER_FEATURES_ID, TRANSFORMER_MODEL_ID, TRANSFORMER_PARAMETER_CAP,
+    TransformerCardMetaConfig, TransformerConfig, model_config_hash,
 )
 from spire_learn.neural.schema import CombatSchema
 
@@ -226,6 +250,199 @@ def bucket_index(value: int) -> int:
     sign = (value > 0) - (value < 0)
     return BUCKET_MAX_MAGNITUDE + sign * magnitude
 
+
+
+# --- card metadata (stdlib, S3) --------------------------------------------------------------
+
+CARD_METADATA_SCHEMA_ID = "spire-lab-card-metadata-v1"
+CARD_METADATA_SNAPSHOT = (Path(__file__).resolve().parents[3] / "configs" / "neural" / "standard"
+                          / "card-metadata-gym-1.2.4.json")
+CARD_METADATA_GROUPS = ("combat_cards", "permanent_cards", "combat_card_offers")
+CARD_VOCABULARY = "card"
+CARD_COLORS = ("red", "green", "blue", "purple", "colorless", "status", "curse", "shared")
+CARD_RARITIES = ("basic", "common", "uncommon", "rare", "special", "status", "curse")
+CARD_TYPES = ("attack", "skill", "power", "status", "curse")
+CARD_TAGS = ("strike", "starter_strike", "starter_defend", "healing")
+CARD_KEYWORDS = ("ethereal", "exhaust", "innate", "retain")
+CARD_COST_KINDS = ("int", "x", "unplayable", "unresolved")
+CARD_TARGETS = ("enemy", "untargeted", "unresolved")
+CARD_NULLABLE_FIELDS = ("base_damage", "base_block", "magic_number")
+# [has_row, color, rarity, type, tags]
+CARD_STATIC_FEATURES = 1 + len(CARD_COLORS) + len(CARD_RARITIES) + len(CARD_TYPES) + len(CARD_TAGS)
+# [has_face, keywords, cost kind, cost number, target, (presence, value) per nullable field]
+CARD_FACE_FEATURES = 1 + len(CARD_KEYWORDS) + len(CARD_COST_KINDS) + 1 + len(CARD_TARGETS) + 2 * len(CARD_NULLABLE_FIELDS)
+CARD_METADATA_FEATURES = CARD_STATIC_FEATURES + CARD_FACE_FEATURES
+
+
+def load_card_metadata(path: Path | str | None = None) -> dict[str, Any]:
+    """The committed card-metadata snapshot, refused unless it is the pinned revision.
+
+    The default is ``CARD_METADATA_SNAPSHOT`` (``card_metadata_snapshot_entry.py`` writes it in the
+    runtime container). A missing file, another schema or a fingerprint other than
+    ``CARD_METADATA_FINGERPRINT`` is a ``ContractError``.
+    """
+    source = Path(CARD_METADATA_SNAPSHOT if path is None else path)
+    try:
+        document = json.loads(source.read_text())
+    except OSError as error:
+        raise ContractError(f"the card metadata snapshot {source} cannot be read: {error}") from error
+    except ValueError as error:
+        raise ContractError(f"the card metadata snapshot {source} is not JSON: {error}") from error
+    if not isinstance(document, dict) or document.get("schema_id") != CARD_METADATA_SCHEMA_ID:
+        raise ContractError(f"the card metadata snapshot is not {CARD_METADATA_SCHEMA_ID}")
+    if document.get("fingerprint") != CARD_METADATA_FINGERPRINT:
+        raise ContractError("the card metadata snapshot's fingerprint is not the pinned "
+                            f"{CARD_METADATA_FINGERPRINT}: {document.get('fingerprint')!r}")
+    if not isinstance(document.get("cards"), list):
+        raise ContractError("the card metadata snapshot has no cards list")
+    return document
+
+
+def _one_hot(value: object, choices: tuple[str, ...], what: str) -> list[float]:
+    if not isinstance(value, str) or value not in choices:
+        raise ContractError(f"card metadata {what} {value!r} is not one of {', '.join(choices)}")
+    return [1.0 if value == choice else 0.0 for choice in choices]
+
+
+def _multi_hot(values: object, choices: tuple[str, ...], what: str) -> list[float]:
+    if not isinstance(values, list) or any(not isinstance(item, str) or item not in choices for item in values):
+        raise ContractError(f"card metadata {what} {values!r} must be a list drawn from {', '.join(choices)}")
+    return [1.0 if choice in values else 0.0 for choice in choices]
+
+
+def _scaled(value: int) -> float:
+    return math.copysign(math.log1p(abs(value)), value) if value else 0.0
+
+
+def _integer(value: object, what: str) -> int:
+    if type(value) is not int:
+        raise ContractError(f"card metadata {what} {value!r} must be an integer")
+    return value
+
+
+def card_static_features(row: Mapping[str, Any]) -> tuple[float, ...]:
+    """A card's face-independent features (``CARD_STATIC_FEATURES`` wide)."""
+    return tuple([1.0, *_one_hot(row.get("color"), CARD_COLORS, "color"),
+                  *_one_hot(row.get("rarity"), CARD_RARITIES, "rarity"),
+                  *_one_hot(row.get("type"), CARD_TYPES, "type"),
+                  *_multi_hot(row.get("tags"), CARD_TAGS, "tags")])
+
+
+def card_face_features(face: Mapping[str, Any] | None) -> tuple[float, ...]:
+    """One face's features (``CARD_FACE_FEATURES`` wide); all zero, ``has_face`` 0, for no face."""
+    if face is None:
+        return (0.0,) * CARD_FACE_FEATURES
+    cost = face.get("cost")
+    if type(cost) is int:
+        kind, number = "int", _scaled(cost)
+    elif cost in ("x", "unplayable", "unresolved"):
+        kind, number = cost, 0.0
+    else:
+        raise ContractError(f"card metadata cost {cost!r} is not an integer, x, unplayable or unresolved")
+    nullable: list[float] = []
+    for name in CARD_NULLABLE_FIELDS:
+        value = face.get(name)
+        nullable += [0.0, 0.0] if value is None else [1.0, _scaled(_integer(value, name))]
+    return tuple([1.0, *_multi_hot(face.get("keywords"), CARD_KEYWORDS, "keywords"),
+                  *_one_hot(kind, CARD_COST_KINDS, "cost kind"), number,
+                  *_one_hot(face.get("target"), CARD_TARGETS, "target"), *nullable])
+
+
+@dataclass(frozen=True)
+class CardMetadataTables:
+    """Per card code (an index of the ``card`` vocabulary), the metadata features at each face level.
+
+    ``static[code]`` is ``CARD_STATIC_FEATURES`` wide; ``faces[level][code]`` is ``CARD_FACE_FEATURES``
+    wide. ``levels`` is the most faces any card has; a card with fewer faces uses its last face at a
+    higher level (``faces[min(level, len(faces) - 1)]``), and a card with none has ``has_face`` 0.
+    A code without a metadata row (``padding``, an id the snapshot lacks) is all zero.
+    """
+
+    fingerprint: str
+    static: tuple[tuple[float, ...], ...]
+    faces: tuple[tuple[tuple[float, ...], ...], ...]
+    levels: int
+    rows: int  # codes with a metadata row
+    missing: tuple[str, ...]  # vocabulary ids without a row (``padding`` first, when present)
+    unused: tuple[str, ...]  # metadata ids outside the vocabulary
+
+
+def card_metadata_tables(metadata: Mapping[str, Any], vocabulary: Sequence[str]) -> CardMetadataTables:
+    """Join the metadata rows to ``vocabulary`` (the schema's ``card`` vocabulary, id by code)."""
+    if metadata.get("fingerprint") != CARD_METADATA_FINGERPRINT:
+        raise ContractError(f"card metadata fingerprint is not the pinned {CARD_METADATA_FINGERPRINT}")
+    if metadata.get("schema_id") != CARD_METADATA_SCHEMA_ID:
+        raise ContractError(f"card metadata is not {CARD_METADATA_SCHEMA_ID}")
+    by_id: dict[str, Mapping[str, Any]] = {}
+    for row in metadata["cards"]:
+        card_id = row.get("id") if isinstance(row, Mapping) else None
+        if not isinstance(card_id, str) or card_id in by_id:
+            raise ContractError(f"card metadata has a missing or repeated card id {card_id!r}")
+        by_id[card_id] = row
+    levels = max([len(row["faces"]) for row in by_id.values()] + [1])
+    zero_static = (0.0,) * CARD_STATIC_FEATURES
+    zero_face = card_face_features(None)
+    static, faces = [], [[] for _ in range(levels)]
+    missing = []
+    for card_id in vocabulary:
+        row = by_id.get(card_id)
+        if row is None:
+            missing.append(card_id)
+            static.append(zero_static)
+            for level in range(levels):
+                faces[level].append(zero_face)
+            continue
+        static.append(card_static_features(row))
+        row_faces = row["faces"]
+        if not isinstance(row_faces, list):
+            raise ContractError(f"card metadata {card_id} faces must be a list")
+        for level in range(levels):
+            face = row_faces[min(level, len(row_faces) - 1)] if row_faces else None
+            faces[level].append(card_face_features(face))
+    known = set(vocabulary)
+    return CardMetadataTables(
+        fingerprint=metadata["fingerprint"], static=tuple(static),
+        faces=tuple(tuple(level) for level in faces), levels=levels, rows=len(vocabulary) - len(missing),
+        missing=tuple(missing), unused=tuple(sorted(set(by_id) - known)))
+
+
+@dataclass(frozen=True)
+class CardMetadataGroup:
+    """One card-token group: its ``card`` column and its ``upgrades`` column (None: level 0 always)."""
+
+    group: str
+    card_field_index: int
+    upgrades_field_index: int | None
+
+
+def card_metadata_groups(schema: CombatSchema) -> tuple[CardMetadataGroup, ...]:
+    """The groups that carry card metadata, read from the descriptor (stdlib only)."""
+    if not isinstance(schema, CombatSchema):
+        raise ContractError("card metadata requires an authenticated CombatSchema")
+    if CARD_VOCABULARY not in schema.vocabularies:
+        raise ContractError("the schema has no card vocabulary")
+    groups = []
+    for name in CARD_METADATA_GROUPS:
+        spec = schema.tensors.get(name)
+        if spec is None or not spec.columns or spec.occupied_key is None:
+            raise ContractError(f"the schema has no {name} row group for card metadata")
+        cards = [index for index, column in enumerate(spec.columns)
+                 if column.vocabulary == CARD_VOCABULARY and column.reference is None]
+        if len(cards) != 1:
+            raise ContractError(f"{name} must have exactly one card column; it has {len(cards)}")
+        upgrades = [index for index, column in enumerate(spec.columns)
+                    if column.field == "upgrades" and column.vocabulary is None and column.reference is None]
+        groups.append(CardMetadataGroup(name, cards[0], upgrades[0] if upgrades else None))
+    return tuple(groups)
+
+
+def transformer_cardmeta_parameter_count(plan: TransformerPlan | CombatSchema,
+                                         config: TransformerCardMetaConfig) -> int:
+    """The exact parameter count of S3: S2's plus one metadata projection per card group (stdlib only)."""
+    if not isinstance(config, TransformerCardMetaConfig):
+        raise ContractError("the card-metadata transformer requires a TransformerCardMetaConfig")
+    return (transformer_parameter_count(plan, config.transformer())
+            + len(CARD_METADATA_GROUPS) * _linear(CARD_METADATA_FEATURES, config.width))
 
 # --- the policy (torch, imported lazily) ------------------------------------------------------
 
@@ -551,6 +768,48 @@ def _policy_class():
     return EntityTransformerPolicy
 
 
+@functools.lru_cache(maxsize=1)
+def _cardmeta_policy_class():
+    import torch
+    from torch import nn
+
+    base = _policy_class()
+
+    class CardMetaTransformerPolicy(base):
+        """S2 plus a linear map of the card's static metadata added to its row embedding."""
+
+        def __init__(self, plan: TransformerPlan, schema: CombatSchema, config: TransformerCardMetaConfig, *,
+                     groups: tuple[CardMetadataGroup, ...], tables: CardMetadataTables, **identity) -> None:
+            super().__init__(plan, schema, config, **identity)  # the size fields are TransformerConfig's
+            self._card_groups = {item.group: item for item in groups}
+            self.card_projections = nn.ModuleDict({
+                item.group: nn.Linear(CARD_METADATA_FEATURES, config.width) for item in groups})
+            self.register_buffer("_card_static", torch.tensor(tables.static, dtype=torch.float32), persistent=False)
+            self.register_buffer("_card_faces", torch.tensor(tables.faces, dtype=torch.float32), persistent=False)
+
+        def _card_features(self, item: CardMetadataGroup, values, known):
+            """``[rows, CARD_METADATA_FEATURES]``: zero where the card is unknown or has no row."""
+            flag = known[:, item.card_field_index]
+            code = torch.where(flag, values[:, item.card_field_index], torch.zeros_like(flag, dtype=values.dtype))
+            if item.upgrades_field_index is None:
+                level = torch.zeros_like(code)
+            else:
+                upgrades = torch.where(known[:, item.upgrades_field_index], values[:, item.upgrades_field_index],
+                                       torch.zeros_like(code))
+                level = upgrades.clamp(min=0, max=self._card_faces.shape[0] - 1)
+            features = torch.cat((self._card_static[code], self._card_faces[level, code]), dim=-1)
+            return features * flag.unsqueeze(-1).to(dtype=features.dtype)
+
+        def _embed(self, group: GroupPlan, values, known, references):
+            out = super()._embed(group, values, known, references)
+            item = self._card_groups.get(group.name)
+            if item is None:
+                return out
+            return out + self.card_projections[group.name](self._card_features(item, values, known))
+
+    return CardMetaTransformerPolicy
+
+
 def _group_key(group: GroupPlan) -> str:
     return f"g{group.index}"
 
@@ -618,8 +877,72 @@ def build_transformer_policy(
     return policy
 
 
+def build_transformer_cardmeta_policy(
+    schema: CombatSchema,
+    model_config: TransformerCardMetaConfig,
+    *,
+    seed: int,
+    device: str,
+    objective_id: str = DISTILL_OBJECTIVE_ID,
+    model_id: str = TRANSFORMER_CARDMETA_MODEL_ID,
+    features_id: str = TRANSFORMER_CARDMETA_FEATURES_ID,
+    trim_padding: bool = False,
+    experimental_trim_compute: bool = False,
+    card_metadata: Mapping[str, Any] | None = None,
+) -> Any:
+    """Build S3, the entity transformer with card metadata; everything but the module is checked first.
+
+    ``card_metadata`` is the descriptor to join (default: the committed snapshot, ``load_card_metadata()``);
+    either way its fingerprint must be the pinned one and the config's. ``trim_padding`` is accepted
+    for the family interface; the outputs are the same either way.
+    """
+    if not isinstance(model_config, TransformerCardMetaConfig):
+        raise ContractError("the card-metadata transformer requires a TransformerCardMetaConfig")
+    plan = transformer_plan(schema)
+    if (model_id, features_id) != (TRANSFORMER_CARDMETA_MODEL_ID, TRANSFORMER_CARDMETA_FEATURES_ID):
+        raise ContractError("the card-metadata transformer's model_id/features_id must be its own identity pair")
+    if objective_id != DISTILL_OBJECTIVE_ID:
+        raise ContractError(f"the card-metadata transformer is a {DISTILL_OBJECTIVE_ID} student only")
+    if _STANDARD_VIEW_ID not in (schema.view.view_id, schema.view.dense_view_id):
+        raise ContractError("the card-metadata transformer requires the Standard combat view")
+    if type(seed) is not int:
+        raise ContractError("policy seed must be a primitive integer")
+    if not isinstance(device, str) or not device:
+        raise ContractError("policy device must be a non-empty string")
+    if type(trim_padding) is not bool or type(experimental_trim_compute) is not bool:
+        raise ContractError("trim_padding and experimental_trim_compute must be booleans")
+    if experimental_trim_compute:
+        raise ContractError("the card-metadata transformer has no experimental_trim_compute mode")
+    groups = card_metadata_groups(schema)
+    count = transformer_cardmeta_parameter_count(plan, model_config)
+    if count > TRANSFORMER_PARAMETER_CAP:
+        raise ContractError(
+            f"the card-metadata transformer needs {count} parameters; its cap is {TRANSFORMER_PARAMETER_CAP}")
+    metadata = load_card_metadata() if card_metadata is None else card_metadata
+    if metadata.get("fingerprint") != model_config.card_metadata_fingerprint:
+        raise ContractError("the card metadata's fingerprint is not the config's card_metadata_fingerprint")
+    tables = card_metadata_tables(metadata, schema.vocabularies[CARD_VOCABULARY])
+    import torch
+
+    policy_class = _cardmeta_policy_class()
+    with torch.random.fork_rng(devices=[]):
+        torch.random.default_generator.manual_seed(seed)
+        policy = policy_class(plan, schema, model_config, groups=groups, tables=tables, model_id=model_id,
+                              features_id=features_id, objective_id=objective_id, trim_padding=trim_padding)
+    policy = policy.to(device=device)
+    actual = sum(int(parameter.numel()) for parameter in policy.parameters())
+    if actual != count:
+        raise ContractError(f"card-metadata transformer parameter count mismatch: expected {count}, got {actual}")
+    return policy
+
+
 __all__ = [
-    "ACTION_GROUP", "BUCKET_COUNT", "BUCKET_EXACT", "BUCKET_FEATURES", "BUCKET_MAX_MAGNITUDE", "FFN_RATIO",
+    "ACTION_GROUP", "CARD_COLORS", "CARD_COST_KINDS", "CARD_FACE_FEATURES", "CARD_KEYWORDS", "CARD_METADATA_FEATURES",
+    "CARD_METADATA_GROUPS", "CARD_METADATA_SCHEMA_ID", "CARD_METADATA_SNAPSHOT", "CARD_NULLABLE_FIELDS", "CARD_RARITIES",
+    "CARD_STATIC_FEATURES", "CARD_TAGS", "CARD_TARGETS", "CARD_TYPES", "CARD_VOCABULARY", "CardMetadataGroup",
+    "CardMetadataTables", "build_transformer_cardmeta_policy", "card_face_features", "card_metadata_groups",
+    "card_metadata_tables", "card_static_features", "load_card_metadata", "transformer_cardmeta_parameter_count",
+    "BUCKET_COUNT", "BUCKET_EXACT", "BUCKET_FEATURES", "BUCKET_MAX_MAGNITUDE", "FFN_RATIO",
     "GroupPlan", "ReferencePlan", "SINUSOIDAL_FREQUENCIES", "TokenLayout", "TransformerPlan", "bucket_index",
     "build_transformer_policy", "transformer_parameter_count", "transformer_plan",
 ]

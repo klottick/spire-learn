@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
-import hashlib
-import json
+from dataclasses import dataclass
 import math
 from typing import Any
 
 from spire_learn.contracts import ContractError
 from spire_learn.neural.config import (
-    LEARNER_IDENTITY_IDS, OBJECTIVE_IDS, STANDARD_LEARNER_IDENTITY_IDS, WINLOSS_OBJECTIVE_ID,
+    DISTILL_OBJECTIVE_ID, LEARNER_IDENTITY_IDS, OBJECTIVE_IDS, STANDARD_LEARNER_IDENTITY_IDS,
+    WINLOSS_OBJECTIVE_ID, model_config_hash,
 )
 from spire_learn.neural.contracts import CombatFrame, ModelConfig
 from spire_learn.neural.features import EncodedBatch, FeatureContract, encode_frames, feature_contract
@@ -23,14 +22,22 @@ _ACTION_ID = "spire-learn-combat-dispatch-v1"
 # The default objective; callers pass the config's accepted objective ID otherwise.
 _OBJECTIVE_ID = WINLOSS_OBJECTIVE_ID
 _HARD_PARAMETER_CAP = 10_000_000
+# A policy is built for a PPO objective or for supervised distillation.
+_POLICY_OBJECTIVE_IDS = (*OBJECTIVE_IDS, DISTILL_OBJECTIVE_ID)
 
 
 @dataclass(frozen=True)
 class PolicyOutput:
-    """Actor logits in original dispatch order and one critic value per frame."""
+    """Actor logits in original dispatch order and one critic value per frame.
+
+    ``values`` is always the outcome (PPO critic) head. ``aux_values`` holds the other value
+    heads of a ``value_heads = 3`` student, ``(batch, 2)``: HP kept, then realised v2. It is
+    None for a one-head policy.
+    """
 
     logits: Any
     values: Any
+    aux_values: Any = None
 
 
 @dataclass(frozen=True)
@@ -57,17 +64,6 @@ class _ModelPlan:
     global_input_width: int
     power_targets: tuple[str, ...]
     parameter_count: int
-
-
-def _canonical_hash(value: object) -> str:
-    encoded = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _linear_parameter_count(input_width: int, output_width: int) -> int:
@@ -186,6 +182,8 @@ def _compile_model_plan(schema: CombatSchema, config: ModelConfig) -> _ModelPlan
     count += _linear_parameter_count(hidden_width, hidden_width)
     count += _linear_parameter_count(hidden_width, 1)
     count += _linear_parameter_count(hidden_width, 1)
+    if config.value_heads > 1:
+        count += _linear_parameter_count(hidden_width, config.value_heads - 1)
 
     limit = min(config.max_parameters, _HARD_PARAMETER_CAP)
     if count > limit:
@@ -298,7 +296,7 @@ def build_policy(
         raise ContractError("the Standard learner identity requires the Standard combat view")
     if type(seed) is not int:
         raise ContractError("policy seed must be a primitive integer")
-    if not isinstance(objective_id, str) or objective_id not in OBJECTIVE_IDS:
+    if not isinstance(objective_id, str) or objective_id not in _POLICY_OBJECTIVE_IDS:
         raise ContractError("policy objective_id must be a supported combat objective")
     if not isinstance(device, str) or not device:
         raise ContractError("policy device must be a non-empty string")
@@ -329,7 +327,9 @@ def build_policy(
             self._hidden_width = model_config.hidden_width
             self._embedding_width = model_config.embedding_width
             self._parameter_count = plan.parameter_count
-            self._model_config_hash = _canonical_hash(asdict(model_config))
+            # The shared hash payload: value_heads = 1 is left out, as before it existed.
+            self._model_config_hash = model_config_hash(model_config)
+            self._value_heads = model_config.value_heads
             self._behavior_policy_version: int = 0
             self._consumed_decision_ids: set[tuple[str, str]] = set()
             self._consumed_decision_limit = 65_536
@@ -384,6 +384,11 @@ def build_policy(
             )
             self.candidate_output = torch.nn.Linear(model_config.hidden_width, 1)
             self.value_head = torch.nn.Linear(model_config.hidden_width, 1)
+            if model_config.value_heads > 1:
+                # Created last, so a one-head policy draws exactly its historical initial weights.
+                self.aux_value_head = torch.nn.Linear(
+                    model_config.hidden_width, model_config.value_heads - 1
+                )
 
         def _base_group_embeddings(self, batch: EncodedBatch) -> dict[str, Any]:
             result: dict[str, Any] = {}
@@ -611,10 +616,15 @@ def build_policy(
             values = self.value_head(global_context).squeeze(-1)
             if not torch.isfinite(values).all().item():
                 raise ContractError("critic values must be finite")
+            aux_values = None
+            if self._value_heads > 1:
+                aux_values = self.aux_value_head(global_context)
+                if not torch.isfinite(aux_values).all().item():
+                    raise ContractError("auxiliary value heads must be finite")
             applicable_logits = logits.masked_select(batch.action_mask)
             if applicable_logits.numel() and not torch.isfinite(applicable_logits).all().item():
                 raise ContractError("legal action logits must be finite")
-            return PolicyOutput(logits, values)
+            return PolicyOutput(logits, values, aux_values)
 
         def act(
             self,

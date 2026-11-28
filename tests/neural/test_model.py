@@ -380,5 +380,85 @@ class NeuralModelTensorTests(unittest.TestCase):
                                       encoding="utf-8")
 
 
+class DistillValueHeadTests(unittest.TestCase):
+    """Three value heads for distillation students (``--model`` native route; torch and numpy)."""
+
+    FF_HASH = "4fb628e06bf4952847795ac5d8548d12dfeede4c97e874ab843857ae0f91cd2f"
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import numpy  # noqa: F401
+            import torch
+        except ImportError:
+            raise unittest.SkipTest("numpy and torch are only importable in the runtime container")
+        from tests.neural import test_distill_data as shards
+
+        shards._load_numpy_modules()
+        cls.torch = torch
+        cls.schema = shards._schema()
+        cls.frames = shards.frames(cls.schema)
+
+    def build(self, config, **kwargs):
+        from spire_learn.neural.model import build_policy
+
+        return build_policy(self.schema, config, seed=5, device="cpu", **kwargs)
+
+    def test_aux_values_and_param_count(self):
+        from spire_learn.contracts import ContractError
+        from spire_learn.neural.config import DISTILL_OBJECTIVE_ID
+        from spire_learn.neural.contracts import ModelConfig
+        from spire_learn.neural.features import encode_frames
+        from spire_learn.neural.model import _compile_model_plan
+
+        torch = self.torch
+        one_config = ModelConfig(embedding_width=4, hidden_width=8, max_parameters=10_000_000)
+        three_config = ModelConfig(embedding_width=4, hidden_width=8, max_parameters=10_000_000, value_heads=3)
+        one = self.build(one_config)
+        three = self.build(three_config, objective_id=DISTILL_OBJECTIVE_ID)
+        count = lambda policy: sum(parameter.numel() for parameter in policy.parameters())  # noqa: E731
+        # Two more heads over the hidden width: weight 8 x 2 plus bias 2.
+        self.assertEqual(count(three) - count(one), 8 * 2 + 2)
+        self.assertEqual(_compile_model_plan(self.schema, three_config).parameter_count, count(three))
+        self.assertEqual(_compile_model_plan(self.schema, one_config).parameter_count, count(one))
+        # The extra head is created last: every shared tensor keeps its one-head initial value.
+        one_state, three_state = one.state_dict(), three.state_dict()
+        self.assertEqual(set(three_state) - set(one_state), {"aux_value_head.weight", "aux_value_head.bias"})
+        for name, tensor in one_state.items():
+            self.assertTrue(torch.equal(tensor, three_state[name]), name)
+        batch = encode_frames(self.frames, self.schema, device="cpu")
+        with torch.no_grad():
+            out_one, out_three = one(batch), three(batch)
+        self.assertIsNone(out_one.aux_values)
+        self.assertEqual(tuple(out_three.aux_values.shape), (len(self.frames), 2))
+        self.assertTrue(torch.isfinite(out_three.aux_values).all())
+        # values stays the outcome head; act and values are unchanged.
+        self.assertTrue(torch.equal(out_one.logits, out_three.logits))
+        self.assertTrue(torch.equal(out_one.values, out_three.values))
+        self.assertEqual(three.values(self.frames), tuple(float(value) for value in out_three.values))
+        self.assertEqual(one.values(self.frames), three.values(self.frames))
+        picks = lambda policy: [choice.original_action_index  # noqa: E731
+                                for choice in policy.act(self.frames, generator=None, deterministic=True)]
+        self.assertEqual(picks(three), picks(one))
+        # The parameter cap counts the extra heads.
+        with self.assertRaises(ContractError):
+            self.build(ModelConfig(embedding_width=4, hidden_width=8, max_parameters=count(one) + 1, value_heads=3),
+                       objective_id=DISTILL_OBJECTIVE_ID)
+        self.build(ModelConfig(embedding_width=4, hidden_width=8, max_parameters=count(one)))
+
+    def test_policy_model_hash_site_unchanged(self):
+        from spire_learn.neural.config import model_config_hash
+        from spire_learn.neural.contracts import ModelConfig
+
+        accepted = self.build(ModelConfig(embedding_width=16, hidden_width=64, max_parameters=10_000_000))
+        explicit = self.build(ModelConfig(embedding_width=16, hidden_width=64, max_parameters=10_000_000,
+                                          value_heads=1))
+        # CombatPolicy._model_config_hash, which ppo_update checks against the rollout identity.
+        self.assertEqual(accepted._model_config_hash, self.FF_HASH)
+        self.assertEqual(explicit._model_config_hash, self.FF_HASH)
+        three = ModelConfig(embedding_width=4, hidden_width=8, max_parameters=10_000_000, value_heads=3)
+        self.assertEqual(self.build(three)._model_config_hash, model_config_hash(three))
+
+
 if __name__ == "__main__":
     unittest.main()

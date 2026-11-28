@@ -39,7 +39,7 @@ import argparse
 from collections import Counter
 from collections.abc import Mapping
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import json
 import multiprocessing
 import os
@@ -56,6 +56,7 @@ if __package__ in (None, ""):
 from scripts.neural import distill_label_entry as label
 from scripts.neural import search_teacher_entry as entry
 from spire_learn.neural.cases import environment_seed_for
+from spire_learn.neural.config import model_config_hash_payload
 from spire_learn.neural.worker_faults import WorkerFault, fault_from  # noqa: F401
 from spire_learn.neural.noncombat_heuristic import HEURISTIC_ID, CardPriority, NoncombatHeuristic, RoomFlags
 from spire_learn.neural.scenario_support import content_sha256
@@ -536,7 +537,7 @@ def run_chunk(args, output: Path) -> dict:
         "teacher_config": None if teacher is None else entry._teacher_config(teacher),
         "teachers_sha256": None if args.teachers is None or kind != "teacher" else label._file_sha256(args.teachers),
         "calibrated": calibrated, "uncalibrated_allowed": True if kind == "teacher" else None,
-        "checkpoint": checkpoint, "checkpoint_model_config": asdict(label.MIXED_MODEL_CONFIG) if checkpoint else None,
+        "checkpoint": checkpoint, "checkpoint_model_config": model_config_hash_payload(label.MIXED_MODEL_CONFIG) if checkpoint else None,
         "checkpoint_deterministic": True if checkpoint else None,
         "noncombat_player": HEURISTIC_ID,
         "priority": {"id": priority.id, "path": str(args.priority.relative_to(_ROOT)) if args.priority.is_relative_to(_ROOT)

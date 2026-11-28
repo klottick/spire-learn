@@ -195,6 +195,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--policy-player": "tests.neural.test_policy_player",
         "--compact-bridge": "tests.neural.test_compact_bridge",
         "--full-run-native": "tests.integration.test_full_run_native",
+        "--distill-train": "tests.neural.test_distill_train",
+        # Only the distillation value-head class: the module's other tests stay in the tensor suite.
+        "--model": "tests.neural.test_model.DistillValueHeadTests",
     }
     if len(argv) == 1 and argv[0] in native_suites:
         if os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") != "1":

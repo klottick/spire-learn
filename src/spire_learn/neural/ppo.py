@@ -20,6 +20,7 @@ from typing import Any
 
 from spire_learn.contracts import ContractError
 from spire_learn.experiments.budget import Budget
+from spire_learn.neural.config import DISTILL_HASH_KEY, DISTILL_OBJECTIVE_ID
 from spire_learn.neural.contracts import NeuralIdentity, PPOConfig, Rollout
 from spire_learn.neural.returns import compute_gae
 
@@ -190,6 +191,9 @@ def _validate_admission(policy: Any, rollout: Rollout, config: PPOConfig) -> tup
     if actual_ids != expected_ids:
         raise ContractError("rollout learner identity does not match the policy")
     hashes = identity.config_hashes
+    if identity.objective_id == DISTILL_OBJECTIVE_ID or DISTILL_HASH_KEY in hashes:
+        raise ContractError("PPO never updates a distillation identity; distill_train trains it")
+    # The policy's model hash comes from model_config_hash_payload, like every other hash site.
     if hashes.get("model") != getattr(policy, "_model_config_hash", None):
         raise ContractError("rollout model config hash does not match the policy")
     if hashes.get("ppo") != _canonical_hash(asdict(config)):

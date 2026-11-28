@@ -124,6 +124,17 @@ class ArgumentTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "SPIRE_LEARN_RUNNER_OUTPUT"):
                     entry._check_output(root / "runs" / "s2", config)
                 entry._check_output(root / "runs" / "other", config)
+            runner = root / "runs" / "run-1"
+            for name in ("manifest.json", "stdout.txt", "stderr.txt"):  # what the runner writes first
+                runner.mkdir(parents=True, exist_ok=True)
+                (runner / name).write_text("")
+            (runner / ".runtime").mkdir()
+            with patch.dict("os.environ", {"SPIRE_LEARN_RUNNER_OUTPUT": str(runner)}):
+                entry._check_output(runner / "train", config)  # a fresh directory inside the runner's
+                with self.assertRaisesRegex(ValueError, "fresh or empty"):
+                    entry._check_output(runner, config)  # the runner's own directory is never empty
+                with self.assertRaisesRegex(ValueError, "SPIRE_LEARN_RUNNER_OUTPUT"):
+                    entry._check_output(root / "runs" / "run-1-sibling", config)
 
 
 class SummaryTests(unittest.TestCase):

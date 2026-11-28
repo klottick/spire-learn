@@ -11,7 +11,7 @@ Run it through ``runtime_container.py`` (with ``--gpu <uuid>`` for a CUDA config
 ``chunk-manifest.json``. At start-up every chunk-manifest hash is checked and every shard is
 verified (structure and file hashes); any mismatch refuses the run before training. The manifest's
 sha256 is run metadata. ``OUTPUT`` is a fresh (or empty) directory under the config's ``output_root``; when
-``SPIRE_LEARN_RUNNER_OUTPUT`` is set it must be that directory. The compact combat descriptor comes
+``SPIRE_LEARN_RUNNER_OUTPUT`` is set it must be inside that directory. The compact combat descriptor comes
 from ``--descriptor`` (a captured descriptor JSON) or, by default, from the installed Gym without a
 reset; either way it must match the config's fingerprint and every chunk's observation schema.
 
@@ -180,8 +180,10 @@ def _check_output(output: Path, config) -> None:
     if not output.resolve().is_relative_to(config.output_root):
         raise ValueError(f"--output must be under the config's output_root {config.output_root}")
     runner = os.environ.get("SPIRE_LEARN_RUNNER_OUTPUT")
-    if runner is not None and Path(runner).resolve() != output.resolve():
-        raise ValueError("--output must be SPIRE_LEARN_RUNNER_OUTPUT")
+    # The runner writes its own manifest, logs and .runtime/ into its output directory before the
+    # entry starts, so the trainer writes into a fresh directory inside it (as the label entry does).
+    if runner is not None and not output.resolve().is_relative_to(Path(runner).resolve()):
+        raise ValueError("--output must be inside SPIRE_LEARN_RUNNER_OUTPUT")
     if output.exists() and any(output.iterdir()):
         raise ValueError("--output must be a fresh or empty directory")
 

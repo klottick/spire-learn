@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from scripts.neural import distill_gates as dg
-
-
-def outcomes(wins: int, losses: int, extra: dict[str, str] | None = None) -> dict[str, str]:
-    m = {f"c{i}": "win" for i in range(wins)}
-    m.update({f"c{wins + i}": "loss" for i in range(losses)})
-    m.update(extra or {})
-    return m
 
 
 def pair(only_c: int, only_b: int, both: int = 0) -> tuple[dict, dict]:
@@ -90,6 +88,102 @@ class DistillGatesTest(unittest.TestCase):
         self.assertEqual(out["G4"]["status"], "skipped")
         none = dg.evaluate({k: [strong[1]] * 2 for k in ("ppo", "s1", "s2", "s3")})
         self.assertFalse(none["G2"]["pass"])
+
+
+    def test_p_is_two_sided(self) -> None:
+        c, b = pair(1, 5)
+        p = dg.pair_stats(c, b)["p"]
+        self.assertAlmostEqual(p, 2 * 7 / 64)
+        self.assertAlmostEqual(dg.pair_stats(b, c)["p"], p)
+
+    def test_pairing_by_id_not_order(self) -> None:
+        c, b = pair(3, 1, both=2)
+        rev = dict(reversed(list(b.items())))
+        self.assertEqual(dg.pair_stats(c, b), dg.pair_stats(c, rev))
+
+    def test_subset_case_set_refused(self) -> None:
+        c, b = pair(3, 1)
+        sub = dict(list(b.items())[:-1])
+        with self.assertRaises(dg.GateInputError):
+            dg.pair_stats(c, sub)
+        with self.assertRaises(dg.GateInputError):
+            dg.pair_stats(sub, c)
+
+    def test_unknown_outcome_refused(self) -> None:
+        with self.assertRaises(dg.GateInputError):
+            dg.pair_stats({"a": "win"}, {"a": "fault"})
+        with self.assertRaises(dg.GateInputError):
+            dg.evaluate({"ppo": [{"a": "wn"}, {"a": "win"}]})
+
+    def test_seed_i_pairs_with_seed_i(self) -> None:
+        ids = [f"x{i}" for i in range(5)]
+        win = {i: "win" for i in ids}
+        loss = {i: "loss" for i in ids}
+        r = dg.beats([win, loss], [loss, win], 0.05)
+        self.assertEqual([x["only_challenger"] for x in r["pairs"]], [5, 0])
+        self.assertEqual([x["only_baseline"] for x in r["pairs"]], [0, 5])
+        r2 = dg.beats([win, loss], [win, loss], 0.05)
+        self.assertEqual([x["both_win"] for x in r2["pairs"]], [5, 0])
+
+    def test_g3_s3_vs_s1_in_isolation_and_g4_end_to_end(self) -> None:
+        strong, weak = pair(30, 2), pair(2, 2)
+        arms = {"ppo": [strong[1]] * 2, "s1": [strong[1]] * 2,
+                "s2": [strong[1]] * 2, "s3": [strong[0]] * 2,
+                "distilled": [strong[0]] * 2}
+        out = dg.evaluate(arms)
+        g3 = out["G3"]
+        self.assertTrue(g3["pass"])
+        self.assertTrue(g3["tests"]["s3_vs_s1"]["beats"])
+        self.assertFalse(g3["tests"]["s2_vs_s1"]["beats"])
+        g4 = out["G4"]
+        self.assertEqual(g4["status"], "evaluated")
+        self.assertEqual(g4["alpha_per_test"], 0.05)
+        self.assertTrue(g4["pass"])
+        self.assertTrue(g4["tests"]["distilled_vs_ppo"]["beats"])
+
+    def test_arm_guards(self) -> None:
+        c, b = pair(3, 1)
+        with self.assertRaises(dg.GateInputError):
+            dg.evaluate({"ppo": [c]})                 # one seed
+        with self.assertRaises(dg.GateInputError):
+            dg.evaluate({"ppo": [c, c, c]})           # three seeds
+        with self.assertRaises(dg.GateInputError):
+            dg.evaluate({"nope": [c, c]})             # unknown arm
+        with self.assertRaises(dg.GateInputError):    # different panels
+            dg.evaluate({"ppo": [c, c], "s1": [b, {"z": "win"}]})
+        with self.assertRaises(dg.GateInputError):    # requested gate lacks arms
+            dg.evaluate({"ppo": [c, c], "s1": [b, b]}, ["G2"])
+        out = dg.evaluate({"ppo": [c, c], "s1": [c, c]})
+        self.assertEqual(out["G2"]["status"], "skipped")
+
+    def _write(self, d: Path, name: str, outcomes: dict[str, str]) -> str:
+        path = d / f"{name}.json"
+        cases = {k: {"outcome": v} for k, v in outcomes.items()}
+        path.write_text(json.dumps({"evaluations": {"final": {"cases": cases}}}))
+        return str(path)
+
+    def test_load_arm_and_main(self) -> None:
+        c, b = pair(30, 2)
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t)
+            ppo = ",".join(self._write(d, f"p{i}", b) for i in (1, 2))
+            s1 = ",".join(self._write(d, f"s{i}", c) for i in (1, 2))
+            self.assertEqual(dg.load_arm(ppo.split(",")), [b, b])
+            out = d / "g.json"
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(dg.main(["--arm", f"ppo={ppo}", "--arm", f"s1={s1}",
+                                          "--gate", "G2", "--out", str(out)]), 2)
+                with self.assertRaises(SystemExit):
+                    dg.main(["--arm", f"ppo={ppo}", "--arm", f"ppo={ppo}"])
+            self.assertFalse(out.exists())
+            s2 = ",".join(self._write(d, f"t{i}", c) for i in (1, 2))
+            s3 = ",".join(self._write(d, f"u{i}", c) for i in (1, 2))
+            self.assertEqual(dg.main(["--arm", f"ppo={ppo}", "--arm", f"s1={s1}",
+                                      "--arm", f"s2={s2}", "--arm", f"s3={s3}",
+                                      "--gate", "G2", "--out", str(out)]), 0)
+            g2 = json.loads(out.read_text())["G2"]
+            self.assertTrue(g2["pass"])
 
 
 if __name__ == "__main__":

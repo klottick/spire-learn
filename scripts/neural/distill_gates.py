@@ -7,8 +7,14 @@ significant. A case that is not a win or a loss on either side (escaped,
 censored, incomplete) is dropped from that pair and counted.
 
 Stdlib only. Usage:
-  distill_gates.py --arm ppo=r1/summary.json,r2/summary.json \
-      --arm s1=... --arm s2=... --arm s3=... --arm distilled=... --out gates.json
+  PYTHONPATH=. python3 scripts/neural/distill_gates.py \
+      --arm ppo=r1/summary.json,r2/summary.json --arm s1=... --arm s2=... \
+      --arm s3=... --arm distilled=... [--gate G2 ...] --out gates.json
+
+Arm names are exactly ppo, s1, s2, s3 and distilled. Each arm takes exactly two
+summary paths (seed 1, seed 2) and every summary must cover the same case ids.
+A gate with missing arms is "skipped" unless named with --gate, in which case
+the run exits non-zero.
 """
 
 from __future__ import annotations
@@ -29,12 +35,20 @@ GATES: dict[str, tuple[float, list[tuple[str, str]]]] = {
 }
 
 
+ARMS = ("ppo", "s1", "s2", "s3", "distilled")
+OUTCOMES = ("win", "loss", "escaped", "incomplete")
+SEEDS = 2
+
+
 class GateInputError(ValueError):
     pass
 
 
 def pair_stats(chal: dict[str, str], base: dict[str, str]) -> dict:
     """Discordant counts for one seed pair; non win/loss cases are dropped."""
+    for o in (*chal.values(), *base.values()):
+        if o not in OUTCOMES:
+            raise GateInputError(f"unknown outcome value {o!r}")
     if set(chal) != set(base):
         raise GateInputError("a seed pair must cover identical case ids")
     both = only_c = only_b = neither = 0
@@ -45,7 +59,7 @@ def pair_stats(chal: dict[str, str], base: dict[str, str]) -> dict:
             for o in (x, y):
                 if o == "escaped":
                     dropped["escaped"] += 1
-                elif o not in ("win", "loss"):
+                elif o == "incomplete":
                     dropped["other"] += 1
             dropped.setdefault("cases", 0)
             dropped["cases"] += 1
@@ -92,13 +106,39 @@ def beats(chal: list[dict[str, str]], base: list[dict[str, str]], alpha: float) 
     }
 
 
-def evaluate(arms: dict[str, list[dict[str, str]]]) -> dict:
-    """Verdict per gate; a gate runs only if all its arms are supplied."""
+def validate(arms: dict[str, list[dict[str, str]]]) -> None:
+    unknown = sorted(set(arms) - set(ARMS))
+    if unknown:
+        raise GateInputError(f"unknown arm names {unknown}; expected {list(ARMS)}")
+    cases: set[str] | None = None
+    for name, seeds in arms.items():
+        if len(seeds) != SEEDS:
+            raise GateInputError(f"arm {name} has {len(seeds)} seeds; exactly {SEEDS} required")
+        for outcomes in seeds:
+            for o in outcomes.values():
+                if o not in OUTCOMES:
+                    raise GateInputError(f"arm {name}: unknown outcome value {o!r}")
+            if cases is None:
+                cases = set(outcomes)
+            elif set(outcomes) != cases:
+                raise GateInputError(f"arm {name}: case ids differ from the other summaries")
+
+
+def evaluate(arms: dict[str, list[dict[str, str]]], requested: list[str] | None = None) -> dict:
+    """Verdict per gate. A gate lacking arms is skipped unless requested."""
+    validate(arms)
+    requested = requested or []
+    bad = sorted(set(requested) - set(GATES))
+    if bad:
+        raise GateInputError(f"unknown gates {bad}")
     out: dict[str, dict] = {}
     for gate, (alpha, tests) in GATES.items():
         needed = {a for t in tests for a in t}
-        if not needed <= set(arms):
-            out[gate] = {"status": "skipped", "missing_arms": sorted(needed - set(arms))}
+        missing = needed - set(arms)
+        if missing:
+            if gate in requested:
+                raise GateInputError(f"{gate} cannot run: missing arms {sorted(missing)}")
+            out[gate] = {"status": "skipped", "missing_arms": sorted(missing)}
             continue
         results = {f"{c}_vs_{b}": beats(arms[c], arms[b], alpha) for c, b in tests}
         out[gate] = {"status": "evaluated", "alpha_per_test": alpha,
@@ -114,6 +154,7 @@ def load_arm(paths: list[str]) -> list[dict[str, str]]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--arm", action="append", default=[], metavar="NAME=S1,S2")
+    ap.add_argument("--gate", action="append", default=[], choices=list(GATES))
     ap.add_argument("--out", type=Path)
     args = ap.parse_args(argv)
     arms: dict[str, list[dict[str, str]]] = {}
@@ -121,8 +162,17 @@ def main(argv: list[str] | None = None) -> int:
         name, _, paths = spec.partition("=")
         if not paths or name in arms:
             ap.error(f"bad or duplicate --arm {spec!r}")
-        arms[name] = load_arm(paths.split(","))
-    text = json.dumps(evaluate(arms), indent=2, sort_keys=True)
+        try:
+            arms[name] = load_arm(paths.split(","))
+        except (OSError, KeyError, ValueError) as exc:
+            print(f"error: reading arm {name}: {exc}", file=sys.stderr)
+            return 2
+    try:
+        verdict = evaluate(arms, args.gate)
+    except GateInputError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    text = json.dumps(verdict, indent=2, sort_keys=True)
     if args.out:
         args.out.write_text(text + "\n")
     else:

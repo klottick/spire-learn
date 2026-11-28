@@ -20,7 +20,10 @@ class TeacherEntryNativeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="teacher-entry-", dir=parent) as temp:
             output = Path(temp)
             configs = json.loads(defaults.read_text())
+            # A cheaper, no-longer-calibrated variant of the calibrated v1.2.4 tree-1x: marked uncalibrated,
+            # so the entry needs --allow-uncalibrated for it (the path this test covers).
             configs["teachers"]["tree-1x"]["config"].update(worlds=4)
+            configs["teachers"]["tree-1x"]["calibrated"] = False
             teachers = output / "teachers.json"
             teachers.write_text(json.dumps(configs))
             results = {}
@@ -32,6 +35,7 @@ class TeacherEntryNativeTests(unittest.TestCase):
                             "--recipe", str(recipe), "--teachers", str(teachers), "--teacher", name,
                             "--train-sample", "4", "--seed", "2026112500", "--output", str(destination),
                             "--workers", "1", "--parallel", str(parallel),
+                            *(["--allow-uncalibrated"] if name == "tree-1x" else []),
                         ]), 0)
                         summary = json.loads((destination / "summary.json").read_text())
                         fights = self.read_rows(destination / "fights.jsonl")

@@ -342,6 +342,9 @@ class ModelConfig:
     embedding_width: int
     hidden_width: int
     max_parameters: int
+    # 1 is the PPO actor-critic (one critic); 3 adds the distillation HP-kept and realised-v2
+    # heads beside the outcome head. A value of 1 is left out of every config hash.
+    value_heads: int = 1
 
     def __post_init__(self) -> None:
         for name in ("embedding_width", "hidden_width", "max_parameters"):
@@ -350,6 +353,8 @@ class ModelConfig:
                 raise ContractError(f"ModelConfig {name} must be a positive integer")
         if self.max_parameters > 10_000_000:
             raise ContractError("ModelConfig max_parameters cannot exceed 10,000,000")
+        if type(self.value_heads) is not int or self.value_heads not in (1, 3):
+            raise ContractError("ModelConfig value_heads must be 1 or 3")
 
 
 @dataclass(frozen=True)

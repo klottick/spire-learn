@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import io
 import os
@@ -1137,6 +1138,741 @@ class PanelRecipeRevisionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Gym"):
                 baseline_entry._evaluate({}, deps, plan, None, "recipe.json", Path(folder), None, None, None,
                                          None, None, labels=())
+
+
+
+def _output_digest(output: Path, replacements: dict[str, str], extra: object) -> str:
+    """sha256 over every written file plus the scripted call log, with run-specific text normalised."""
+    import hashlib
+
+    def normal(text: str) -> str:
+        for old, new in replacements.items():
+            text = text.replace(old, new)
+        return text
+
+    digest = hashlib.sha256()
+    for path in sorted(p for p in output.rglob("*") if p.is_file()):
+        digest.update(str(path.relative_to(output)).encode() + b"\0")
+        digest.update(normal(path.read_text()).encode() + b"\0")
+    digest.update(normal(json.dumps(extra, sort_keys=True, default=str)).encode())
+    return digest.hexdigest()
+
+
+class _ScriptedReports:
+    """Evaluation reports by call number: win, loss, a turn-cap censor, escaped, ... (cycling)."""
+
+    def __init__(self, fakes, cycle, *, fail_at=None, raise_at=None):
+        self.fakes, self.cycle, self.fail_at, self.raise_at, self.calls = fakes, cycle, fail_at, raise_at, 0
+
+    def __call__(self, config, *, runtime, clock, allow_final):
+        self.calls += 1
+        if self.raise_at == self.calls:
+            raise RuntimeError(f"scripted evaluation fault at call {self.calls}")
+        self.fakes.evaluated.append(config.path)
+        self.fakes.log.append(("evaluate", config.path, type(runtime).__name__,
+                               runtime.operation_limits.max_environment_actions,
+                               runtime.operation_limits.monotonic_deadline, allow_final))
+        if self.fail_at == self.calls:
+            return SimpleNamespace(exit_code=1, run_dir=None, summary={"status": "operational_failure"})
+        kind = self.cycle[(self.calls - 1) % len(self.cycle)]
+        if kind == "censored":
+            return _budget_exhausted(turn=True)
+        fight = {"victories": int(kind == "win"), "deaths": int(kind == "loss"), "escaped": int(kind == "escaped")}
+        return SimpleNamespace(exit_code=0, run_dir=f"run-{self.calls}",
+                               summary={"status": "complete", "fights": {"standalone_fights": fight}})
+
+
+class BaselineEvalByteIdentityTests(unittest.TestCase):
+    """Pins every byte the baseline's panel evaluation writes, recorded before panel_eval was extracted."""
+
+    # Recorded at 65e198d, with baseline_entry._evaluate still inline. Task 13's summary['training_stream']
+    # is removed before hashing (and checked), so these still pin every other byte.
+    PINS = {
+        "selection": "44fc90297c679f8c87a0681e7caa30c1c2a7e05b6c146ccfe12df645fa474dba",
+        "boss": "b02fa1d9d652d8f10e98f33149d126aa62ab59d26467ab04b51fde020d4a2bad",
+    }
+
+    def _deps(self, fakes, reports, log):
+        clock = _Clock()
+
+        def preflight(checkpoint, identity, *, purpose):
+            log.append(("preflight", str(checkpoint), identity, purpose))
+
+        def build_panel(recipe, *args, **kwargs):
+            log.append(("build_panel", recipe, args, kwargs))
+            cases = [{"case_id": f"case-{i}", "environment_seed": i} for i in range(4)]
+            return {"schema": "spire-learn-standard-panel-v2", "panel_sha256": "p" * 64,
+                    "manifest_sha256": "m" * 64,
+                    "manifest": {"schema": "spire-learn-neural-cases-v1", "split": "selection",
+                                 "partition": "selection", "cases": cases}}
+
+        def summarize(panel, reports_by_case):
+            return {"status": "complete", "panel_sha256": panel["panel_sha256"], "cases": sorted(reports_by_case),
+                    "outcomes": {case: getattr(report, "run_dir", None) for case, report in reports_by_case.items()}}
+
+        free = {"calls": 0, "busy": 3}
+
+        def gpu_free():
+            # Busy for three polls before the third evaluated case, so the gate waits mid-panel.
+            free["calls"] += 1
+            log.append(("gpu_free", free["calls"]))
+            if reports.calls == 2 and free["busy"]:
+                free["busy"] -= 1
+                return 1 * GIB
+            return 20 * GIB
+
+        def sleep(seconds):
+            log.append(("sleep", seconds))
+            clock.now += seconds
+
+        load_config = fakes.load_config
+        deps = {**fakes.deps(), "evaluate": reports, "preflight": preflight, "build_panel": build_panel,
+                "summarize": summarize, "gpu_free_bytes": gpu_free, "sleep": sleep,
+                "release_gpu_cache": lambda: log.append(("release",)),
+                "load_config": lambda path: SimpleNamespace(**vars(load_config(path)), device="cuda:0")}
+        return deps, clock
+
+    def _plan(self, directory):
+        plan = json.loads((ROOT / PLAN).read_text())
+        plan["max_turn_actions"] = 500
+        plan["additional_panels"] = ["configs/neural/curriculum-v1/recipe.json",
+                                     {"recipe": "configs/neural/curriculum-v2/recipe.json", "case_actions": 64,
+                                      "case_seconds": 7}]
+        plan["gpu_wait"] = {"min_free_bytes": 13 * GIB, "poll_seconds": 30, "max_total_seconds": 14400}
+        plan["runner_timeout_seconds"] = plan["wall_seconds"]["total"] + 14400 + 30 + 1200
+        path = Path(directory) / "plan.json"
+        path.write_text(json.dumps(plan))
+        return plan, path
+
+    def _strip_training_stream(self, output: Path) -> dict:
+        """Remove the one Task 13 summary key, rewriting summary.json exactly as the entry formats it."""
+        path = output / "summary.json"
+        text = path.read_text()
+        summary = json.loads(text)
+        self.assertEqual(json.dumps(summary, indent=2, sort_keys=True) + "\n", text)
+        stream = summary.pop("training_stream")
+        path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+        return stream
+
+    def test_baseline_eval_outputs_unchanged(self):
+        digests = {}
+        with tempfile.TemporaryDirectory() as directory:
+            plan, plan_path = self._plan(directory)
+            fakes = _Fakes(panel_cases=4)
+            log = fakes.log
+            # 16 primary cases, then 8 per additional panel: call 27 faults the second extra panel.
+            reports = _ScriptedReports(fakes, ["win", "loss", "censored", "escaped", "win"], raise_at=27)
+            deps, clock = self._deps(fakes, reports, log)
+            output = Path(directory) / "selection"
+            output.mkdir()
+            baseline_entry.run_baseline(ROOT, plan_path, output, dependencies=deps, clock=clock)
+            # Task 13 adds only summary['training_stream']; everything else keeps the recorded bytes.
+            self.assertEqual(self._strip_training_stream(output), {
+                "window": "second_half", "window_start_learned_decisions": 202752,
+                "window_end_learned_decisions": 405504, "segments": 49, "segments_without_fight_metrics": 49,
+                "victories": 0, "deaths": 0, "escaped": 0, "settled": 0, "settled_win_rate": None})
+            digests["selection"] = _output_digest(output, {directory: "<TMP>"}, log)
+
+        with tempfile.TemporaryDirectory() as directory:
+            plan, plan_path = self._plan(directory)
+            prior, _ = _prior_output(directory, plan=plan)
+            fakes = _Fakes(panel_cases=4)
+            log = fakes.log
+            reports = _ScriptedReports(fakes, ["loss", "escaped", "win"], fail_at=11)
+            deps, clock = self._deps(fakes, reports, log)
+            output = Path(directory) / "boss"
+            output.mkdir()
+            baseline_entry.run_baseline(ROOT, plan_path, output, dependencies=deps, clock=clock,
+                                        reevaluate=prior, panel="boss")
+            # The prior summary embeds the temp path, so its recorded sha256 varies per run.
+            prior_sha256 = hashlib.sha256((prior / "summary.json").read_bytes()).hexdigest()
+            self.assertNotIn("training_stream", json.loads((output / "summary.json").read_text()))
+            digests["boss"] = _output_digest(output, {directory: "<TMP>", prior_sha256: "<PRIOR>"}, log)
+        self.assertEqual(digests, self.PINS)
+
+
+
+STUDENT_IDENTITY = {"model_id": "spire-learn-combat-ff-standard-v1",
+                    "features_id": "spire-learn-combat-features-standard-v1",
+                    "action_id": "spire-learn-combat-dispatch-v1", "objective_id": "spire-learn-combat-distill-v1",
+                    "config_hashes": {"model": "a" * 64}}
+STUDENT_GYM = "731fca0e0341d80e7cf08a8be7a03be1fa32c3f1"
+
+
+def _student_template(*, objective="spire-learn-combat-distill-v1", device="cuda:0", ppo=False, model_hash="a" * 64,
+                      preset="standard-combat-compact-v1") -> str:
+    lines = ['schema = "spire-learn-neural-config-v1"', 'mode = "standard-standalone"', 'operation = "train"',
+             f'device = "{device}"', "", "[environment]", f'gym_revision = "{STUDENT_GYM}"',
+             'standard_view_layout = "compact"', f'standard_view_preset = "{preset}"', "",
+             "[model]", "embedding_width = 16", "hidden_width = 64", "max_parameters = 10000000", "value_heads = 3",
+             ""]
+    if ppo:
+        lines += ["[ppo]", "learning_rate = 0.0003", ""]
+    lines += ["[[accepted_identities]]", f'model_id = "{STUDENT_IDENTITY["model_id"]}"',
+              f'features_id = "{STUDENT_IDENTITY["features_id"]}"', f'action_id = "{STUDENT_IDENTITY["action_id"]}"',
+              f'objective_id = "{objective}"', "", "[accepted_identities.config_hashes]", f'model = "{model_hash}"']
+    return "\n".join(lines) + "\n"
+
+
+def _student_plan(directory: Path, **changes) -> Path:
+    plan = {"schema": "spire-learn-student-eval-plan-v1", "student_id": "s1-seed1", "gym_revision": STUDENT_GYM,
+            "recipe": "configs/neural/curriculum-v1/recipe.json", "template": str(directory / "template.toml"),
+            "evaluation": {"action_selection": "deterministic", "case_actions": 1024, "case_seconds": 120},
+            "max_turn_actions": 500, "wall_seconds": {"total": 7200},
+            "gpu_wait": {"min_free_bytes": 13 * GIB, "poll_seconds": 30, "max_total_seconds": 3600},
+            "runner_timeout_seconds": 7200 + 3600 + 30 + 1200, "max_new_output_bytes": 10 * GIB}
+    for key, value in changes.items():
+        if value is None:
+            plan.pop(key)
+        else:
+            plan[key] = value
+    path = directory / "plan.json"
+    path.write_text(json.dumps(plan))
+    return path
+
+
+def _student_run(directory: Path, *, status="complete", chosen="checkpoint-best", identity=None) -> Path:
+    student = directory / "student"
+    (student / "checkpoint-best").mkdir(parents=True)
+    (student / "checkpoint-final").mkdir()
+    # The recorded paths are from wherever the trainer ran; the entry resolves them in this directory.
+    (student / "summary.json").write_text(json.dumps({
+        "schema": "spire-learn-distill-train-summary-v1", "status": status,
+        "identity": identity or STUDENT_IDENTITY,
+        "chosen": {"step": 4000, "tied_steps": [4000], "checkpoint": f"/trained/elsewhere/{chosen}"},
+        "final": {"step": 6000, "checkpoint": "/trained/elsewhere/checkpoint-final"}}))
+    return student
+
+
+def _standard_panel_deps(fakes, reports, log, *, cases=4, busy_at=None):
+    """Fakes for a Standard panel: real-shaped summaries, a cuda config and a scripted shared GPU."""
+    clock = _Clock()
+    case_ids = [f"p-{i:02d}" for i in range(cases)]
+
+    def build_panel(recipe, *args, **kwargs):
+        log.append(("build_panel", args, kwargs))
+        return {"schema": "spire-learn-standard-panel-v2", "panel_sha256": "p" * 64, "manifest_sha256": "m" * 64,
+                "manifest": {"schema": "spire-learn-neural-cases-v1", "split": "selection",
+                             "partition": "selection",
+                             "cases": [{"case_id": cid, "environment_seed": i} for i, cid in enumerate(case_ids)]}}
+
+    def summarize(panel, reports_by_case):
+        return {"panel_sha256": panel["panel_sha256"], "panel_manifest_sha256": panel["manifest_sha256"],
+                "failures": [], "total": {"operational_failures": 0, "mean_hp_retention": 0.25,
+                                          "cases": len(reports_by_case)}}
+
+    def gpu_free():
+        log.append(("gpu_free", reports.calls))
+        if busy_at is not None and reports.calls == busy_at and not log.count(("busy",)):
+            log.append(("busy",))
+            return 1 * GIB
+        return 20 * GIB
+
+    def sleep(seconds):
+        clock.now += seconds
+
+    load_config = fakes.load_config
+
+    def measure_inference(config, checkpoint, gate):
+        gate.wait(config, "inference")
+        log.append(("measure_inference", str(checkpoint)))
+        gate.release(config)
+        return {"cpu": {"median_seconds": 0.001, "passes": 1000}, "gpu": {"median_seconds": 0.0005, "passes": 1000}}
+
+    deps = {**fakes.deps(), "evaluate": reports, "build_panel": build_panel, "summarize": summarize,
+            "gpu_free_bytes": gpu_free, "sleep": sleep, "release_gpu_cache": lambda: log.append(("release",)),
+            "load_config": lambda path: SimpleNamespace(**vars(load_config(path)), device="cuda:0"),
+            "measure_inference": measure_inference, "provenance": lambda: {"learner": {"revision": "r"}}}
+    return deps, clock, case_ids
+
+
+class StudentEvalSummaryTests(unittest.TestCase):
+    def _run(self, directory, reports_cycle, *, panel="selection", fail_at=None, raise_at=None, busy_at=None,
+             raise_error=None, timing_error=None):
+        from scripts.neural import student_eval_entry as entry
+
+        directory = Path(directory)
+        (directory / "template.toml").write_text(_student_template())
+        plan_path = _student_plan(directory)
+        student = _student_run(directory)
+        fakes = _Fakes()
+        reports = _ScriptedReports(fakes, reports_cycle, fail_at=fail_at, raise_at=raise_at)
+        if raise_error is not None:
+            original = reports.__call__
+
+            def evaluate(config, **kwargs):
+                if reports.calls + 1 == raise_error[0]:
+                    reports.calls += 1
+                    raise raise_error[1]
+                return original(config, **kwargs)
+
+            deps, clock, case_ids = _standard_panel_deps(fakes, reports, fakes.log, busy_at=busy_at)
+            deps["evaluate"] = evaluate
+        else:
+            deps, clock, case_ids = _standard_panel_deps(fakes, reports, fakes.log, busy_at=busy_at)
+        if timing_error is not None:
+            def measure_inference(config, checkpoint, gate):
+                raise timing_error
+            deps["measure_inference"] = measure_inference
+        output = directory / f"out-{panel}"
+        summary = entry.run_student_eval(ROOT, plan_path, student, output, panel=panel, dependencies=deps,
+                                         clock=clock)
+        written = json.loads((output / "summary.json").read_text())
+        events = [json.loads(line) for line in (output / "progress.jsonl").read_text().splitlines()]
+        return summary, written, events, fakes, case_ids, student, output
+
+    def test_student_summary_format(self):
+        from scripts.neural import standard_results, teacher_audit
+
+        with tempfile.TemporaryDirectory() as directory:
+            summary, written, events, fakes, case_ids, student, output = self._run(
+                directory, ["win", "loss", "censored", "escaped"], busy_at=2)
+            self.assertEqual(written["schema"], "spire-learn-student-eval-summary-v1")
+            self.assertEqual(written["result"], "complete")
+            final = written["evaluations"]["final"]
+            # The baselines' per-case evaluation format, under the label the readers use.
+            self.assertEqual(set(written["evaluations"]), {"final"})
+            self.assertEqual(set(final), {"status", "checkpoint", "cases", "device", "cases_evaluated", "summary"})
+            self.assertEqual((final["status"], final["cases_evaluated"], final["device"]), ("complete", 4, "cuda:0"))
+            self.assertEqual(final["checkpoint"], str(student / "checkpoint-best"))
+            self.assertEqual(final["cases"]["p-02"], {"outcome": "incomplete", "config_sha256": "c" * 64,
+                                                      "run_dir": "None", "censor_reason": "turn_action_budget"})
+            self.assertEqual(set(final["cases"]["p-00"]), {"outcome", "config_sha256", "run_dir"})
+            expected = {"p-00": "win", "p-01": "loss", "p-02": "incomplete", "p-03": "escaped"}
+            self.assertEqual(standard_results.load_outcomes(written, "final"), expected)
+            panel = {"kind": "selection", "panel_sha256": "p" * 64, "manifest_sha256": "m" * 64,
+                     "cases": {cid: {"level": 0 if i < 2 else 4} for i, cid in enumerate(case_ids)}}
+            row = teacher_audit.load_ppo(output / "summary.json", "S1-seed1", panel)
+            self.assertEqual({key: row[key] for key in ("cases", "wins", "deaths", "escaped", "censored",
+                                                        "wins_level0", "mean_hp_kept")},
+                             {"cases": 4, "wins": 1, "deaths": 1, "escaped": 1, "censored": 1, "wins_level0": 1,
+                              "mean_hp_kept": 0.25})
+            # Same case and evaluation keys as a baseline written by the same panel code.
+            baseline_reports = _ScriptedReports(_Fakes(), ["win", "loss", "censored", "escaped"])
+            baseline_deps, clock, _ = _standard_panel_deps(baseline_reports.fakes, baseline_reports,
+                                                           baseline_reports.fakes.log)
+            baseline_out = Path(directory) / "baseline"
+            baseline_out.mkdir()
+            prior, _ = _prior_output(directory)
+            baseline = baseline_entry.run_baseline(ROOT, PLAN, baseline_out, dependencies=baseline_deps,
+                                                   clock=clock, reevaluate=prior)
+            self.assertEqual(set(baseline["evaluations"]["final"]), set(final))
+            self.assertEqual({k: set(v) for k, v in baseline["evaluations"]["final"]["cases"].items()},
+                             {k: set(v) for k, v in final["cases"].items()})
+            panel_written = json.loads((output / "development-panel.json").read_text())
+            cases = sorted(p.name for p in (output / "panel").iterdir())
+            config = (output / "panel" / "config-0.toml").read_text()
+        self.assertEqual(panel_written["panel_sha256"], "p" * 64)
+        self.assertEqual(cases, sorted([f"case-{i}.json" for i in range(4)] + [f"config-{i}.toml" for i in range(4)]))
+        # FIGHT_CAP and TURN_CAP reach every case config.
+        import tomllib
+        budgets = tomllib.loads(config)["budgets"]
+        self.assertEqual((budgets["max_environment_actions"], budgets["max_turn_actions"]), (1024, 500))
+        # Reflex argmax through the checkpoint policy, one runtime per case.
+        runtimes = [entry[1] for entry in fakes.log if entry[0] == "create_runtime"]
+        self.assertEqual(len(runtimes), 4)
+        for kwargs in runtimes:
+            self.assertEqual(kwargs, {"purpose": "evaluate", "checkpoint": student / "checkpoint-best",
+                                      "policy_kind": "checkpoint", "action_selection": "deterministic"})
+        # The GPU gate is checked before every case (and once for inference) and released after each.
+        polls = [entry for entry in fakes.log if entry[0] == "gpu_free"]
+        self.assertEqual([calls for _, calls in polls], [0, 1, 2, 2, 3, 4])
+        self.assertEqual(fakes.log.count(("release",)), 5)
+        names = [event["event"] for event in events]
+        self.assertEqual(names.count("gpu_wait"), 1)
+        self.assertEqual(names.count("gpu_resumed"), 1)
+        self.assertEqual(next(e for e in events if e["event"] == "gpu_wait")["stage"], "evaluation final")
+        self.assertGreater(written["gpu_wait_seconds"], 0)
+        self.assertEqual(written["inference"]["cpu"]["passes"], 1000)
+        self.assertEqual(written["student"]["chosen_step"], 4000)
+        self.assertEqual(written["student"]["chosen_name"], "checkpoint-best")
+        self.assertEqual(set(written["inputs"]), {"plan_sha256", "template_sha256", "recipe_sha256"})
+        self.assertEqual(written["provenance"], {"learner": {"revision": "r"}})
+
+    def test_boss_panel_summary(self):
+        from scripts.neural import standard_results
+
+        with tempfile.TemporaryDirectory() as directory:
+            summary, written, events, fakes, case_ids, student, output = self._run(
+                directory, ["loss", "win"], panel="boss")
+            self.assertTrue((output / "boss-panel.json").is_file())
+        self.assertEqual(written["panel"], "boss")
+        self.assertEqual((written["panel_sha256"], written["manifest_sha256"]), ("p" * 64, "m" * 64))
+        self.assertEqual(written["boss_case_seconds"], 7200)
+        self.assertEqual(standard_results.load_outcomes(written, "final"),
+                         {"p-00": "loss", "p-01": "win", "p-02": "loss", "p-03": "win"})
+        self.assertIn(("build_panel", ("selection",), {"kind": "boss"}), fakes.log)
+        self.assertTrue(all(event.get("panel") == "boss" for event in events))
+        self.assertEqual(written["result"], "complete")
+
+    def test_student_fault_is_never_a_loss(self):
+        from spire_learn.contracts import ContractError
+
+        with tempfile.TemporaryDirectory() as directory:
+            summary, written, events, fakes, *_ = self._run(
+                directory, ["win"], raise_error=(3, ContractError("a legal set has no finite logit")))
+        final = written["evaluations"]["final"]
+        self.assertEqual(final["status"], "fault")
+        self.assertEqual(set(final["cases"]), {"p-00", "p-01"})  # the faulted case is not scored
+        self.assertEqual(written["evaluation_fault"]["type"], "ContractError")
+        self.assertEqual(written["result"], "incomplete")
+        self.assertNotIn("inference", written)
+        self.assertFalse(any(entry[0] == "measure_inference" for entry in fakes.log))
+        # An inference timing fault after a complete panel is recorded; the panel result stays complete.
+        with tempfile.TemporaryDirectory() as directory:
+            summary, written, *_ = self._run(directory, ["win"], timing_error=RuntimeError("driver refused"))
+        self.assertEqual(written["evaluations"]["final"]["status"], "complete")
+        self.assertEqual(written["inference_fault"], {"type": "RuntimeError", "message": "driver refused"})
+        self.assertNotIn("inference", written)
+        self.assertEqual(written["result"], "complete")
+        # A failed case report stops the panel as an operational failure.
+        with tempfile.TemporaryDirectory() as directory:
+            summary, written, *_ = self._run(directory, ["win"], fail_at=2)
+        self.assertEqual(written["evaluations"]["final"]["status"], "operational_failure")
+        self.assertEqual(written["evaluations"]["final"]["cases"]["p-01"]["outcome"], "failed")
+        self.assertEqual(written["result"], "incomplete")
+
+    def test_student_plan_template_and_run_are_checked(self):
+        from scripts.neural import student_eval_entry as entry
+
+        plan = {"evaluation": {"action_selection": "seeded-sampling", "case_actions": 1024, "case_seconds": 120}}
+        refusals = {
+            "sampling": plan,
+            "fight cap": {"evaluation": {"action_selection": "deterministic", "case_actions": 256,
+                                         "case_seconds": 120}},
+            "turn cap": {"max_turn_actions": 64},
+            "no turn cap": {"max_turn_actions": None},
+            "short timeout": {"runner_timeout_seconds": 7200},
+            "unknown key": {"retain_near_decisions": [1]},
+        }
+        for name, changes in refusals.items():
+            with self.subTest(plan=name), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(ValueError):
+                    entry.load_plan(_student_plan(Path(directory), **changes))
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            loaded = entry.load_plan(_student_plan(directory))
+            for name, text in {"PPO objective": _student_template(objective="spire-learn-combat-winloss-v1"),
+                               "[ppo]": _student_template(ppo=True),
+                               "play preset": _student_template(preset="standard-combat-compact-play-v1")}.items():
+                with self.subTest(template=name), self.assertRaises(ValueError):
+                    (directory / "t.toml").write_text(text)
+                    entry.check_template(directory / "t.toml", loaded)
+            (directory / "t.toml").write_text(_student_template())
+            with self.assertRaisesRegex(ValueError, "gpu_wait"):
+                entry.check_template(directory / "t.toml", {**loaded, "gpu_wait": None})
+            identity = entry.check_template(directory / "t.toml", loaded)
+            (directory / "t.toml").write_text(_student_template(device="cpu"))
+            entry.check_template(directory / "t.toml", {**loaded, "gpu_wait": None})
+            for name, kwargs in {"failed run": {"status": "failed"},
+                                 "other model": {"identity": {**STUDENT_IDENTITY, "config_hashes": {"model": "b" * 64}}},
+                                 "PPO run": {"identity": {**STUDENT_IDENTITY,
+                                                          "objective_id": "spire-learn-combat-winloss-v1"}},
+                                 "unknown checkpoint": {"chosen": "checkpoint-other"}}.items():
+                with self.subTest(student=name), tempfile.TemporaryDirectory() as folder:
+                    with self.assertRaises(ValueError):
+                        entry.load_student(_student_run(Path(folder), **kwargs), identity)
+            with tempfile.TemporaryDirectory() as folder:
+                student = _student_run(Path(folder))
+                record = entry.load_student(student, identity)
+                self.assertEqual(record["checkpoint"], str(student / "checkpoint-best"))
+                (student / "checkpoint-best").rmdir()
+                with self.assertRaisesRegex(ValueError, "missing"):
+                    entry.load_student(student, identity)
+
+
+    def test_student_case_configs_load_as_distillation_evaluation(self):
+        # A v1.2.5 distillation evaluation template, sliced per case by panel_eval, loads as a
+        # student config: FIGHT_CAP, TURN_CAP, the distill identity and a registered FF family.
+        from scripts.neural import student_eval_entry as entry
+        from spire_learn.neural import panel_eval
+        from spire_learn.neural.config import load_neural_config
+        from spire_learn.neural.model_families import check_family_config
+        from tests.unit.test_distill_config import eval_toml
+
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            template = folder / "template.toml"
+            template.write_text(eval_toml(folder))
+            plan = entry.load_plan(_student_plan(folder, template=str(template)))
+            identity = entry.check_template(template, plan)
+            self.assertEqual(identity["objective_id"], "spire-learn-combat-distill-v1")
+            manifest = json.loads((folder / "selection.json").read_text())
+            rows = panel_eval.panel_configs({"manifest": manifest}, template, folder / "panel", plan)
+            # Real outputs live under the artifacts root; this temp folder does not, so only the
+            # case config's relative output_root is redirected there (nothing is written to it).
+            case_config = Path(rows[0]["config"])
+            text = case_config.read_text()
+            self.assertIn('output_root = "runs"', text)
+            case_config.write_text(text.replace('output_root = "runs"', 'output_root = "{}"'.format(
+                ROOT / "artifacts/development/neural-combat/runs/test-student-eval")))
+            config = load_neural_config(case_config)
+        self.assertEqual((config.operation, config.split, config.rollout_rows, config.rollout_steps),
+                         ("evaluate", "selection", 1, 1))
+        self.assertEqual((config.budgets.max_environment_actions, config.budgets.max_turn_actions), (1024, 500))
+        self.assertIsNone(config.ppo)
+        self.assertEqual(config.model.value_heads, 3)
+        selected = config.accepted_identities[0]
+        self.assertEqual(selected.objective_id, "spire-learn-combat-distill-v1")
+        self.assertEqual(check_family_config(selected.model_id, config.model).family_id, "FF")
+
+
+
+class _BranchFakes(_Fakes):
+    """``_Fakes`` that accept warm-start preflights, publish checkpoint directories, start at a shard
+    and report scripted standalone fight counts per training segment (``fights(training_index)``)."""
+
+    def __init__(self, *, start_shard=0, fights=None, **kwargs):
+        super().__init__(**kwargs)
+        self.preflights, self.start_shard, self.fights = [], start_shard, fights
+        self.preflight_error = None
+
+    def preflight(self, checkpoint, identity, *, purpose):
+        self.preflights.append((str(checkpoint), purpose))
+        if self.preflight_error is not None and purpose == self.preflight_error:
+            raise ValueError(f"scripted {purpose} preflight refusal")
+
+    def run_stream_segment(self, config, **kwargs):
+        result = super().run_stream_segment(config, **kwargs)
+        training_index = len(self.segments) - 1
+        if result["checkpoint"] is not None:
+            Path(result["checkpoint"]).mkdir(exist_ok=True)
+            if training_index and self.fights is not None:
+                fights = self.fights(training_index)
+                result["report"] = SimpleNamespace(summary={} if fights is None else {
+                    "fights": {"standalone_fights": fights}})
+        if result.get("next_shard") is not None:
+            result["next_shard"] = {"shard_index": self.start_shard + result["next_shard"]["shard_index"]}
+        return result
+
+    def build_panel(self, recipe, *args, **kwargs):
+        return {**super().build_panel(recipe), "panel_sha256": "p" * 64, "manifest_sha256": "m" * 64}
+
+
+def _initial_checkpoint(directory) -> Path:
+    path = Path(directory) / "initial"
+    path.mkdir()
+    (path / "metadata.json").write_text('{"exported": true}\n')
+    (path / "model.pt").write_bytes(b"weights")
+    return path
+
+
+def _branch_plan(directory, **changes) -> tuple[dict, Path]:
+    plan = json.loads((ROOT / PLAN).read_text())
+    plan.update({"target_learned_decisions": 8192, "retain_near_decisions": []}, **changes)
+    path = Path(directory) / "branch-plan.json"
+    path.write_text(json.dumps(plan))
+    return plan, path
+
+
+def _branch_run(fakes, plan_path, output, **kwargs):
+    output.mkdir()
+    summary = baseline_entry.run_baseline(ROOT, plan_path, output, dependencies=fakes.deps(), clock=_Clock(),
+                                          **kwargs)
+    events = [json.loads(line) for line in (output / "progress.jsonl").read_text().splitlines()]
+    return summary, events
+
+
+class BranchedPlanTests(unittest.TestCase):
+    """Task 13 plan fields: initial_checkpoint, start_shard, decision_offset, evaluate; the stream win rate."""
+
+    def test_plan_field_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for changes, error in (({"initial_checkpoint": ""}, "initial_checkpoint"),
+                                   ({"initial_checkpoint": None}, "initial_checkpoint"),
+                                   ({"initial_checkpoint": "x", "start_shard": -1}, "start_shard"),
+                                   ({"initial_checkpoint": "x", "decision_offset": 1.0}, "decision_offset"),
+                                   ({"initial_checkpoint": "x", "start_shard": True}, "start_shard"),
+                                   ({"evaluate": "no"}, "evaluate"),
+                                   ({"start_shard": 3}, "branch from an initial_checkpoint"),
+                                   ({"decision_offset": 3}, "branch from an initial_checkpoint")):
+                with self.subTest(changes=changes):
+                    _, path = _branch_plan(directory, **changes)
+                    with self.assertRaisesRegex(ValueError, error):
+                        baseline_entry.load_plan(path)
+            _, path = _branch_plan(directory, initial_checkpoint="x", start_shard=0, decision_offset=0,
+                                   evaluate=True)
+            self.assertEqual(baseline_entry.load_plan(path)["start_shard"], 0)
+
+    def test_checkpoint_sha256_follows_the_label_entry_rule(self):
+        from spire_learn.neural.scenario_support import content_sha256
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = _initial_checkpoint(directory)
+            expected = content_sha256({name: hashlib.sha256((path / name).read_bytes()).hexdigest()
+                                       for name in ("metadata.json", "model.pt")})
+            self.assertEqual(baseline_entry.checkpoint_sha256(path), expected)
+            (path / "model.pt").write_bytes(b"other weights")
+            self.assertNotEqual(baseline_entry.checkpoint_sha256(path), expected)
+            with self.assertRaisesRegex(ValueError, "not a checkpoint directory"):
+                baseline_entry.checkpoint_sha256(Path(directory) / "missing")
+
+    def test_initial_checkpoint_preflight_and_provenance(self):
+        fakes = _BranchFakes(panel_cases=2)
+        with tempfile.TemporaryDirectory() as directory:
+            initial = _initial_checkpoint(directory)
+            sha256 = baseline_entry.checkpoint_sha256(initial)
+            plan, plan_path = _branch_plan(directory, initial_checkpoint=str(initial))
+            summary, events = _branch_run(fakes, plan_path, Path(directory) / "out")
+        # Preflighted for warm start and evaluation before anything trains; no fresh weights are made.
+        self.assertEqual(fakes.preflights[:2], [(str(initial), "warm_start"), (str(initial), "evaluate")])
+        self.assertFalse(any(entry[0] in ("save", "load_checkpoint") for entry in fakes.log))
+        self.assertFalse(any(entry[0] == "create_runtime" and entry[1].get("purpose") == "train"
+                             for entry in fakes.log))
+        self.assertEqual(summary["checkpoints"][0],
+                         {"label": "fresh-initial", "path": str(initial), "learned_decisions": 0})
+        self.assertEqual(summary["initial_checkpoint"], {"path": str(initial), "plan_path": str(initial),
+                                                         "sha256": sha256, "learned_decisions": 0})
+        accepted = next(event for event in events if event["event"] == "initial_checkpoint_accepted")
+        self.assertEqual((accepted["checkpoint"], accepted["sha256"]), (str(initial), sha256))
+        self.assertNotIn("fresh_initial_saved", [event["event"] for event in events])
+        # Qualification and the first segment warm-start from it.
+        self.assertEqual([(call["purpose"], call["parent"]) for call in fakes.segments[:2]],
+                         [("warm_start", str(initial)), ("warm_start", str(initial))])
+        # Evaluated as checkpoint 0 and paired with the final checkpoint.
+        self.assertEqual(summary["evaluations"]["fresh-initial"]["checkpoint"], str(initial))
+        self.assertEqual(summary["paired_fresh_vs_final"]["paired_cases"], 2)
+        self.assertEqual(summary["result"], "complete")
+
+        for purpose in ("warm_start", "evaluate"):
+            fakes = _BranchFakes(panel_cases=2)
+            fakes.preflight_error = purpose
+            with self.subTest(refused=purpose), tempfile.TemporaryDirectory() as directory:
+                initial = _initial_checkpoint(directory)
+                _, plan_path = _branch_plan(directory, initial_checkpoint=str(initial))
+                summary, _ = _branch_run(fakes, plan_path, Path(directory) / "out")
+                self.assertEqual(summary["stop_reason"], "fault")
+                self.assertIn(f"{purpose} preflight refusal", summary["fault"]["message"])
+                self.assertEqual(fakes.segments, [])
+                self.assertEqual(summary["checkpoints"], [])
+                self.assertEqual(summary["result"], "incomplete")
+
+    def test_start_shard_and_offset(self):
+        fakes = _BranchFakes(panel_cases=1, start_shard=297)
+        offset = 1216512
+        with tempfile.TemporaryDirectory() as directory:
+            initial = _initial_checkpoint(directory)
+            _, plan_path = _branch_plan(directory, initial_checkpoint=str(initial), start_shard=297,
+                                        decision_offset=offset, retain_near_decisions=[offset + 4096])
+            summary, _ = _branch_run(fakes, plan_path, Path(directory) / "out")
+        prepared = [(entry[1], entry[3]) for entry in fakes.log if entry[0] == "prepare"]
+        self.assertEqual(prepared, [("shard-297-initial", 297), ("qualification", 297),
+                                    ("train-0-shard-297", 297), ("train-1-shard-298", 298)])
+        # The target counts from the offset: 8192 more decisions, two segments of 4096.
+        self.assertEqual((summary["stop_reason"], summary["segments"]), ("target_reached", 2))
+        self.assertEqual(summary["learned_decisions"], offset + 8192)
+        labels = {row["label"]: row["learned_decisions"] for row in summary["checkpoints"]}
+        self.assertEqual(labels, {"fresh-initial": offset, "final": offset + 8192,
+                                  f"near-{offset + 4096}": offset + 4096})
+        self.assertEqual(summary["initial_checkpoint"]["learned_decisions"], offset)
+        # The runner's own limits still count from the warm start (no offset).
+        self.assertEqual([call["max_env"] for call in fakes.segments[1:]], [4096, 8192])
+        self.assertEqual(set(summary["evaluations"]), {"final", "fresh-initial", f"near-{offset + 4096}"})
+        self.assertEqual(summary["result"], "complete")
+
+    def test_evaluate_false_skips_panels(self):
+        fakes = _BranchFakes(panel_cases=2)
+        with tempfile.TemporaryDirectory() as directory:
+            plan, plan_path = _branch_plan(directory, evaluate=False, additional_panels=[
+                "configs/neural/curriculum-v2/recipe.json"])
+            summary, events = _branch_run(fakes, plan_path, Path(directory) / "out")
+            written = json.loads((Path(directory) / "out/summary.json").read_text())
+            self.assertFalse((Path(directory) / "out/panel").exists())
+            # A pilot output cannot be reevaluated.
+            with self.assertRaisesRegex(ValueError, "evaluate false"):
+                baseline_entry.load_prior(Path(directory) / "out", plan, Path(directory) / "new")
+        self.assertEqual(fakes.evaluated, [])
+        self.assertFalse(any(entry[0] == "create_runtime" and entry[1].get("purpose") == "evaluate"
+                             for entry in fakes.log))
+        self.assertEqual((summary["stop_reason"], summary["evaluations"]), ("target_reached", {}))
+        self.assertEqual(summary["evaluation_skipped"], "plan_evaluate_false")
+        self.assertNotIn("additional_panels", summary)
+        self.assertEqual(summary["result"], "complete")
+        self.assertEqual(written["result"], "complete")
+        self.assertIn("evaluation_skipped", [event["event"] for event in events])
+        # Without evaluations the result still needs the target.
+        fakes = _BranchFakes(panel_cases=2, missing_checkpoint_at=2)
+        with tempfile.TemporaryDirectory() as directory:
+            _, plan_path = _branch_plan(directory, evaluate=False)
+            summary, _ = _branch_run(fakes, plan_path, Path(directory) / "out")
+        self.assertEqual((summary["stop_reason"], summary["result"]), ("segment_without_checkpoint", "incomplete"))
+        self.assertEqual(fakes.evaluated, [])
+
+    def test_plan_fields_survive_reevaluate(self):
+        offset = 4096 * 10
+        with tempfile.TemporaryDirectory() as directory:
+            initial = _initial_checkpoint(directory)
+            plan, plan_path = _branch_plan(directory, initial_checkpoint=str(initial), start_shard=7,
+                                           decision_offset=offset, evaluate=True)
+            fakes = _BranchFakes(panel_cases=2, start_shard=7, fights=lambda index: {
+                "victories": 2, "deaths": 1, "escaped": 0})
+            first, _ = _branch_run(fakes, plan_path, Path(directory) / "train")
+            fakes = _BranchFakes(panel_cases=2, start_shard=7)
+            summary, events = _branch_run(fakes, plan_path, Path(directory) / "boss",
+                                          reevaluate=Path(directory) / "train", panel="boss")
+            written = json.loads((Path(directory) / "boss/summary.json").read_text())
+            # A changed initial checkpoint is refused before any evaluation.
+            (initial / "model.pt").write_bytes(b"replaced")
+            refused_fakes = _BranchFakes(panel_cases=2, start_shard=7)
+            refused, _ = _branch_run(refused_fakes, plan_path, Path(directory) / "refused",
+                                     reevaluate=Path(directory) / "train", panel="boss")
+        self.assertEqual(fakes.segments, [])
+        for key in ("start_shard", "decision_offset", "evaluate", "initial_checkpoint"):
+            self.assertEqual(written["plan"][key], plan[key], key)
+        for key in ("initial_checkpoint", "training_stream", "checkpoints", "learned_decisions"):
+            self.assertEqual(summary[key], first[key], key)
+        self.assertEqual(summary["training_stream"]["settled_win_rate"], 2 / 3)
+        self.assertIn(("prepare", "reevaluation-identity", "train", 7, "template.toml"), fakes.log)
+        # Once in the reevaluation preflight, then once per boss case; never for a warm start.
+        self.assertEqual([row for row in fakes.preflights if row[0] == str(initial)],
+                         [(str(initial), "evaluate")] * 3)
+        self.assertEqual(summary["evaluations"]["fresh-initial"]["checkpoint"], str(initial))
+        self.assertEqual(summary["panel"], "boss")
+        self.assertEqual(summary["result"], "complete")
+        self.assertIn("reevaluation_started", [event["event"] for event in events])
+        self.assertEqual(refused["reevaluation_refused"], {"type": "Stop", "message": "initial_checkpoint_changed"})
+        self.assertEqual(refused_fakes.evaluated, [])
+        self.assertEqual(refused["result"], "incomplete")
+
+    def test_settled_win_rate_window(self):
+        plan = {"target_learned_decisions": 16384, "decision_offset": 100, "initial_checkpoint": "x"}
+        counts = [{"victories": 9, "deaths": 9, "escaped": 9}, {"victories": 9, "deaths": 0, "escaped": 0},
+                  {"victories": 3, "deaths": 1, "escaped": 2}, None, {"victories": 2, "deaths": 0, "escaped": 1}]
+        stream = [{"start": start, "end": start + 4096, "fights": fights}
+                  for start, fights in zip((0, 4096, 8192, 12288, 16384), counts)]
+        result = baseline_entry.settled_win_rate(stream, plan)
+        # Segments starting at or after half the target (8192); escapes are neither wins nor losses.
+        self.assertEqual(result, {
+            "window": "second_half", "window_start_learned_decisions": 100 + 8192,
+            "window_end_learned_decisions": 100 + 20480, "segments": 3, "segments_without_fight_metrics": 1,
+            "victories": 5, "deaths": 1, "escaped": 3, "settled": 6, "settled_win_rate": 5 / 6})
+        empty = baseline_entry.settled_win_rate(stream[:2], plan)
+        self.assertEqual((empty["segments"], empty["settled_win_rate"], empty["window_end_learned_decisions"]),
+                         (0, None, None))
+        odd = baseline_entry.settled_win_rate([{"start": 1, "end": 2, "fights": counts[1]},
+                                               {"start": 2, "end": 3, "fights": counts[2]}],
+                                              {"target_learned_decisions": 3})
+        self.assertEqual((odd["window_start_learned_decisions"], odd["segments"], odd["victories"]), (2, 1, 3))
+        # Malformed or missing fight metrics are counted, never read as zero.
+        for fights in ({"victories": True, "deaths": 0, "escaped": 0}, {"victories": -1, "deaths": 0, "escaped": 0},
+                       {"victories": 1, "deaths": 0}, None):
+            report = SimpleNamespace(summary={"fights": {"standalone_fights": fights}})
+            self.assertIsNone(baseline_entry._fight_counts(report))
+        self.assertIsNone(baseline_entry._fight_counts(SimpleNamespace(summary={})))
+        # In a run: four training segments of 4096 against a 16384 target, so segments 3 and 4.
+        fakes = _BranchFakes(panel_cases=1, fights=lambda index: {
+            "victories": index, "deaths": 1, "escaped": 1, "completed": index + 2})
+        with tempfile.TemporaryDirectory() as directory:
+            _, plan_path = _branch_plan(directory, target_learned_decisions=16384)
+            summary, _ = _branch_run(fakes, plan_path, Path(directory) / "out")
+            written = json.loads((Path(directory) / "out/summary.json").read_text())
+        self.assertEqual(summary["segments"], 4)
+        stream = written["training_stream"]
+        self.assertEqual((stream["segments"], stream["victories"], stream["deaths"], stream["escaped"]),
+                         (2, 7, 2, 2))
+        self.assertEqual(stream["settled_win_rate"], 7 / 9)
+        self.assertEqual((stream["window_start_learned_decisions"], stream["window_end_learned_decisions"]),
+                         (8192, 16384))
 
 
 if __name__ == "__main__":

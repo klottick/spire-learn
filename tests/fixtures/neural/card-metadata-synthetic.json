@@ -1,0 +1,314 @@
+{
+ "cards": [
+  {
+   "color": "red",
+   "faces": [
+    {
+     "base_block": null,
+     "base_damage": 6,
+     "cost": 1,
+     "keywords": [],
+     "magic_number": null,
+     "target": "enemy",
+     "upgrades": 0
+    },
+    {
+     "base_block": null,
+     "base_damage": 9,
+     "cost": 1,
+     "keywords": [],
+     "magic_number": null,
+     "target": "enemy",
+     "upgrades": 1
+    }
+   ],
+   "id": "strike",
+   "max_upgrades": 1,
+   "rarity": "basic",
+   "support": {
+    "choice_only": false,
+    "complete_generated": true,
+    "complete_permanent": true,
+    "removable": true
+   },
+   "tags": [
+    "strike",
+    "starter_strike"
+   ],
+   "type": "attack"
+  },
+  {
+   "color": "red",
+   "faces": [
+    {
+     "base_block": 5,
+     "base_damage": null,
+     "cost": 1,
+     "keywords": [],
+     "magic_number": null,
+     "target": "untargeted",
+     "upgrades": 0
+    },
+    {
+     "base_block": 8,
+     "base_damage": null,
+     "cost": 1,
+     "keywords": [],
+     "magic_number": null,
+     "target": "untargeted",
+     "upgrades": 1
+    }
+   ],
+   "id": "defend",
+   "max_upgrades": 1,
+   "rarity": "basic",
+   "support": {
+    "choice_only": false,
+    "complete_generated": true,
+    "complete_permanent": true,
+    "removable": true
+   },
+   "tags": [
+    "starter_defend"
+   ],
+   "type": "skill"
+  },
+  {
+   "color": "red",
+   "faces": [
+    {
+     "base_block": null,
+     "base_damage": 8,
+     "cost": 2,
+     "keywords": [],
+     "magic_number": 2,
+     "target": "enemy",
+     "upgrades": 0
+    },
+    {
+     "base_block": null,
+     "base_damage": 10,
+     "cost": 2,
+     "keywords": [],
+     "magic_number": 3,
+     "target": "enemy",
+     "upgrades": 1
+    }
+   ],
+   "id": "bash",
+   "max_upgrades": 1,
+   "rarity": "basic",
+   "support": {
+    "choice_only": false,
+    "complete_generated": true,
+    "complete_permanent": true,
+    "removable": true
+   },
+   "tags": [],
+   "type": "attack"
+  },
+  {
+   "color": "red",
+   "faces": [
+    {
+     "base_block": null,
+     "base_damage": 5,
+     "cost": "x",
+     "keywords": [],
+     "magic_number": null,
+     "target": "untargeted",
+     "upgrades": 0
+    },
+    {
+     "base_block": null,
+     "base_damage": 8,
+     "cost": "x",
+     "keywords": [],
+     "magic_number": null,
+     "target": "untargeted",
+     "upgrades": 1
+    }
+   ],
+   "id": "whirlwind",
+   "max_upgrades": 1,
+   "rarity": "uncommon",
+   "support": {
+    "choice_only": false,
+    "complete_generated": true,
+    "complete_permanent": true,
+    "removable": true
+   },
+   "tags": [],
+   "type": "attack"
+  },
+  {
+   "color": "red",
+   "faces": [
+    {
+     "base_block": null,
+     "base_damage": 12,
+     "cost": 2,
+     "keywords": [],
+     "magic_number": null,
+     "target": "enemy",
+     "upgrades": 0
+    },
+    {
+     "base_block": null,
+     "base_damage": 16,
+     "cost": 2,
+     "keywords": [],
+     "magic_number": null,
+     "target": "enemy",
+     "upgrades": 1
+    }
+   ],
+   "id": "searing_blow",
+   "max_upgrades": null,
+   "rarity": "uncommon",
+   "support": {
+    "choice_only": false,
+    "complete_generated": true,
+    "complete_permanent": true,
+    "removable": true
+   },
+   "tags": [],
+   "type": "attack"
+  },
+  {
+   "color": "colorless",
+   "faces": [
+    {
+     "base_block": null,
+     "base_damage": null,
+     "cost": 1,
+     "keywords": [
+      "ethereal",
+      "exhaust"
+     ],
+     "magic_number": 1,
+     "target": "untargeted",
+     "upgrades": 0
+    },
+    {
+     "base_block": null,
+     "base_damage": null,
+     "cost": 1,
+     "keywords": [
+      "exhaust"
+     ],
+     "magic_number": 1,
+     "target": "untargeted",
+     "upgrades": 1
+    }
+   ],
+   "id": "apparition",
+   "max_upgrades": 1,
+   "rarity": "uncommon",
+   "support": {
+    "choice_only": false,
+    "complete_generated": true,
+    "complete_permanent": true,
+    "removable": true
+   },
+   "tags": [],
+   "type": "skill"
+  },
+  {
+   "color": "status",
+   "faces": [
+    {
+     "base_block": null,
+     "base_damage": null,
+     "cost": "unplayable",
+     "keywords": [],
+     "magic_number": null,
+     "target": "unresolved",
+     "upgrades": 0
+    }
+   ],
+   "id": "wound",
+   "max_upgrades": 0,
+   "rarity": "status",
+   "support": {
+    "choice_only": false,
+    "complete_generated": true,
+    "complete_permanent": true,
+    "removable": true
+   },
+   "tags": [],
+   "type": "status"
+  },
+  {
+   "color": "curse",
+   "faces": [
+    {
+     "base_block": null,
+     "base_damage": null,
+     "cost": "unplayable",
+     "keywords": [],
+     "magic_number": null,
+     "target": "unresolved",
+     "upgrades": 0
+    }
+   ],
+   "id": "pain",
+   "max_upgrades": 0,
+   "rarity": "curse",
+   "support": {
+    "choice_only": false,
+    "complete_generated": true,
+    "complete_permanent": true,
+    "removable": true
+   },
+   "tags": [],
+   "type": "curse"
+  },
+  {
+   "color": "curse",
+   "faces": [
+    {
+     "base_block": null,
+     "base_damage": null,
+     "cost": "unresolved",
+     "keywords": [],
+     "magic_number": null,
+     "target": "unresolved",
+     "upgrades": 0
+    }
+   ],
+   "id": "regret",
+   "max_upgrades": 0,
+   "rarity": "curse",
+   "support": {
+    "choice_only": false,
+    "complete_generated": true,
+    "complete_permanent": true,
+    "removable": true
+   },
+   "tags": [],
+   "type": "curse"
+  },
+  {
+   "color": "purple",
+   "faces": [],
+   "id": "wish",
+   "max_upgrades": 0,
+   "rarity": "rare",
+   "support": {
+    "choice_only": false,
+    "complete_generated": false,
+    "complete_permanent": true,
+    "removable": true
+   },
+   "tags": [],
+   "type": "skill"
+  }
+ ],
+ "content_revision": {
+  "rows": 10
+ },
+ "fingerprint": "effbb810d345e906f6e20b47bd972e35d72ef48141378d54bd28b54afac5f406",
+ "fixture": "synthetic test rows in the real schema shape; not Gym output, not for training",
+ "schema_id": "spire-lab-card-metadata-v1"
+}

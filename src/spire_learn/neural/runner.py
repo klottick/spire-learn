@@ -30,12 +30,15 @@ from spire_learn.neural.checkpoint import (
 )
 from spire_learn.neural.collector import Collector, CollectorRecovery
 from spire_learn.neural.config import (
-    STANDARD_LEARNER_IDENTITY_IDS, WINLOSS_OBJECTIVE_ID, NeuralConfig, mode_family,
+    STANDARD_LEARNER_IDENTITY_IDS, WINLOSS_OBJECTIVE_ID, NeuralConfig, distill_hash_payload,
+    mode_family, model_config_hash_payload,
 )
 from spire_learn.neural.contracts import (
     CollectionDiagnostics,
     CombatFrame,
+    ModelConfig,
     NeuralIdentity,
+    PPOConfig,
     Rollout,
     StepRecord,
     buffer_value,
@@ -49,6 +52,7 @@ from spire_learn.neural.device import (
 )
 from spire_learn.neural.evaluation import REFERENCE_POLICIES, choose_reference
 from spire_learn.neural.gym_contracts import STANDARD_COMPACT_SCHEMA_ID, contract_for_revision
+from spire_learn.neural.model_families import build_family_policy, check_family_config
 from spire_learn.neural.ppo import UpdateFault, UpdateMetrics, ppo_update
 
 
@@ -309,8 +313,41 @@ def _frame_hash(frame: CombatFrame) -> str:
     return digest.hexdigest()
 
 
-def _config_projection(config: NeuralConfig) -> dict[str, object]:
+def _model_projection(config: NeuralConfig) -> dict[str, object]:
+    """The model family's projection: today's keys for ModelConfig, the hash payload otherwise."""
+    model = config.model
+    if not isinstance(model, ModelConfig):
+        return model_config_hash_payload(model)
     return {
+        "embedding_width": model.embedding_width,
+        "hidden_width": model.hidden_width,
+        "max_parameters": model.max_parameters,
+        # Only multi-head students gain this key; one-head projections stay byte-identical.
+        **({"value_heads": model.value_heads} if model.value_heads != 1 else {}),
+        **({"trim_padding": config.trim_padding} if config.trim_padding is not None else {}),
+        **({"experimental_trim_compute": config.experimental_trim_compute}
+           if config.experimental_trim_compute is not None else {}),
+    }
+
+
+def _ppo_projection(ppo: PPOConfig) -> dict[str, object]:
+    return {
+        "learning_rate": ppo.learning_rate,
+        "gamma": ppo.gamma,
+        "gae_lambda": ppo.gae_lambda,
+        "clip_epsilon": ppo.clip_epsilon,
+        "value_coefficient": ppo.value_coefficient,
+        "entropy_coefficient": ppo.entropy_coefficient,
+        "max_grad_norm": ppo.max_grad_norm,
+        "epochs": ppo.epochs,
+        "minibatch_rows": ppo.minibatch_rows,
+        "adam_eps": ppo.adam_eps,
+    }
+
+
+def _config_projection(config: NeuralConfig) -> dict[str, object]:
+    """The run's config record; ``ppo`` and ``distill`` appear only when the config has them."""
+    head = {
         "schema": "spire-learn-neural-config-v1",
         "config_sha256": config.config_sha256,
         "mode": config.mode,
@@ -335,26 +372,14 @@ def _config_projection(config: NeuralConfig) -> dict[str, object]:
             "curriculum": config.seed_streams.curriculum,
             "noncombat": config.seed_streams.noncombat,
         },
-        "model": {
-            "embedding_width": config.model.embedding_width,
-            "hidden_width": config.model.hidden_width,
-            "max_parameters": config.model.max_parameters,
-            **({"trim_padding": config.trim_padding} if config.trim_padding is not None else {}),
-            **({"experimental_trim_compute": config.experimental_trim_compute}
-               if config.experimental_trim_compute is not None else {}),
-        },
-        "ppo": {
-            "learning_rate": config.ppo.learning_rate,
-            "gamma": config.ppo.gamma,
-            "gae_lambda": config.ppo.gae_lambda,
-            "clip_epsilon": config.ppo.clip_epsilon,
-            "value_coefficient": config.ppo.value_coefficient,
-            "entropy_coefficient": config.ppo.entropy_coefficient,
-            "max_grad_norm": config.ppo.max_grad_norm,
-            "epochs": config.ppo.epochs,
-            "minibatch_rows": config.ppo.minibatch_rows,
-            "adam_eps": config.ppo.adam_eps,
-        },
+    }
+    head[config.model_table] = _model_projection(config)
+    if config.ppo is not None:
+        head["ppo"] = _ppo_projection(config.ppo)
+    if config.distill is not None:
+        head["distill"] = distill_hash_payload(config.distill)
+    return {
+        **head,
         "rollout": {"rows": config.rollout_rows, "steps": config.rollout_steps},
         "budgets": {
             "max_optimizer_steps": config.budgets.max_optimizer_steps,
@@ -2107,6 +2132,20 @@ def _checkpoint_recovery(loaded: Any, config: NeuralConfig) -> tuple[CollectorRe
     return recovery, progress
 
 
+def _build_runtime_policy(purpose: str, identity: NeuralIdentity, schema: Any, model_config: Any,
+                          **options: Any) -> Any:
+    """Evaluation builds through the model-family registry; PPO training builds the FF policy.
+
+    ``options`` reach the builder unchanged, so the FF family's evaluation call is exactly the
+    historical ``build_policy`` call.
+    """
+    if purpose == "evaluate":
+        return build_family_policy(identity.model_id, schema, model_config, **options)
+    from spire_learn.neural.model import build_policy
+
+    return build_policy(schema, model_config, **options)
+
+
 def create_runtime(
     config: NeuralConfig,
     *,
@@ -2126,6 +2165,8 @@ def create_runtime(
         raise ValueError("purpose must be train, resume, warm_start, or evaluate")
     if purpose in {"train", "resume", "warm_start"} and (config.operation != "train" or config.split != "train"):
         raise ValueError("training runtimes require config.operation=train and split=train")
+    if purpose in {"train", "resume", "warm_start"} and config.ppo is None:
+        raise ValueError("PPO training runtimes require a [ppo] config; distillation trains with distill_train")
     if purpose == "evaluate" and (config.operation != "evaluate" or config.split not in {"selection", "final"}):
         raise ValueError("evaluation runtimes require operation=evaluate and selection/final split")
     if purpose == "evaluate" and (config.rollout_rows != 1 or config.rollout_steps != 1):
@@ -2151,6 +2192,9 @@ def create_runtime(
     if config.scenario_stream is not None:
         from .stream_resume import stream_identity
         stream_identity(config)  # Pure admission before optional runtime/device effects.
+    if purpose == "evaluate" and policy_kind == "checkpoint":
+        # Pure admission: the checkpoint's model family must be registered for its config type.
+        check_family_config(_selected_identity(config).model_id, config.model)
 
     device_plan = plan_runtime_device(config)
     if (purpose == "evaluate" and policy_kind in REFERENCE_POLICIES
@@ -2185,7 +2229,6 @@ def create_runtime(
 
         torch = torch_module
         device_report = qualify_runtime_device(torch, device_plan)
-        from spire_learn.neural.model import build_policy
     else:
         device_report = qualify_runtime_device(None, device_plan)
 
@@ -2261,8 +2304,8 @@ def create_runtime(
                 objective_kwargs["trim_padding"] = config.trim_padding
             if config.experimental_trim_compute is not None:
                 objective_kwargs["experimental_trim_compute"] = config.experimental_trim_compute
-            policy = build_policy(
-                driver.schema, config.model, seed=config.seed_streams.policy,
+            policy = _build_runtime_policy(
+                purpose, selected_identity, driver.schema, config.model, seed=config.seed_streams.policy,
                 device=device_plan.device, **objective_kwargs,
             )
             if loaded is not None:

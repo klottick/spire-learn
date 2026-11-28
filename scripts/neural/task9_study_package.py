@@ -343,7 +343,9 @@ def _config_binding(root: Path, value: object, expected_path: str,
 def _check_model_identity(config: object, label: str) -> None:
     from dataclasses import asdict
 
-    if asdict(config.model) != _MODEL_DEFAULT:
+    from spire_learn.neural.config import model_config_hash_payload
+
+    if model_config_hash_payload(config.model) != _MODEL_DEFAULT:
         raise ValueError(f"{label} model settings differ from the accepted defaults")
     if asdict(config.ppo) != _PPO_DEFAULT:
         raise ValueError(f"{label} PPO settings differ from the accepted defaults")

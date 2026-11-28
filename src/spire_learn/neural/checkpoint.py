@@ -24,6 +24,9 @@ from types import MappingProxyType
 from typing import Any
 import zipfile
 
+from spire_learn.neural.config import (
+    DISTILL_HASH_KEY, DISTILL_OBJECTIVE_ID, PPO_HASH_KEY, objective_hash_key,
+)
 from spire_learn.neural.contracts import NeuralIdentity
 from spire_learn.neural.modes import NEURAL_MODES
 
@@ -58,6 +61,9 @@ _IDENTITY_KEYS = frozenset({
     "model_id", "features_id", "action_id", "objective_id",
     "accepted_raw_mode_mappings", "config_hashes",
 })
+# A distillation training_state: the four RNG domains, no environment progress
+# (next_environment_seed_ordinal = next_decision_sequence = 0) and these counters.
+DISTILL_COUNTER_FIELDS = frozenset({"optimizer_steps", "rows_seen", "policy_rows", "value_rows"})
 _TOP_LEVEL_KEYS = frozenset({
     "schema_id", "identity", "payload_inventory", "model_tensors",
     "training_state", "run_metadata", "parent_checkpoint",
@@ -191,6 +197,12 @@ def _validate_identity(raw: object) -> dict[str, object]:
         _require_hash(digest, f"checkpoint config hash {name}")
     if "model" not in config_hashes:
         raise ValueError("checkpoint identity must include the model config hash")
+    # A distillation checkpoint carries {model, distill}; a PPO one never carries distill.
+    if result["objective_id"] == DISTILL_OBJECTIVE_ID:
+        if PPO_HASH_KEY in config_hashes:
+            raise ValueError("a distillation checkpoint identity cannot carry a PPO config hash")
+    elif DISTILL_HASH_KEY in config_hashes:
+        raise ValueError("only the distillation objective carries a distill config hash")
     return result
 
 
@@ -300,6 +312,18 @@ def _validate_training_state(raw: object, *, has_training_payload: bool) -> dict
     return state
 
 
+def _validate_distill_training_state(state: Mapping[str, object]) -> None:
+    if state["next_environment_seed_ordinal"] != 0 or state["next_decision_sequence"] != 0:
+        raise ValueError("a distillation training_state has no environment progress")
+    counters = state["counters"]
+    if not isinstance(counters, Mapping) or set(counters) != DISTILL_COUNTER_FIELDS:
+        raise ValueError(f"a distillation training_state counts exactly {sorted(DISTILL_COUNTER_FIELDS)}")
+    if any(type(value) is not int or value < 0 for value in counters.values()):
+        raise ValueError("distillation training counters must be non-negative integers")
+    if counters["optimizer_steps"] != state["optimizer_step"]:
+        raise ValueError("distillation optimizer_step disagrees with its counters")
+
+
 def _mode_families(mappings: Mapping[str, object]) -> frozenset[str]:
     return frozenset("standard" if mode.startswith("standard-") else "m10" for mode in mappings)
 
@@ -340,6 +364,8 @@ def validate_checkpoint_metadata(
     if parent is not None and not isinstance(parent, dict):
         raise ValueError("parent_checkpoint must be an object or null")
 
+    if saved_identity["objective_id"] == DISTILL_OBJECTIVE_ID and training_state is not None:
+        _validate_distill_training_state(training_state)
     expected_payload = identity_payload(expected)
     for name in ("model_id", "features_id", "action_id", "objective_id"):
         if saved_identity[name] != expected_payload[name]:
@@ -366,7 +392,8 @@ def validate_checkpoint_metadata(
             raise CheckpointCompatibilityError("resume requires optimizer, RNG, and training state")
         if saved_hashes != expected_hashes:
             raise CheckpointCompatibilityError("resume requires matching learner config hashes")
-        if training_state["hyperparameter_id"] != expected_hashes.get("ppo"):
+        # The objective's own training hash: distill for distillation, ppo otherwise.
+        if training_state["hyperparameter_id"] != expected_hashes.get(objective_hash_key(expected.objective_id)):
             raise CheckpointCompatibilityError("resume hyperparameter ID is incompatible")
     if "training.pt" in payload_inventory and training_state is None:
         raise ValueError("training payload is missing its explicit state contract")
@@ -1018,6 +1045,7 @@ def load_checkpoint(
 
 __all__ = [
     "CHECKPOINT_SCHEMA_ID",
+    "DISTILL_COUNTER_FIELDS",
     "MAX_CHECKPOINT_BYTES",
     "CheckpointCompatibilityError",
     "CheckpointPreflight",

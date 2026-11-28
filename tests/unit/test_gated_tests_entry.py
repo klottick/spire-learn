@@ -447,6 +447,54 @@ class StandardTurnCapGateTests(unittest.TestCase):
             # Native routes, not the tensor suite: no sampled-row ledger reservation.
             self.assertNotIn(module, entry.MODULES)
 
+    def test_selects_only_the_distill_train_module_and_the_value_head_class(self):
+        from scripts.neural import gated_tests_entry as entry
+
+        for flag, name in (("--distill-train", "tests.neural.test_distill_train"),
+                           ("--model", "tests.neural.test_model.DistillValueHeadTests"),
+                           ("--student-eval", "tests.neural.test_model.StudentEvalTests")):
+            with self.subTest(flag=flag), patch.dict(os.environ, {"SPIRE_LEARN_RUN_NATIVE_INTEGRATION": "1"}), \
+                 patch.object(unittest.defaultTestLoader, "loadTestsFromName", return_value=_Suite(1)) as load:
+                self.assertEqual(entry.main([flag]), 0)
+            load.assert_called_once_with(name)
+        # The trainer tests are a native route, not the tensor suite (no sampled-row reservation).
+        self.assertNotIn("tests.neural.test_distill_train", entry.MODULES)
+        self.assertEqual(entry.MODULES, MODULES)
+
+    def test_selects_only_the_transformer_module(self):
+        from scripts.neural import gated_tests_entry as entry
+
+        with patch.dict(os.environ, {"SPIRE_LEARN_RUN_NATIVE_INTEGRATION": "1"}), \
+             patch.object(unittest.defaultTestLoader, "loadTestsFromName", return_value=_Suite(1)) as load:
+            self.assertEqual(entry.main(["--transformer"]), 0)
+        load.assert_called_once_with("tests.neural.test_transformer")
+        # A native route, not the tensor suite (no sampled-row reservation).
+        self.assertNotIn("tests.neural.test_transformer", entry.MODULES)
+
+    def test_selects_only_the_distill_export_class(self):
+        from scripts.neural import gated_tests_entry as entry
+
+        with patch.dict(os.environ, {"SPIRE_LEARN_RUN_NATIVE_INTEGRATION": "1"}), \
+             patch.object(unittest.defaultTestLoader, "loadTestsFromName", return_value=_Suite(1)) as load:
+            self.assertEqual(entry.main(["--distill-export"]), 0)
+        load.assert_called_once_with("tests.neural.test_distill_export.DistillExportTests")
+        # A native route, not the tensor suite.
+        self.assertNotIn("tests.neural.test_distill_export", entry.MODULES)
+        self.assertEqual(entry.MODULES, MODULES)
+
+    def test_selects_only_the_card_metadata_modules(self):
+        from scripts.neural import gated_tests_entry as entry
+
+        for flag, module in (("--transformer-cardmeta", "tests.neural.test_transformer_cardmeta"),
+                             ("--card-metadata-live", "tests.integration.test_card_metadata_live")):
+            with self.subTest(flag=flag), patch.dict(os.environ, {"SPIRE_LEARN_RUN_NATIVE_INTEGRATION": "1"}), \
+                 patch.object(unittest.defaultTestLoader, "loadTestsFromName", return_value=_Suite(1)) as load:
+                self.assertEqual(entry.main([flag]), 0)
+            load.assert_called_once_with(module)
+            # Native routes, not the tensor suite (no sampled-row reservation).
+            self.assertNotIn(module, entry.MODULES)
+        self.assertEqual(entry.MODULES, MODULES)
+
     def test_native_route_requires_opt_in(self):
         from scripts.neural import gated_tests_entry as entry
 

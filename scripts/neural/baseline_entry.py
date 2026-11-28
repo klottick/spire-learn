@@ -10,6 +10,23 @@ is replayed.
 ``--reevaluate PRIOR_OUTPUT`` skips training: it copies the prior summary's training
 record verbatim and re-runs only panel evaluation on its recorded checkpoints,
 writing to the new ``--output`` and never into the prior directory.
+
+Optional plan fields (absent means the historical fresh-weights baseline, byte for byte):
+
+- ``initial_checkpoint``: a checkpoint path (relative to ``--root``) that replaces the fresh
+  weights. It is preflighted for ``warm_start`` and ``evaluate``, recorded with its
+  ``checkpoint_sha256`` in ``summary['initial_checkpoint']``, warm-started by qualification and
+  the first segment, and evaluated as checkpoint 0 under the label ``fresh-initial``.
+- ``start_shard`` (default 0): qualification and training start at this stream shard.
+- ``decision_offset`` (default 0): learned-decision counts start here, so checkpoint 0 records
+  ``learned_decisions = decision_offset`` and training stops at ``decision_offset +
+  target_learned_decisions``. Both need ``initial_checkpoint``.
+- ``evaluate`` (default true): false skips every panel evaluation and the result does not
+  require evaluations (training pilots). Such a plan cannot be reevaluated.
+
+``summary['training_stream']`` is the settled training-stream win rate (victories over
+victories plus deaths of the standalone fights each training segment reports) over the second
+half of the run: the segments that start at or after half of the learned-decision target.
 """
 from __future__ import annotations
 
@@ -29,8 +46,43 @@ if __package__ in (None, ''):
     _repo = Path(__file__).resolve().parents[2]
     sys.path[:0] = [str(_repo / 'src'), str(_repo)]
 
+from spire_learn.neural.panel_eval import (  # noqa: E402  (after the sys.path set-up)
+    Budget as _Budget, GpuGate as _GpuGate, Journal as _Journal, Stop as _Stop, case_outcome as _case_outcome,
+    evaluate_panel, json_safe as _json, paired as _paired, panel_configs as _panel_configs,
+)
+
 PLAN_SCHEMA = 'spire-learn-baseline-plan-v1'
 MIN_FREE_BYTES = 30 * 2**30
+EVALUATION_DISABLED = 'plan_evaluate_false'
+
+
+def checkpoint_sha256(path: Path) -> str:
+    """``distill_label_entry.checkpoint_sha256``'s rule: the canonical hash of {file name: file sha256}.
+
+    Every regular file of the checkpoint directory is covered, so the payloads and metadata are pinned.
+    """
+    from spire_learn.neural.scenario_support import content_sha256
+    path = Path(path)
+    if not path.is_dir():
+        raise ValueError(f'checkpoint {path} is not a checkpoint directory')
+    files = {}
+    for child in sorted(path.iterdir()):
+        if child.is_file():
+            digest = hashlib.sha256()
+            with child.open('rb') as stream:
+                for block in iter(lambda: stream.read(1 << 20), b''):
+                    digest.update(block)
+            files[child.name] = digest.hexdigest()
+    return content_sha256(files)
+
+
+def _branch(plan: Mapping) -> tuple[str | None, int, int]:
+    """(initial_checkpoint, start_shard, decision_offset) with the plan's defaults."""
+    return plan.get('initial_checkpoint'), plan.get('start_shard', 0), plan.get('decision_offset', 0)
+
+
+def _evaluates(plan: Mapping) -> bool:
+    return plan.get('evaluate', True)
 
 
 def _evaluation_order(plan: Mapping) -> tuple[str, ...]:
@@ -127,28 +179,18 @@ def load_plan(path: Path) -> dict:
         if plan.get('runner_timeout_seconds', 0) < needed:
             raise ValueError('runner_timeout_seconds must cover the total wall, the maximum GPU wait, '
                              'one poll and 1200 s of slack')
+    if 'initial_checkpoint' in plan and (not isinstance(plan['initial_checkpoint'], str)
+                                         or not plan['initial_checkpoint'].strip()):
+        raise ValueError('initial_checkpoint must be a non-empty checkpoint path')
+    for key in ('start_shard', 'decision_offset'):
+        if key in plan and (type(plan[key]) is not int or plan[key] < 0):
+            raise ValueError(f'{key} must be a non-negative integer')
+    if 'evaluate' in plan and type(plan['evaluate']) is not bool:
+        raise ValueError('evaluate must be true or false')
+    initial, start_shard, offset = _branch(plan)
+    if initial is None and (start_shard or offset):
+        raise ValueError('start_shard and decision_offset branch from an initial_checkpoint')
     return plan
-
-
-def _json(value: object) -> object:
-    return json.loads(json.dumps(value, default=str, sort_keys=True))
-
-
-class _Journal:
-    """Append-only progress record; one JSON object per line, flushed per event."""
-
-    def __init__(self, path: Path, clock: Callable[[], float], started: float, *, panel: str | None = None):
-        self._path, self._clock, self._started = path, clock, started
-        self._panel = panel
-
-    def write(self, event: str, **fields: object) -> None:
-        row = {'event': event, 'elapsed_seconds': round(self._clock() - self._started, 3), **fields}
-        if self._panel is not None:
-            row.setdefault('panel', self._panel)
-        with self._path.open('a') as stream:
-            stream.write(json.dumps(_json(row), sort_keys=True) + '\n')
-            stream.flush()
-            os.fsync(stream.fileno())
 
 
 def _nearest(checkpoints: list[dict], decisions: int) -> dict | None:
@@ -182,94 +224,6 @@ def _additional_panels(plan: Mapping) -> list[tuple[str, dict]]:
         else:
             panels.append((item, dict(plan['evaluation'])))
     return panels
-
-
-def _panel_configs(panel: Mapping, template: Path, directory: Path, plan: Mapping,
-                   evaluation: Mapping | None = None) -> list[dict]:
-    """One evaluate config per panel case, mirroring the campaign panel package."""
-    import tomllib
-    from spire_learn.neural.stream_runner import _toml
-    evaluation = plan['evaluation'] if evaluation is None else evaluation
-    base = tomllib.loads(Path(template).read_text())
-    directory.mkdir()
-    rows = []
-    for ordinal, case in enumerate(panel['manifest']['cases']):
-        document = json.loads(json.dumps(base))
-        document.update(operation='evaluate', split='selection', partition='selection',
-                        manifest_path=f'case-{ordinal}.json', output_root='runs')
-        document['rollout'] = {'rows': 1, 'steps': 1}
-        document['budgets'] = dict(max_training_decisions=evaluation['case_actions'],
-                                   max_environment_actions=evaluation['case_actions'],
-                                   max_optimizer_steps=1, max_wall_seconds=float(evaluation['case_seconds']))
-        if plan.get('max_turn_actions') is not None:
-            document['budgets']['max_turn_actions'] = plan['max_turn_actions']
-        manifest = {**panel['manifest'], 'cases': [case]}
-        with (directory / f'case-{ordinal}.json').open('x') as stream:
-            stream.write(json.dumps(manifest, sort_keys=True) + '\n')
-        with (directory / f'config-{ordinal}.toml').open('x') as stream:
-            stream.write(_toml(document))
-        rows.append({'case_id': case['case_id'], 'config': directory / f'config-{ordinal}.toml'})
-    return rows
-
-
-class _Budget:
-    """Training and total wall deadlines; GPU waits move both later by the time waited."""
-
-    def __init__(self, *, training: float, total: float):
-        self.training, self.total = training, total
-
-
-class _GpuGate:
-    """Yield the shared GPU: wait, rather than fault, while other services hold it.
-
-    Training is second class on this host. Before each segment and evaluation case
-    the gate waits until the device has ``min_free_bytes`` free, polling every
-    ``poll_seconds``. Waiting does not consume the wall budgets, but the total wait
-    is capped by ``max_total_seconds``. After each unit of work the CUDA cache is
-    released so other services can load into it. Without a ``gpu_wait`` plan entry,
-    or on a non-CUDA device, the gate does nothing. Memory taken by another service
-    in the middle of a unit can still fault that unit; faults are never retried.
-    """
-
-    def __init__(self, plan: Mapping, deps: Mapping, clock: Callable[[], float], journal, budget: _Budget):
-        self._settings = plan.get('gpu_wait')
-        self._deps, self._clock, self._journal, self._budget = deps, clock, journal, budget
-        self.waited = 0.0
-
-    def _active(self, config) -> bool:
-        return self._settings is not None and str(getattr(config, 'device', '')).startswith('cuda')
-
-    def wait(self, config, stage: str) -> None:
-        if not self._active(config):
-            return
-        minimum, poll = self._settings['min_free_bytes'], self._settings['poll_seconds']
-        started = None
-        while True:
-            free = self._deps['gpu_free_bytes']()
-            if free >= minimum:
-                break
-            if started is None:
-                started = self._clock()
-                self._journal.write('gpu_wait', stage=stage, free_bytes=free, min_free_bytes=minimum)
-            if self.waited + (self._clock() - started) >= self._settings['max_total_seconds']:
-                self._account(started)
-                raise _Stop('gpu_wait_exhausted')
-            self._deps['sleep'](poll)
-        if started is not None:
-            waited = self._account(started)
-            self._journal.write('gpu_resumed', stage=stage, waited_seconds=round(waited, 3),
-                                total_waited_seconds=round(self.waited, 3))
-
-    def _account(self, started: float) -> float:
-        waited = self._clock() - started
-        self.waited += waited
-        self._budget.training += waited
-        self._budget.total += waited
-        return waited
-
-    def release(self, config) -> None:
-        if self._active(config):
-            self._deps['release_gpu_cache']()
 
 
 def _limits(prefix: Mapping | None, allowance: Mapping, deadline: float):
@@ -326,7 +280,7 @@ _EVALUABLE_STOPS = frozenset({'target_reached', 'training_wall', 'stream_exhaust
 SUMMARY_SCHEMA = 'spire-learn-baseline-summary-v1'
 # Copied verbatim from a prior summary by ``--reevaluate``; nothing here is recomputed.
 _TRAINING_RECORD = ('stop_reason', 'learned_decisions', 'segments', 'checkpoints', 'config_sha256',
-                    'device', 'fault')
+                    'device', 'fault', 'initial_checkpoint', 'training_stream')
 
 
 def load_prior(prior: Path, plan: Mapping, output: Path) -> tuple[dict, str]:
@@ -337,6 +291,8 @@ def load_prior(prior: Path, plan: Mapping, output: Path) -> tuple[dict, str]:
     Training must have stopped evaluably and all recorded checkpoint paths must exist.
     """
     prior, output = Path(prior), Path(output)
+    if not _evaluates(plan):
+        raise ValueError('a plan with evaluate false has no panel evaluation to reevaluate')
     if not prior.is_absolute():
         raise ValueError('reevaluate path must be absolute')
     prior_resolved, output_resolved = prior.resolve(strict=True), output.resolve()
@@ -417,6 +373,8 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
         summary['reevaluated_from_summary_sha256'] = previous_sha256
 
     training_template = template
+    initial = _branch(plan)[0]
+    initial_path = None if initial is None else root / initial
 
     def prepare(name: str, *, split: str, shard_index: int):
         destination = prepared / name
@@ -443,12 +401,16 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
                 stream.write(_toml(document))
         if previous is None:
             fresh_path = _train_and_label(summary, deps, plan, prepare, storage_stop, budget, gate,
-                                          clock, journal, output)
+                                          clock, journal, output, initial=initial_path)
         else:
             journal.write('reevaluation_started', prior=str(reevaluate), prior_summary_sha256=previous_sha256,
                           stop_reason=summary['stop_reason'], learned_decisions=summary['learned_decisions'])
             fresh_path = _reevaluation_preflight(summary, deps, plan, prepare, storage_stop, journal)
-        if fresh_path is not None and summary['stop_reason'] in _EVALUABLE_STOPS:
+        if (fresh_path is not None and summary['stop_reason'] in _EVALUABLE_STOPS
+                and not _evaluates(plan)):
+            summary['evaluation_skipped'] = EVALUATION_DISABLED
+            journal.write('evaluation_skipped', reason=EVALUATION_DISABLED)
+        elif fresh_path is not None and summary['stop_reason'] in _EVALUABLE_STOPS:
             _evaluate_all(summary, deps, plan, root, template, recipe_path, output, budget, gate, clock,
                           journal, storage_stop, panel_kind=panel)
         else:
@@ -466,11 +428,14 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
     return summary
 
 
-def _train_and_label(summary, deps, plan, prepare, storage_stop, budget, gate, clock, journal, output):
+def _train_and_label(summary, deps, plan, prepare, storage_stop, budget, gate, clock, journal, output, *,
+                     initial=None):
     """Train, label retained checkpoints and return the fresh-initial path (or None)."""
     recorded: list[dict] = []
+    stream: list[dict] = []
     try:
-        _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock, journal, output)
+        _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock, journal, output,
+               initial=initial, stream=stream)
     except _Stop as stop:
         summary['stop_reason'] = stop.reason
     except Exception as error:
@@ -486,6 +451,7 @@ def _train_and_label(summary, deps, plan, prepare, storage_stop, budget, gate, c
             chosen = _nearest(recorded, near)
             if chosen is not None and chosen is not final:
                 summary['checkpoints'].append({'label': f'near-{near}', **chosen})
+    summary['training_stream'] = settled_win_rate(stream, plan)
     journal.write('training_stopped', stop_reason=summary['stop_reason'],
                   learned_decisions=summary['learned_decisions'])
     return fresh_path
@@ -498,10 +464,19 @@ def _reevaluation_preflight(summary, deps, plan, prepare, storage_stop, journal)
         reason = storage_stop()
         if reason is not None:
             raise _Stop(reason)
-        # The same identity the training run used to preflight its fresh-initial checkpoint.
-        config = prepare('reevaluation-identity', split='train', shard_index=0)
+        # The same identity (and start shard) the training run used to preflight its checkpoint 0.
+        initial, start_shard, _ = _branch(plan)
+        config = prepare('reevaluation-identity', split='train', shard_index=start_shard)
         if config.environment_revision != plan['gym_revision']:
             raise _Stop('template_revision_differs_from_plan')
+        if initial is not None:
+            # Checkpoint 0 is the plan's initial checkpoint, unchanged since training recorded it.
+            record = summary.get('initial_checkpoint')
+            fresh = next((row for row in summary['checkpoints'] if row['label'] == 'fresh-initial'), None)
+            if not isinstance(record, Mapping) or fresh is None or fresh['path'] != record.get('path'):
+                raise _Stop('initial_checkpoint_record_missing')
+            if checkpoint_sha256(Path(record['path'])) != record.get('sha256'):
+                raise _Stop('initial_checkpoint_changed')
         for row in summary['checkpoints']:
             label = row['label']
             deps['preflight'](Path(row['path']), config.accepted_identities[0], purpose='evaluate')
@@ -552,6 +527,8 @@ def _evaluate_all(summary, deps, plan, root, template, recipe_path, output, budg
 
 def _result(summary, plan) -> str:
     evaluated = summary['evaluations']
+    if not _evaluates(plan):
+        return 'complete' if summary['stop_reason'] == 'target_reached' else 'incomplete'
     return ('complete' if summary['stop_reason'] == 'target_reached'
             and 'evaluation_fault' not in summary and 'reevaluation_refused' not in summary
             and all(evaluated.get(row['label'], {}).get('status') == 'complete'
@@ -564,16 +541,72 @@ def _result(summary, plan) -> str:
             else 'incomplete')
 
 
-def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock, journal, output) -> None:
+def _accept_initial(summary, deps, plan, config, initial: Path, journal) -> Path:
+    """Checkpoint 0 from the plan: preflighted for warm start and evaluation, then recorded with its sha256."""
+    offset = _branch(plan)[2]
+    identity = config.accepted_identities[0]
+    deps['preflight'](initial, identity, purpose='warm_start')
+    deps['preflight'](initial, identity, purpose='evaluate')
+    sha256 = checkpoint_sha256(initial)
+    summary['initial_checkpoint'] = {'path': str(initial), 'plan_path': plan['initial_checkpoint'],
+                                     'sha256': sha256, 'learned_decisions': offset}
+    summary['checkpoints'].append({'label': 'fresh-initial', 'path': str(initial), 'learned_decisions': offset})
+    journal.write('initial_checkpoint_accepted', checkpoint=initial, sha256=sha256, learned_decisions=offset)
+    return initial
+
+
+def _fight_counts(report) -> dict | None:
+    """The segment's standalone fight counts, or None when the report carries no usable metrics."""
+    fights = ((getattr(report, 'summary', None) or {}).get('fights') or {}).get('standalone_fights')
+    if not isinstance(fights, Mapping):
+        return None
+    counts = {key: fights.get(key) for key in ('victories', 'deaths', 'escaped')}
+    if any(type(value) is not int or value < 0 for value in counts.values()):
+        return None
+    return counts
+
+
+def settled_win_rate(stream, plan: Mapping) -> dict:
+    """Settled win rate over the segments starting at or after half of the target (pure).
+
+    ``stream`` rows carry ``start``/``end`` (learned decisions relative to ``decision_offset``) and
+    ``fights`` (``_fight_counts``). Escapes are neither wins nor losses; segments without fight
+    metrics are counted, never treated as zero.
+    """
+    offset, target = _branch(plan)[2], plan['target_learned_decisions']
+    window = [row for row in stream if 2 * row['start'] >= target]
+    measured = [row['fights'] for row in window if row['fights'] is not None]
+    totals = {key: sum(counts[key] for counts in measured) for key in ('victories', 'deaths', 'escaped')}
+    settled = totals['victories'] + totals['deaths']
+    return {'window': 'second_half', 'window_start_learned_decisions': offset + (target + 1) // 2,
+            'window_end_learned_decisions': offset + window[-1]['end'] if window else None,
+            'segments': len(window), 'segments_without_fight_metrics': len(window) - len(measured),
+            **totals, 'settled': settled,
+            'settled_win_rate': totals['victories'] / settled if settled else None}
+
+
+def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock, journal, output, *,
+           initial=None, stream=None) -> None:
+    stream = [] if stream is None else stream
+    _, start_shard, offset = _branch(plan)
     reason = storage_stop()
     if reason is not None:
         raise _Stop(reason)
-    # Fresh-initial: untrained weights saved once; every later segment descends from them.
-    config = prepare('shard-0-initial', split='train', shard_index=0)
+    config = prepare(f'shard-{start_shard}-initial', split='train', shard_index=start_shard)
     if config.environment_revision != plan['gym_revision']:
         raise _Stop('template_revision_differs_from_plan')
     summary['config_sha256'] = config.config_sha256
     summary['device'] = getattr(config, 'device', None)
+    if initial is not None:
+        fresh_path = _accept_initial(summary, deps, plan, config, Path(initial), journal)
+    else:
+        fresh_path = _save_fresh_initial(summary, deps, config, gate, journal, output)
+    _qualify_and_train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock, journal,
+                       fresh_path, start_shard, offset, stream)
+
+
+def _save_fresh_initial(summary, deps, config, gate, journal, output) -> Path:
+    # Fresh-initial: untrained weights saved once; every later segment descends from them.
     fresh_path = output / 'fresh-initial'
     gate.wait(config, 'fresh_initial')
     runtime = deps['create_runtime'](config, purpose='train')
@@ -592,9 +625,13 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, c
         raise _Stop('fresh_initial_roundtrip_mismatch')
     summary['checkpoints'].append({'label': 'fresh-initial', 'path': str(fresh_path), 'learned_decisions': 0})
     journal.write('fresh_initial_saved', checkpoint=fresh_path)
+    return fresh_path
 
+
+def _qualify_and_train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock, journal,
+                       fresh_path, start_shard, offset, stream) -> None:
     # Qualification: one short warm start validates scenarios, sampling and updates natively.
-    config = prepare('qualification', split='train', shard_index=0)
+    config = prepare('qualification', split='train', shard_index=start_shard)
     gate.wait(config, 'qualification')
     try:
         result = deps['run_stream_segment'](config, purpose='warm_start', checkpoint=fresh_path,
@@ -609,7 +646,7 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, c
     journal.write('qualification_passed', checkpoint=result['checkpoint'],
                   learned_decisions=result['saved_prefix']['learned_decisions'])
 
-    parent, purpose, shard_index, prefix = fresh_path, 'warm_start', 0, None
+    parent, purpose, shard_index, prefix = fresh_path, 'warm_start', start_shard, None
     while True:
         if clock() >= budget.training:
             raise _Stop('training_wall')
@@ -634,12 +671,15 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, c
                 summary['fault'] = {'type': 'SegmentFailure', 'message': str(report_summary.get('status'))}
                 raise _Stop('segment_fault')
             raise _Stop('segment_without_checkpoint')
-        previous = (prefix or {}).get('learned_decisions', 0)
+        # The runner counts from the warm start; the plan's decision_offset places that on the run.
+        previous = offset + (prefix or {}).get('learned_decisions', 0)
         prefix = result['saved_prefix']
-        decisions = prefix['learned_decisions']
+        decisions = offset + prefix['learned_decisions']
         row = {'path': str(result['checkpoint']), 'learned_decisions': decisions,
                'shard_index': shard_index, 'segment': summary['segments']}
         recorded.append(row)
+        stream.append({'start': previous - offset, 'end': decisions - offset,
+                       'fights': _fight_counts(result['report'])})
         summary['learned_decisions'] = decisions
         progress = {}
         if plan.get('max_turn_actions') is not None:
@@ -649,183 +689,21 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, c
         if decisions <= previous:
             raise _Stop('training_wall' if clock() >= budget.training else 'segment_without_progress')
         parent, purpose = result['checkpoint'], 'resume'
-        if decisions >= plan['target_learned_decisions']:
+        if decisions - offset >= plan['target_learned_decisions']:
             raise _Stop('target_reached')
         if result['next_shard'] is None:
             raise _Stop('stream_exhausted')
         shard_index = result['next_shard']['shard_index']
 
 
-def _case_outcome(report) -> str:
-    """Win/loss/escaped settle a case; 'incomplete' is censored; anything unhealthy fails.
-
-    A clean fixed-case budget exhaustion (no fault, clean lifecycle) is censoring,
-    not an operational failure: the evaluation continues and pairing excludes it.
-    """
-    from spire_learn.neural.stream_runner import is_censored_case_report
-    summary = getattr(report, 'summary', {}) or {}
-    if getattr(report, 'exit_code', 1) != 0 or summary.get('status') != 'complete':
-        return 'incomplete' if is_censored_case_report(report) else 'failed'
-    fight = (summary.get('fights') or {}).get('standalone_fights')
-    if not isinstance(fight, Mapping):
-        return 'invalid'  # a healthy report must carry its fight metrics
-    if fight.get('victories'):
-        return 'win'
-    if fight.get('deaths'):
-        return 'loss'
-    if fight.get('escaped'):
-        return 'escaped'
-    return 'incomplete'
-
-
-def _paired(fresh: Mapping[str, str], final: Mapping[str, str], *, total: int,
-            standard: bool = False) -> dict:
-    """Fresh vs final on cases both evaluated healthily; exact two-sided McNemar test.
-
-    Standard panels only: a case escaped (Smoke Bomb) under either checkpoint is neither a
-    win nor a loss, so it is excluded from pairing and counted in ``excluded_escaped``. M10
-    panels keep the original dictionary exactly (escape is unreachable in their view).
-    """
-    from math import comb
-    shared = sorted(set(fresh) & set(final))
-    settled = ('win', 'loss') if standard else ('win', 'loss', 'escaped')
-    healthy = [c for c in shared if fresh[c] in settled and final[c] in settled]
-    escaped = [c for c in shared if c not in healthy and 'escaped' in (fresh[c], final[c])
-               and {fresh[c], final[c]} <= {'win', 'loss', 'escaped'}] if standard else []
-    censored = [c for c in shared if c not in healthy and c not in escaped
-                and {fresh[c], final[c]} <= {'win', 'loss', 'escaped', 'incomplete'}]
-    both = sum(fresh[c] == 'win' and final[c] == 'win' for c in healthy)
-    fresh_only = sum(fresh[c] == 'win' and final[c] != 'win' for c in healthy)
-    final_only = sum(fresh[c] != 'win' and final[c] == 'win' for c in healthy)
-    neither = len(healthy) - both - fresh_only - final_only
-    discordant = fresh_only + final_only
-    tail = sum(comb(discordant, k) for k in range(min(fresh_only, final_only) + 1)) / 2**discordant \
-        if discordant else 1.0
-    result = {'paired_cases': len(healthy), 'excluded_censored': len(censored),
-              'excluded_failed_invalid_or_missing': total - len(healthy) - len(censored) - len(escaped),
-              'both_win': both, 'fresh_only_win': fresh_only, 'final_only_win': final_only,
-              'neither_win': neither, 'fresh_wins': both + fresh_only, 'final_wins': both + final_only,
-              'exact_mcnemar_two_sided_p': min(1.0, 2 * tail) if discordant else 1.0}
-    if standard:
-        result['excluded_escaped'] = len(escaped)
-    return result
-
-
 def _evaluate(summary, deps, plan, template, recipe_path, output, budget, gate, clock, journal,
               storage_stop, *, result_container=None, labels=None,
               panel_id='primary', evaluation=None, panel_kind='selection') -> None:
-    result_container = summary if result_container is None else result_container
+    """``panel_eval.evaluate_panel`` with the baseline's labels (``_evaluation_order``) by default."""
     labels = _evaluation_order(plan) if labels is None else labels
-    settings = plan['evaluation'] if evaluation is None else evaluation
-    evaluations = result_container.setdefault('evaluations', {})
-    output.mkdir(parents=True, exist_ok=True)
-    from spire_learn.neural.gym_contracts import accepts_recorded_revision
-    recipe = deps['load_recipe'](recipe_path)
-    recipe_revision = getattr(recipe, 'gym_revision', None)  # Standard recipes carry their table's Gym revision
-    # The table may be from another revision of the plan's rules epoch (a drop-in Gym), never another epoch.
-    if recipe_revision is not None and not accepts_recorded_revision(plan['gym_revision'], recipe_revision):
-        raise ValueError(f"panel recipe {recipe_path} is for Gym {recipe_revision}, "
-                         f"but the plan is for Gym {plan['gym_revision']}")
-    if panel_kind == 'boss':
-        panel = deps['build_panel'](recipe, 'selection', kind='boss')
-        result_container.update(panel_sha256=panel['panel_sha256'], manifest_sha256=panel['manifest_sha256'])
-        # The runner config requires a finite wall budget. The run's total budget
-        # bounds every boss evaluation without adding a shorter per-case deadline.
-        boss_case_seconds = plan['wall_seconds']['total']
-        settings = {**settings, 'case_seconds': boss_case_seconds}
-        result_container['boss_case_seconds'] = boss_case_seconds
-        panel_id = 'boss'
-        panel_filename = 'boss-panel.json'
-    else:
-        panel = deps['build_panel'](recipe)
-        panel_filename = 'development-panel.json'
-    with (output / panel_filename).open('x') as stream:
-        stream.write(json.dumps(_json(panel), sort_keys=True) + '\n')
-    rows = _panel_configs(panel, template, output / 'panel', plan, settings)
-    labelled = {row['label']: row for row in summary['checkpoints']}
-    outcomes: dict[str, dict[str, str]] = {}
-    for label in labels:
-        if label not in labelled:
-            continue
-        if clock() >= budget.total:
-            evaluations[label] = {'status': 'skipped_wall'}
-            continue
-        checkpoint = Path(labelled[label]['path'])
-        reports, cases, status = {}, {}, 'running'
-        # Registered before the first case so exceptional exits still publish partial rows.
-        evaluation = {'status': status, 'checkpoint': str(checkpoint), 'cases': cases, 'device': None}
-        evaluations[label] = evaluation
-        for row in rows:
-            if clock() >= budget.total:
-                status = 'incomplete_wall'
-                break
-            reason = storage_stop()
-            if reason is not None:
-                status = 'stopped_' + reason
-                break
-            config = deps['load_config'](row['config'])
-            try:
-                stage = f'evaluation {label}'
-                if panel_id != 'primary':
-                    stage += f' panel {panel_id}'
-                gate.wait(config, stage)
-            except _Stop as stop:
-                status = stop.reason
-                break
-            deps['preflight'](checkpoint, config.accepted_identities[0], purpose='evaluate')
-            try:
-                runtime = deps['create_runtime'](config, purpose='evaluate', checkpoint=checkpoint,
-                                                 policy_kind='checkpoint',
-                                                 action_selection=settings['action_selection'])
-                from spire_learn.neural.runner import RuntimeOperationLimits
-                runtime.operation_limits = RuntimeOperationLimits(
-                    max_environment_actions=settings['case_actions'],
-                    monotonic_deadline=min(budget.total, clock() + settings['case_seconds']))
-                # evaluate_policy owns and closes the runtime.
-                report = deps['evaluate'](config, runtime=runtime, clock=clock, allow_final=False)
-            finally:
-                gate.release(config)
-            reports[row['case_id']] = report
-            evaluation['device'] = getattr(config, 'device', None)
-            evaluation['cases_evaluated'] = len(reports)
-            outcome = _case_outcome(report)
-            cases[row['case_id']] = {
-                'outcome': outcome, 'config_sha256': getattr(config, 'config_sha256', None),
-                'run_dir': str(getattr(report, 'run_dir', None))}
-            if outcome == 'incomplete':
-                report_summary = report.summary
-                collection_stop = (report_summary.get('collection') or {}).get('stop_reason')
-                cases[row['case_id']]['censor_reason'] = collection_stop if collection_stop in {
-                    'environment_action_budget', 'turn_action_budget',
-                } else report_summary.get('stop_reason')
-            if outcome in ('failed', 'invalid'):
-                status = 'operational_failure' if outcome == 'failed' else 'invalid_report'
-                break
-        else:
-            status = 'complete'
-        outcomes[label] = {case: row['outcome'] for case, row in cases.items()}
-        evaluation['cases_evaluated'] = len(reports)
-        try:
-            evaluation['summary'] = deps['summarize'](panel, reports)
-        except Exception as error:
-            evaluation['summary_error'] = {'type': type(error).__name__, 'message': str(error)[:2000]}
-            if status == 'complete':
-                status = 'summary_error'
-        evaluation['status'] = status
-        journal.write('evaluation_complete', panel=panel_id, label=label, status=status,
-                      cases_evaluated=len(reports))
-        if status != 'complete':
-            break
-    if 'fresh-initial' in outcomes and 'final' in outcomes:
-        result_container['paired_fresh_vs_final'] = _paired(
-            outcomes['fresh-initial'], outcomes['final'], total=len(rows),
-            standard=panel.get('schema') == 'spire-learn-standard-panel-v2')
-
-
-class _Stop(Exception):
-    def __init__(self, reason: str):
-        super().__init__(reason)
-        self.reason = reason
+    evaluate_panel(summary, deps, plan, template, recipe_path, output, budget, gate, clock, journal,
+                   storage_stop, labels=labels, result_container=result_container, panel_id=panel_id,
+                   evaluation=evaluation, panel_kind=panel_kind)
 
 
 def main(argv=None) -> int:

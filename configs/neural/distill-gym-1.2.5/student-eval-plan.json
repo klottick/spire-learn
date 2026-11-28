@@ -1,0 +1,35 @@
+{
+  "evaluation": {
+    "action_selection": "deterministic",
+    "case_actions": 1024,
+    "case_seconds": 120
+  },
+  "gpu_wait": {
+    "max_total_seconds": 21600,
+    "min_free_bytes": 13958643712,
+    "poll_seconds": 30
+  },
+  "gym_revision": "731fca0e0341d80e7cf08a8be7a03be1fa32c3f1",
+  "max_new_output_bytes": 8589934592,
+  "max_turn_actions": 500,
+  "notes": [
+    "one plan and template serve --panel selection and --panel boss; the boss panel bounds each case by wall_seconds.total",
+    "gpu_wait copies the v1.2.4 baseline plans (min_free 13958643712, poll 30, cap 21600)",
+    "runner_timeout_seconds 43200 exceeds wall_seconds.total 7200 plus the 21600 s GPU wait, one 30 s poll and 1200 s of slack",
+    "the recipe is the v1.2.4 Baalorlord Standard recipe, accepted on Gym v1.2.5 as a drop-in revision"
+  ],
+  "qualifications": [
+    "RNG-001",
+    "TIME-001",
+    "standard-standalone Ironclad, Ascension 20 only",
+    "simulator only; no original-game transfer claim"
+  ],
+  "recipe": "configs/neural/baalorlord-standard-gym-1.2.4/recipe.json",
+  "runner_timeout_seconds": 43200,
+  "schema": "spire-learn-student-eval-plan-v1",
+  "student_id": "spire-learn-combat-ff-standard-v1",
+  "template": "configs/neural/distill-gym-1.2.5/student-eval-template.toml",
+  "wall_seconds": {
+    "total": 7200
+  }
+}

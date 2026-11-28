@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
 import pickle
 import unittest
 from unittest.mock import patch
@@ -23,6 +25,17 @@ def _raiser(error):
     def job(item):
         raise error
     return job
+
+
+class _BadStr(Exception):
+    def __str__(self):
+        raise RuntimeError("no str")
+
+
+def _pool_job(item):
+    """Runs in the spawned child (defined in this test module, so no numpy/Gym is needed)."""
+    label._label_job = _raiser(_unpicklable_error())
+    return label._guarded_label_job(item)
 
 
 class WorkerFaultTests(unittest.TestCase):
@@ -46,7 +59,7 @@ class WorkerFaultTests(unittest.TestCase):
         clone = pickle.loads(pickle.dumps(fault))
         self.assertIs(type(clone), module.WorkerFault)
         self.assertEqual(str(clone), text)
-        self.assertEqual(clone.traceback_text, fault.traceback_text)
+        self.assertEqual(clone.__dict__, fault.__dict__)
 
     def test_label_worker_fault(self):
         job = SimpleNamespace(shard=3, local=5, run_id="run-abc", case={})
@@ -63,6 +76,28 @@ class WorkerFaultTests(unittest.TestCase):
         with patch.object(label, "_label_job", _raiser(_unpicklable_error())):
             with self.assertRaises(label.WorkerFault):
                 list(label._results([(job, None)], 1))
+
+    def test_broken_str_still_yields_fault(self):
+        for module, job_name, guarded, job in (
+                (label, "_label_job", label._guarded_label_job, SimpleNamespace(shard=1, local=2, run_id="r")),
+                (full, "_play_job", full._guarded_play_job, SimpleNamespace(index=1, run_id="r"))):
+            with patch.object(module, job_name, _raiser(_BadStr())):
+                with self.assertRaises(module.WorkerFault) as caught:
+                    guarded((job, None))
+            self.assertIn("_BadStr", caught.exception.error_message)
+
+    def test_real_spawn_pool_surfaces_fault(self):
+        job = SimpleNamespace(shard=3, local=5, run_id="run-abc")
+        pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
+        try:
+            with self.assertRaises(label.WorkerFault) as caught:
+                list(pool.map(_pool_job, [(job, None)]))
+        finally:
+            pool.shutdown(cancel_futures=True)
+        fault = caught.exception
+        self.assertEqual((fault.shard, fault.local, fault.run_id), (3, 5, "run-abc"))
+        self.assertTrue(fault.error_type.endswith("RunFaultError"))
+        self.assertEqual(fault.error_message, "illegal action 7 accepted twice")
 
     def test_success_is_unchanged(self):
         job = SimpleNamespace(shard=1, local=2, run_id="r")

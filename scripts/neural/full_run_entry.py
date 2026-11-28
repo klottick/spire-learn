@@ -450,6 +450,13 @@ class WorkerFault(RuntimeError):
         return (type(self), tuple(getattr(self, name) for name in self.FIELDS))
 
 
+def _message(error):
+    try:
+        return str(error)
+    except Exception:  # a broken __str__ must not hide the fault
+        return repr(type(error))
+
+
 def _guarded_play_job(item):
     """Run the job; re-raise any exception as a picklable WorkerFault naming the case."""
     try:
@@ -457,10 +464,11 @@ def _guarded_play_job(item):
     except Exception as error:
         job = item[0]
         raise WorkerFault(job.index, job.run_id, f"{type(error).__module__}.{type(error).__qualname__}",
-                          str(error), traceback.format_exc()) from None
+                          _message(error), traceback.format_exc()) from None
 
 
 def _results(items, parallel):
+    # pool.map surfaces the first failing case in submission order.
     if parallel == 1:
         yield from map(_guarded_play_job, items)
         return

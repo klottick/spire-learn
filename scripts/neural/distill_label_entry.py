@@ -51,7 +51,6 @@ from pathlib import Path
 import random
 import subprocess
 import sys
-import traceback
 from time import perf_counter
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -63,6 +62,7 @@ from spire_learn.neural.contracts import ModelConfig
 from spire_learn.neural.scenario_support import content_sha256, json_value
 from spire_learn.neural.search_one_move import terminal_score
 from spire_learn.neural.search_value import RootContext
+from spire_learn.neural.worker_faults import WorkerFault, fault_from  # noqa: F401
 from spire_learn.neural.search_view import ROOT_REFUSAL_CLASSES, View
 from spire_learn.neural.standard_stream import run_split
 
@@ -355,39 +355,13 @@ def _label_job(item):
                            player=player)
 
 
-class WorkerFault(RuntimeError):
-    """A worker job's exception as plain, picklable fields (Gym fault classes cannot cross the pool)."""
-
-    FIELDS = ("shard", "local", "run_id", "error_type", "error_message", "traceback_text")
-
-    def __init__(self, shard, local, run_id, error_type, error_message, traceback_text):
-        self.shard, self.local, self.run_id = shard, local, run_id
-        self.error_type, self.error_message, self.traceback_text = error_type, error_message, traceback_text
-        super().__init__(str(self))
-
-    def __str__(self):
-        return (f"label fault in shard {self.shard} local {self.local} run_id {self.run_id}: {self.error_type}: {self.error_message}\n"
-                f"worker traceback:\n{self.traceback_text}")
-
-    def __reduce__(self):
-        return (type(self), tuple(getattr(self, name) for name in self.FIELDS))
-
-
-def _message(error):
-    try:
-        return str(error)
-    except Exception:  # a broken __str__ must not hide the fault
-        return repr(type(error))
-
-
 def _guarded_label_job(item):
     """Run the job; re-raise any exception as a picklable WorkerFault naming the case."""
     try:
         return _label_job(item)
     except Exception as error:
         job = item[0]
-        raise WorkerFault(job.shard, job.local, job.run_id, f"{type(error).__module__}.{type(error).__qualname__}",
-                          _message(error), traceback.format_exc()) from None
+        raise fault_from(error, "label", {"shard": job.shard, "local": job.local, "run_id": job.run_id}) from None
 
 
 def _results(items, parallel):

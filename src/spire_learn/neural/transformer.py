@@ -373,11 +373,20 @@ def card_metadata_tables(metadata: Mapping[str, Any], vocabulary: Sequence[str])
         raise ContractError(f"card metadata fingerprint is not the pinned {CARD_METADATA_FINGERPRINT}")
     if metadata.get("schema_id") != CARD_METADATA_SCHEMA_ID:
         raise ContractError(f"card metadata is not {CARD_METADATA_SCHEMA_ID}")
+    cards = metadata.get("cards")
+    if not isinstance(cards, list):
+        raise ContractError("card metadata has no cards list")
     by_id: dict[str, Mapping[str, Any]] = {}
-    for row in metadata["cards"]:
+    for row in cards:
         card_id = row.get("id") if isinstance(row, Mapping) else None
         if not isinstance(card_id, str) or card_id in by_id:
             raise ContractError(f"card metadata has a missing or repeated card id {card_id!r}")
+        row_faces = row.get("faces")
+        if not isinstance(row_faces, list):
+            raise ContractError(f"card metadata {card_id} faces must be a list")
+        for position, face in enumerate(row_faces):
+            if not isinstance(face, Mapping) or face.get("upgrades") != position or type(face.get("upgrades")) is not int:
+                raise ContractError(f"card metadata {card_id} face {position} must have upgrades == {position}")
         by_id[card_id] = row
     levels = max([len(row["faces"]) for row in by_id.values()] + [1])
     zero_static = (0.0,) * CARD_STATIC_FEATURES
@@ -394,8 +403,6 @@ def card_metadata_tables(metadata: Mapping[str, Any], vocabulary: Sequence[str])
             continue
         static.append(card_static_features(row))
         row_faces = row["faces"]
-        if not isinstance(row_faces, list):
-            raise ContractError(f"card metadata {card_id} faces must be a list")
         for level in range(levels):
             face = row_faces[min(level, len(row_faces) - 1)] if row_faces else None
             faces[level].append(card_face_features(face))

@@ -203,12 +203,28 @@ class CardMetadataTablesTests(unittest.TestCase):
             "a new target": lambda row: row["faces"][0].update(target="all_enemies"),
             "a float damage": lambda row: row["faces"][0].update(base_damage=6.5),
             "a repeated id": lambda row: row.update(id="defend"),
+            "null faces": lambda row: row.update(faces=None),
+            "non-list faces": lambda row: row.update(faces={"upgrades": 0}),
+            "no faces key": lambda row: row.pop("faces"),
+            "a non-mapping face": lambda row: row.update(faces=[1]),
+            "faces out of order": lambda row: row.update(faces=list(reversed(row["faces"]))),
+            "a wrong face upgrade": lambda row: row["faces"][1].update(upgrades=2),
+            "a missing face upgrade": lambda row: row["faces"][0].pop("upgrades"),
         }
         for name, change in changes.items():
             with self.subTest(change=name), self.assertRaises(ContractError):
                 transformer.card_metadata_tables(mutated(change), self.vocabulary)
         with self.assertRaises(ContractError):
             transformer.card_metadata_tables({**fixture(), "fingerprint": "0" * 64}, self.vocabulary)
+
+    def test_malformed_cards_list_is_a_contract_error(self):
+        for cards in (None, {}, "x", 3):
+            with self.subTest(cards=cards), self.assertRaises(ContractError):
+                transformer.card_metadata_tables({**fixture(), "cards": cards}, self.vocabulary)
+        with self.assertRaises(ContractError):
+            transformer.card_metadata_tables({k: v for k, v in fixture().items() if k != "cards"}, self.vocabulary)
+        with self.assertRaises(ContractError):
+            transformer.card_metadata_tables({**fixture(), "cards": [3]}, self.vocabulary)
 
     def test_extra_metadata_ids_are_reported_not_joined(self):
         tables = transformer.card_metadata_tables(fixture(), ["padding", "strike"])
@@ -250,6 +266,13 @@ class CardMetaConfigTests(unittest.TestCase):
                 replace(SMALL, **bad)
         with self.assertRaises(ValueError):
             transformer_cardmeta_size("huge", "bucket")
+
+    def test_s2_config_hash_is_unchanged_since_task_10(self):
+        # Computed at base 0970605, before Task 11: S3 must not move S2's hash.
+        self.assertEqual(model_config_hash(transformer_size("small", "bucket")),
+                         "02260177e056a67fd8328a7014c147a7e28873d5e977b020bab24db3bb70baba")
+        self.assertEqual(model_config_hash(transformer_size("large", "sinusoidal")),
+                         "55865d3d1cff139189f1431a65464fddd0c3bb3ce89285276180731845c239f5")
 
     def test_cardmeta_table_in_a_distillation_training_config(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -10,7 +10,7 @@ largest value strictly below it, so a decision where every legal action has the 
 gap and is excluded. Percentiles use linear interpolation between order statistics (numpy's default,
 pinned here as ``method="linear"``).
 
-Delta 12: with ``--dataset``, ``gradient_steps = round(6 * train_rows / BATCH_ROWS)``, where
+Delta 12: with ``--dataset``, ``gradient_steps = round(6 * train_rows / BATCH_ROWS)`` (Python round, half to even), where
 ``train_rows`` counts every stored row of the dataset's ``train`` series (from the verified chunk
 manifests).
 
@@ -68,14 +68,22 @@ def _pilot_gaps(chunk: Path) -> tuple[list[float], dict]:
     from spire_learn.neural.distill_data import ROOT_KINDS
 
     searched = ROOT_KINDS.index("searched")
+    manifest = json.loads((chunk / "chunk-manifest.json").read_text())  # a finished chunk only
+    listed = manifest["shards"]["train"]
     gaps, counts = [], {"shards": 0, "rows": 0, "searched": 0, "all_tie": 0}
-    for shard in sorted((chunk / "train").iterdir()):
-        load = lambda name: np.load(shard / f"{name}.npy", mmap_mode="r")
+    for name in sorted(listed):
+        shard = chunk / "train" / name
+        load = lambda field: np.load(shard / f"{field}.npy", mmap_mode="r")
         root, values, offsets = load("labels.root"), load("labels.values"), load("labels.legal_offsets")
+        if len(root) != listed[name]["rows"]:
+            raise ValueError(f"{name}: {len(root)} rows, chunk manifest lists {listed[name]['rows']}")
         counts["shards"] += 1
         counts["rows"] += len(root)
         for row in np.flatnonzero(np.asarray(root) == searched):
-            gap = top_two_gap(values[offsets[row]:offsets[row + 1]])
+            legal_values = values[offsets[row]:offsets[row + 1]]
+            if not np.isfinite(legal_values).all():
+                raise ValueError(f"{name} row {row}: a searched decision has a non-finite teacher value")
+            gap = top_two_gap(legal_values)
             counts["searched"] += 1
             if gap is None:
                 counts["all_tie"] += 1
@@ -91,7 +99,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     gaps, counts = _pilot_gaps(args.pilot)
     result = {"schema": "spire-learn-distill-tau-v1", "pilot": str(args.pilot), "counts": counts,
-              "positive_gaps": sum(g > 0 for g in gaps), "percentile_method": "linear", "floor": TAU_FLOOR,
+              "positive_gaps": len(gaps), "percentile_method": "linear", "floor": TAU_FLOOR,
               "tau": tau_candidates(gaps)}
     if args.dataset is not None:
         from spire_learn.neural.distill_train import open_dataset

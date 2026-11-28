@@ -52,6 +52,7 @@ from spire_learn.neural.device import (
 )
 from spire_learn.neural.evaluation import REFERENCE_POLICIES, choose_reference
 from spire_learn.neural.gym_contracts import STANDARD_COMPACT_SCHEMA_ID, contract_for_revision
+from spire_learn.neural.model_families import build_family_policy, check_family_config
 from spire_learn.neural.ppo import UpdateFault, UpdateMetrics, ppo_update
 
 
@@ -2131,6 +2132,20 @@ def _checkpoint_recovery(loaded: Any, config: NeuralConfig) -> tuple[CollectorRe
     return recovery, progress
 
 
+def _build_runtime_policy(purpose: str, identity: NeuralIdentity, schema: Any, model_config: Any,
+                          **options: Any) -> Any:
+    """Evaluation builds through the model-family registry; PPO training builds the FF policy.
+
+    ``options`` reach the builder unchanged, so the FF family's evaluation call is exactly the
+    historical ``build_policy`` call.
+    """
+    if purpose == "evaluate":
+        return build_family_policy(identity.model_id, schema, model_config, **options)
+    from spire_learn.neural.model import build_policy
+
+    return build_policy(schema, model_config, **options)
+
+
 def create_runtime(
     config: NeuralConfig,
     *,
@@ -2177,6 +2192,9 @@ def create_runtime(
     if config.scenario_stream is not None:
         from .stream_resume import stream_identity
         stream_identity(config)  # Pure admission before optional runtime/device effects.
+    if purpose == "evaluate" and policy_kind == "checkpoint":
+        # Pure admission: the checkpoint's model family must be registered for its config type.
+        check_family_config(_selected_identity(config).model_id, config.model)
 
     device_plan = plan_runtime_device(config)
     if (purpose == "evaluate" and policy_kind in REFERENCE_POLICIES
@@ -2211,7 +2229,6 @@ def create_runtime(
 
         torch = torch_module
         device_report = qualify_runtime_device(torch, device_plan)
-        from spire_learn.neural.model import build_policy
     else:
         device_report = qualify_runtime_device(None, device_plan)
 
@@ -2287,8 +2304,8 @@ def create_runtime(
                 objective_kwargs["trim_padding"] = config.trim_padding
             if config.experimental_trim_compute is not None:
                 objective_kwargs["experimental_trim_compute"] = config.experimental_trim_compute
-            policy = build_policy(
-                driver.schema, config.model, seed=config.seed_streams.policy,
+            policy = _build_runtime_policy(
+                purpose, selected_identity, driver.schema, config.model, seed=config.seed_streams.policy,
                 device=device_plan.device, **objective_kwargs,
             )
             if loaded is not None:

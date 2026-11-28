@@ -1,11 +1,12 @@
-"""Play combat moves from a saved feed-forward policy checkpoint (torch; runtime container only).
+"""Play combat moves from a saved policy checkpoint (torch; runtime container only).
 
 ``CheckpointPlayer`` loads a checkpoint for evaluation on CPU, refuses one whose identity or model
 config differs from the expected one, and picks one legal action per public compact frame: a sample
 from its own seeded generator, or the argmax with ``deterministic=True``. A single legal action is
 played without consulting the policy. It never builds a training runtime (no ``create_runtime``).
 
-Only the FF family is handled here; Task 8 dispatches through the ``ModelFamily`` registry.
+The policy is built through the ``model_families`` registry keyed by the identity's ``model_id``
+(the FF family builds exactly as before); an unregistered family is refused before torch loads.
 Importing this module imports neither torch nor numpy.
 """
 
@@ -18,6 +19,7 @@ from spire_learn.contracts import ContractError
 from spire_learn.neural.config import LEARNER_IDENTITY_IDS, STANDARD_LEARNER_IDENTITY_IDS, WINLOSS_OBJECTIVE_ID
 from spire_learn.neural.config import model_config_hash as _model_config_hash
 from spire_learn.neural.contracts import CombatFrame, ModelConfig, NeuralIdentity
+from spire_learn.neural.model_families import build_family_policy, check_family_config
 from spire_learn.neural.schema import CombatSchema
 
 FF_MODEL_IDS = (LEARNER_IDENTITY_IDS[0], STANDARD_LEARNER_IDENTITY_IDS[0])
@@ -56,16 +58,14 @@ def _mask_legal(frame: CombatFrame) -> list[int]:
 
 
 class CheckpointPlayer:
-    """A reflex combat player over one FF policy checkpoint."""
+    """A reflex combat player over one policy checkpoint of a registered model family."""
 
     def __init__(self, path: Path | str, schema: CombatSchema, *, seed: int, expected_identity: NeuralIdentity,
                  model_config: ModelConfig, deterministic: bool = False):
         if not isinstance(expected_identity, NeuralIdentity):
             raise TypeError("expected_identity must be a NeuralIdentity")
-        if not isinstance(model_config, ModelConfig):
-            raise TypeError("model_config must be a ModelConfig")
-        if expected_identity.model_id not in FF_MODEL_IDS:
-            raise ContractError(f"CheckpointPlayer plays the FF family only, not {expected_identity.model_id}")
+        # The family registry: an unknown model_id is refused, and the config must be the family's type.
+        check_family_config(expected_identity.model_id, model_config)
         if expected_identity.config_hashes.get("model") != model_config_hash(model_config):
             raise ContractError("the model config does not match the expected identity's model config hash")
         if type(deterministic) is not bool:
@@ -73,14 +73,13 @@ class CheckpointPlayer:
         import torch
 
         from spire_learn.neural.checkpoint import load_checkpoint
-        from spire_learn.neural.model import build_policy
 
         pin_torch_threads(torch)
         self._torch = torch
         loaded = load_checkpoint(Path(path), expected_identity, purpose="evaluate", device="cpu")
-        policy = build_policy(schema, model_config, seed=0, device="cpu",
-                              objective_id=expected_identity.objective_id, model_id=expected_identity.model_id,
-                              features_id=expected_identity.features_id)
+        policy = build_family_policy(expected_identity.model_id, schema, model_config, seed=0, device="cpu",
+                                     objective_id=expected_identity.objective_id, model_id=expected_identity.model_id,
+                                     features_id=expected_identity.features_id)
         policy.load_state_dict(dict(loaded.model_tensors), strict=True)
         policy.eval()
         self._policy = policy

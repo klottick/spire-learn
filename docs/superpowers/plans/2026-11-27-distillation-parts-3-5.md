@@ -534,6 +534,23 @@ The spec was written on Gym v1.2.0. Each delta below replaces a spec statement o
 ### Task 9: S1 searches, final S1 and the readout (controller)
 
 - [ ] **Step 1: Budget.** Run one S1 pilot: one seed, the middle τ, learning rate 3e-4. Measure rows per second and peak VRAM. Fix `gradient_steps = round(6 × train_rows / BATCH_ROWS)`. Record a GPU-hours estimate for M2–M4. The prior estimate is 20–70 GPU-hours supervised plus about 25 for PPO and the diagnostic.
+- [ ] **Step 1b: Throughput profile** (added 2026-11-28 at the user's suggestion, after the pilot measured about 3,600 rows per second, with 0.12 s of a 0.14 s step spent in the model on a 356k-parameter net).
+  - **Profile.**
+    - Run `train_step` with `torch.profiler` on the pilot's config, using the first shards of the training series in the dataset's order.
+    - Do 20 warm-up steps, then profile 200 steps.
+    - Run through `runtime_container.py` with the GPU gate (`--gpu-wait`, the same setting as the pilot).
+    - Split the time into forward, backward, optimizer, host syncs and collation.
+    - The suspects are padding to full row capacity (`_restore_row_capacity`) and the per-step `.item()` finiteness syncs.
+    - Budget: at most 1 GPU-hour in total, including the before and after measurements.
+  - **What may change.** Only changes that leave the numbers the same.
+    - On fixed batches, the loss and gradients must match the current code: bitwise on CPU, and within 1e-5 relative on CUDA. A unit test compares the two for each change.
+    - These are checks on single steps only. CUDA training is not bitwise reproducible anyway, so trajectories may drift by float noise. That is accepted.
+    - The model, the config hashes, the targets, the losses and the checkpoint identity do not change.
+    - Fault behaviour stays: every non-finite check that raises `ContractError` or `DistillError` must stay. A check may be batched to once per step, but not removed.
+    - `experimental_trim_compute` is out of scope for this step. It changes GEMM shapes, so it is not equivalent by default, and `checkpoint.py` marks its checkpoints experimental, which evaluation refuses. Adopting it would need its own checkpoint-identity ruling.
+  - **Adopt** a change only if it passes those tests and raises steady-state training rows per second, measured on the GPU with the pilot config, by at least 1.5×. Otherwise proceed unchanged. Record the speed before and after, and the learner revision of the faster path.
+  - **Comparability.** The pilot was trained on the old code. Equivalence by test keeps the 1e-4 and 1e-3 runs, and every later S1 run, comparable with it, so the pilot stays the 3e-4 run.
+  - **The S2 and S3 transformers.** Profile them under the same rules before Task 12's first learning-rate search, on one size with a short profile run that is not counted as a search run. Every search run then uses the same code.
 - [ ] **Step 2: Learning rate.** Try 1e-4, 3e-4 and 1e-3 at the middle τ and pick by regret. Candidates within one run-level SE (delta 11) of the best go to 3e-4 if it is among them, and otherwise to the smaller rate. The pilot counts as the 3e-4 run.
 - [ ] **Step 3: τ.** Train the other two candidates at the chosen learning rate and pick by delta 11. All students share the result.
 - [ ] **Step 4: Final S1.** Train two seeds. Evaluate them on the selection and boss panels, and on the run panel as `checkpoint:` players, which is reported only.

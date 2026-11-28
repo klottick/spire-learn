@@ -4,12 +4,17 @@ from contextlib import closing
 from dataclasses import replace
 import math
 import os
+from pathlib import Path
 import unittest
 
 from scripts.neural import boss_winnability as bw
 from scripts.neural import teacher_descent_cost_entry as benchmark
+from spire_learn.neural.gym_contracts import GYM_V1_2_4_CONTRACT
 from spire_learn.neural.search_one_move import one_move_values
 from spire_learn.neural.search_teacher import TeacherConfig, search_options, teach
+
+# The descent-cost entry still pins its v1.2.0 table; this qualification runs on the current epoch.
+RECIPE = Path(__file__).resolve().parents[2] / "configs/neural/baalorlord-standard-gym-1.2.4/recipe.json"
 
 
 @unittest.skipUnless(os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") == "1",
@@ -18,8 +23,8 @@ class SearchTeacherNativeTests(unittest.TestCase):
     def test_tree_and_uniform_reference_on_twenty_training_roots(self):
         from spire_lab import _native
 
-        revision, states = bw._table_states(benchmark.RECIPE)
-        self.assertEqual(revision, benchmark.REVISION)
+        revision, states = bw._table_states(RECIPE)
+        self.assertEqual(revision, GYM_V1_2_4_CONTRACT.source_revision)
         bw._check_live_revision(revision)
         candidates = benchmark.training_roots(states)
         compared = 0

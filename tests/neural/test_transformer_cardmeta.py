@@ -203,7 +203,7 @@ class CardMetaTransformerTests(unittest.TestCase):
                     if item.upgrades_field_index is not None:
                         values[row, item.upgrades_field_index] = upgrades
                         known[row, item.upgrades_field_index] = upgrades_known
-                    else:
+                    elif card_known:
                         level = 0  # offers have no upgrades: level 0
                     if level is None:
                         expected.append([0.0] * transformer.CARD_METADATA_FEATURES)

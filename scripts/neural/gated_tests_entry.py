@@ -202,6 +202,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--student-eval": "tests.neural.test_model.StudentEvalTests",
         # The entity transformer (S2): build, tokens, references, scoring, checkpoints, the runtime path.
         "--transformer": "tests.neural.test_transformer",
+        # The card-metadata transformer (S3): features, the S2 equivalence, checkpoints, trainer, the runtime path.
+        "--transformer-cardmeta": "tests.neural.test_transformer_cardmeta",
+        # The committed card-metadata snapshot against the pinned Gym's live descriptor, and S3 on the real snapshot.
+        "--card-metadata-live": "tests.integration.test_card_metadata_live",
         # The S1 -> PPO export and the critic scale (numpy and torch); the module's refusal class is stdlib.
         "--distill-export": "tests.neural.test_distill_export.DistillExportTests",
     }

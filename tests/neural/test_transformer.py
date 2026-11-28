@@ -588,15 +588,35 @@ class EntityTransformerTests(unittest.TestCase):
         ff = build_policy(self.schema, FF_TINY, seed=3, device="cpu", objective_id=DISTILL_OBJECTIVE_ID,
                           model_id=STANDARD_LEARNER_IDENTITY_IDS[0], features_id=STANDARD_LEARNER_IDENTITY_IDS[1])
         ff_path = save_student(root / "ff", ff, ff_identity())
-        # Stand-ins for a later family (S3): the S2 weights under another features id, or another model id.
-        s3_features = save_student(root / "s3-features", s2, s2_identity(
-            features_id="spire-learn-combat-features-entity-cards-v1"))
-        s3_model = save_student(root / "s3-model", s2, s2_identity(model_id="spire-learn-combat-entity-cards-v1"))
+        # S3's own checkpoints (the card-metadata transformer; the synthetic metadata fixture), and S3 weights
+        # under S2's model or features id: none loads as S2. tests/neural/test_transformer_cardmeta.py has the reverse.
+        import json
+
+        from spire_learn.neural.config import (
+            TRANSFORMER_CARDMETA_FEATURES_ID, TRANSFORMER_CARDMETA_MODEL_ID, TransformerCardMetaConfig,
+        )
+        from spire_learn.neural.transformer import build_transformer_cardmeta_policy
+
+        tiny3 = TransformerCardMetaConfig(layers=1, width=16, heads=2, number_encoding="bucket")
+        metadata = json.loads((Path(__file__).resolve().parents[1] / "fixtures/neural/card-metadata-synthetic.json")
+                              .read_text())
+        s3 = build_transformer_cardmeta_policy(
+            self.schema, tiny3, seed=3, device="cpu", objective_id=DISTILL_OBJECTIVE_ID,
+            model_id=TRANSFORMER_CARDMETA_MODEL_ID, features_id=TRANSFORMER_CARDMETA_FEATURES_ID,
+            card_metadata=metadata)
+        s3_hashes = {"model": model_config_hash(tiny3), "distill": distill_config_hash(HYPER)}
+        s3_path = save_student(root / "s3", s3, s2_identity(
+            model_id=TRANSFORMER_CARDMETA_MODEL_ID, features_id=TRANSFORMER_CARDMETA_FEATURES_ID,
+            config_hashes=s3_hashes))
+        s3_features = save_student(root / "s3-features", s3, s2_identity(
+            features_id=TRANSFORMER_CARDMETA_FEATURES_ID, config_hashes=s3_hashes))
+        s3_model = save_student(root / "s3-model", s3, s2_identity(
+            model_id=TRANSFORMER_CARDMETA_MODEL_ID, config_hashes=s3_hashes))
         loaded = load_checkpoint(s2_path, s2_identity(), purpose="evaluate", device="cpu")
         fresh = self.build(seed=99)
         fresh.load_state_dict(dict(loaded.model_tensors), strict=True)
         self.assertTrue(all(torch.equal(a, b) for a, b in zip(fresh.state_dict().values(), s2.state_dict().values())))
-        for name, path in (("FF", ff_path), ("S3 features", s3_features), ("S3 model", s3_model)):
+        for name, path in (("FF", ff_path), ("S3", s3_path), ("S3 features", s3_features), ("S3 model", s3_model)):
             for purpose in ("evaluate", "warm_start", "resume"):
                 with self.subTest(checkpoint=name, purpose=purpose), self.assertRaises(CheckpointCompatibilityError):
                     load_checkpoint(path, s2_identity(), purpose=purpose, device="cpu")

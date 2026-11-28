@@ -1,0 +1,59 @@
+{
+  "arm": "mixed",
+  "baseline_id": "baseline-standard-1.2.5-decline-a2-20261128",
+  "decision_offset": 1216512,
+  "evaluation": {
+    "action_selection": "deterministic",
+    "case_actions": 1024,
+    "case_seconds": 120
+  },
+  "gpu_wait": {
+    "max_total_seconds": 21600,
+    "min_free_bytes": 13958643712,
+    "poll_seconds": 30
+  },
+  "gym_revision": "731fca0e0341d80e7cf08a8be7a03be1fa32c3f1",
+  "initial_checkpoint": "artifacts/development/neural-combat/runs/gym-1.2.4/standard-baseline-r2/prepared/train-296-shard-296/runs/20261126T044104Z-e3c9a38a47f84b4ba588d3cc721d786e/checkpoint-final",
+  "max_new_output_bytes": 51539607552,
+  "max_turn_actions": 500,
+  "notes": [
+    "delta 17 decline diagnostic: a quarter-length branch from baseline-standard-1.2.4-r2's own 75% checkpoint near-1216512 (186 selection wins), read from that run's summary.json checkpoints",
+    "arm A uses the recipe (level 4 from shard 297); seed 2 uses new seeds 9101 / 9203 / 9307 / 9419",
+    "training warm-starts (fresh Adam and RNG) at shard 297 with learned decisions counted from 1216512; the target 405504 more decisions ends at 1622016, r2's own final count",
+    "retain_near_decisions is empty: only checkpoint 0 (fresh-initial, r2's near-1216512) and the final checkpoint are evaluated",
+    "the reading is pre-registered in delta 17 (DECLINE_BAND 6 wins against 186); the boss panel is reported alongside",
+    "wall budgets and the timeout are r2's; a quarter run needs about a quarter of the training wall",
+    "the selection panel of the no-level-4 recipe equals the recipe's (training-only fuzz_schedule is outside the panel identity)",
+    "runner_timeout_seconds exceeds wall_seconds.total plus the maximum GPU wait, one poll and 1200 s of slack so the entry can publish summary.json"
+  ],
+  "qualification": {
+    "max_environment_actions": 512,
+    "max_updates": 1
+  },
+  "qualifications": [
+    "RNG-001",
+    "TIME-001",
+    "standard-standalone Ironclad, Ascension 20 only",
+    "one replicate",
+    "simulator only; no original-game transfer claim",
+    "one player's data: Baalorlord",
+    "burning elites labelled only from green_key_taken_log; burning kind is sampled",
+    "potions assumed empty where tagged",
+    "not comparable with M10 results (different Standard observation/action view)"
+  ],
+  "recipe": "configs/neural/baalorlord-standard-gym-1.2.4/recipe.json",
+  "retain_near_decisions": [],
+  "runner_timeout_seconds": 43200,
+  "schema": "spire-learn-baseline-plan-v1",
+  "segment": {
+    "max_environment_actions": 4096,
+    "max_updates": 8
+  },
+  "start_shard": 297,
+  "target_learned_decisions": 405504,
+  "template": "configs/neural/baseline-standard-1.2.5-decline-a2/template.toml",
+  "wall_seconds": {
+    "total": 19800,
+    "training": 12600
+  }
+}

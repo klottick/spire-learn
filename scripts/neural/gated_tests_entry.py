@@ -200,6 +200,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--model": "tests.neural.test_model.DistillValueHeadTests",
         # The student evaluation seam's torch tests (registry build, reflex argmax, timing); no skips.
         "--student-eval": "tests.neural.test_model.StudentEvalTests",
+        # The S1 -> PPO export and the critic scale (numpy and torch); the module's refusal class is stdlib.
+        "--distill-export": "tests.neural.test_distill_export.DistillExportTests",
     }
     if len(argv) == 1 and argv[0] in native_suites:
         if os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") != "1":

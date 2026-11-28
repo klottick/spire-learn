@@ -473,8 +473,8 @@ def _policy_class():
             group = self._plan.groups[ACTION_GROUP]
             occupied = batch.occupied[ACTION_GROUP].to(dtype=torch.bool)
             capacity = occupied.shape[1]
-            if (action_index >= capacity).any().item() or not occupied[
-                    batch_index, action_index.clamp(max=capacity - 1)].all().item():
+            unrowed = (action_index >= capacity) | ~occupied[batch_index, action_index.clamp(max=capacity - 1)]
+            if unrowed.any().item():  # one host sync for both conditions
                 raise ContractError("a legal action has no occupied action row")
             values = batch.values[ACTION_GROUP][batch_index, action_index]
             known = batch.known[ACTION_GROUP][batch_index, action_index].to(dtype=torch.bool)

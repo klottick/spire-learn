@@ -351,6 +351,29 @@ class EntityTransformerTests(unittest.TestCase):
             known[name] = known[name] | free
         noisy = replace(full, values=values, known=known)
         self.assert_same(expected, self.run_policy(policy, noisy))
+        # The public contract: an ordinary group's padding rows are known-0, or the frame is refused.
+        from spire_learn.contracts import ContractError
+
+        known_padding = {key: value.copy() for key, value in self.arrays.items()}
+        known_padding[self.schema.tensors["combat_cards"].known_key][0, 0] = 1  # row 0 is not occupied
+        with self.assertRaises(ContractError):
+            to_frame(known_padding, self.schema)
+        # potions and orbs may publish known empty slots. Those rows are still never tokens; they reach the
+        # outputs only through the public known_coverage (here perturbed), so with the coverage map silenced
+        # the outputs are exactly equal.
+        slots = {key: value.copy() for key, value in self.arrays.items()}
+        for name, rows in (("potions", [2, 4]), ("orbs", [3, 5])):
+            spec = self.schema.tensors[name]
+            self.assertFalse(slots[spec.occupied_key][rows].any())
+            slots[spec.known_key][rows] = 1
+        plain, published = self.encode([self.rich]), self.encode([to_frame(slots, self.schema)])
+        self.assertFalse(torch.equal(plain.known_coverage["potions"], published.known_coverage["potions"]))
+        self.assertFalse(torch.equal(plain.known_coverage["orbs"], published.known_coverage["orbs"]))
+        for name in ("valid", "token_group", "counts"):
+            self.assertTrue(torch.equal(getattr(policy.tokenise(plain), name), getattr(policy.tokenise(published), name)))
+        with torch.no_grad():
+            policy.coverage.weight.zero_()
+        self.assert_same(self.run_policy(policy, plain), self.run_policy(policy, published))
 
     def test_permutation_invariance_with_reference_remap(self):
         torch, np = self.torch, self.np
@@ -361,7 +384,8 @@ class EntityTransformerTests(unittest.TestCase):
         permuted = to_frame(moved, self.schema)  # still a valid public frame: every reference still resolves
         self.assertFalse(all(np.array_equal(moved[key], self.arrays[key]) for key in ROWS))
         original = self.run_policy(policy, self.encode([self.rich]))
-        result = self.run_policy(policy, self.encode([permuted]))
+        # Trimmed: the permuted rows leave holes inside each group's trimmed extent, and references point past them.
+        result = self.run_policy(policy, self.encode([permuted], trim=True))
         for name in ("values", "aux_values"):
             self.assertTrue(torch.allclose(getattr(original, name), getattr(result, name), atol=1e-5, rtol=1e-4))
         legal = [int(action) for action in np.flatnonzero(self.arrays["action_mask"])]
@@ -378,6 +402,83 @@ class EntityTransformerTests(unittest.TestCase):
         other = self.run_policy(policy, self.encode([to_frame(redirected, self.schema)]))
         self.assertTrue(torch.equal(other.values, original.values))  # actions are not tokens
         self.assertNotEqual(float(other.logits[0, 0]), float(original.logits[0, 0]))
+
+    def edited(self, batch, group: str, row: int, field: str, value: int, *, known: bool, selector="keep"):
+        """``batch`` (one frame) with one reference cell set; ``selector`` "keep", None (unknown) or a group."""
+        spec = self.schema.tensors[group]
+        index = _field(spec, field)
+        values = {key: tensor.clone() for key, tensor in batch.values.items()}
+        flags = {key: tensor.clone() for key, tensor in batch.known.items()}
+        values[group][0, row, index] = value
+        flags[group][0, row, index] = known
+        if selector != "keep":
+            selector_index = _field(spec, spec.columns[index].reference)
+            flags[group][0, row, selector_index] = selector is not None
+            if selector is not None:
+                values[group][0, row, selector_index] = self.schema.vocabularies["row_group"].index(selector)
+        return replace(batch, values=values, known=flags)
+
+    def silence_known_flag(self, policy, group_name: str, field: str) -> None:
+        """Zero the group-input weights of one reference's "index known" flag (the only documented difference)."""
+        from spire_learn.neural.transformer import _ENCODING_FEATURES
+
+        group = self.plan.groups[group_name]
+        position = [ref.field for ref in group.references].index(field)
+        column = len(group.numeric) * (_ENCODING_FEATURES[policy._encoding] + 1) + 2 * position
+        with self.torch.no_grad():
+            policy.group_inputs[f"g{group.index}"].weight[:, column] = 0.0
+
+    def test_unresolved_references_gather_nothing(self):
+        torch = self.torch
+        policy = self.build()
+        references = (("combat_cards", "permanent_row"), ("powers", "owner_row"), ("selection", "source_row"),
+                      ("known_draw", "combat_card_row"), ("actions", "target_row"), ("actions", "source_row"))
+        for group, field in references:
+            self.silence_known_flag(policy, group, field)
+        full, trimmed = self.encode([self.rich]), self.encode([self.rich], trim=True)
+        # frames[3] occupies powers, known_draw and actions only: enemies and combat_cards are empty groups,
+        # trimmed to one unoccupied row.
+        sparse = self.encode([self.frames[3]], trim=True)
+        self.assertFalse(sparse.occupied["combat_cards"].any() or sparse.occupied["enemies"].any())
+        self.assertEqual(sparse.values["combat_cards"].shape[1], 1)
+        self.assertLess(trimmed.values["permanent_cards"].shape[1], 500)
+        # (batch, group, row, field, value, selector); every row is occupied, every reference is unresolved,
+        # and a row value of 0 is what a reference to the context token would carry.
+        cases = {
+            "-1": (full, "combat_cards", 2, "permanent_row", -1, "keep"),
+            "-1 with the player (context) selector": (full, "powers", 0, "owner_row", -1, "keep"),
+            "an unoccupied target row": (full, "combat_cards", 2, "permanent_row", 1, "keep"),
+            "an unoccupied row 0 of a token group": (full, "powers", 6, "owner_row", 0, "enemies"),
+            "out of range": (full, "combat_cards", 2, "permanent_row", 5000, "keep"),
+            "past the context's single row": (full, "powers", 0, "owner_row", 1, "player"),
+            "past a trimmed extent": (trimmed, "combat_cards", 2, "permanent_row", 500, "keep"),
+            "an unknown selector": (full, "powers", 6, "owner_row", 0, None),
+            "a non-token selector (map_nodes)": (full, "powers", 6, "owner_row", 0, "map_nodes"),
+            "a non-token selector (none)": (full, "selection", 1, "source_row", 0, "none"),
+            "a non-token selector (offers)": (full, "selection", 1, "source_row", 0, "offers"),
+            "an action target in an unoccupied row": (full, "actions", 0, "target_row", 0, "enemies"),
+            "an action source with a non-token selector": (full, "actions", 8, "source_row", 0, "map_nodes"),
+            "into an empty trimmed group": (sparse, "known_draw", 9, "combat_card_row", 0, "keep"),
+            "an owner in an empty trimmed group": (sparse, "powers", 3, "owner_row", 0, "enemies"),
+            "an action target in an empty trimmed group": (sparse, "actions", 1000, "target_row", 0, "enemies"),
+        }
+        for name, (batch, group, row, field, value, selector) in cases.items():
+            with self.subTest(case=name):
+                self.assertTrue(bool(batch.occupied[group][0, row]))
+                on = self.run_policy(policy, self.edited(batch, group, row, field, value, known=True, selector=selector))
+                off = self.run_policy(policy, self.edited(batch, group, row, field, value, known=False,
+                                                          selector=selector))
+                self.assert_same(on, off)
+        # The control: a reference that resolves does gather (known on and off differ), including one to the
+        # context token, so the equalities above are not vacuous.
+        for group, row, field, value, selector in (("combat_cards", 2, "permanent_row", 3, "keep"),
+                                                   ("powers", 0, "owner_row", 0, "player"),
+                                                   ("actions", 0, "target_row", 4, "enemies")):
+            with self.subTest(control=f"{group}.{field}"):
+                on = self.run_policy(policy, self.edited(full, group, row, field, value, known=True, selector=selector))
+                off = self.run_policy(policy, self.edited(full, group, row, field, value, known=False,
+                                                          selector=selector))
+                self.assertFalse(torch.equal(on.logits, off.logits))
 
     # --- actions ---------------------------------------------------------------------------
 

@@ -57,6 +57,7 @@ from scripts.neural import distill_label_entry as label
 from scripts.neural import search_teacher_entry as entry
 from spire_learn.neural.cases import environment_seed_for
 from spire_learn.neural.config import model_config_hash_payload
+from spire_learn.neural.worker_faults import WorkerFault, fault_from  # noqa: F401
 from spire_learn.neural.noncombat_heuristic import HEURISTIC_ID, CardPriority, NoncombatHeuristic, RoomFlags
 from spire_learn.neural.scenario_support import content_sha256
 
@@ -432,13 +433,23 @@ def _play_job(item):
         env.close()
 
 
+def _guarded_play_job(item):
+    """Run the job; re-raise any exception as a picklable WorkerFault naming the case."""
+    try:
+        return _play_job(item)
+    except Exception as error:
+        job = item[0]
+        raise fault_from(error, "run", {"index": job.index, "run_id": job.run_id}) from None
+
+
 def _results(items, parallel):
+    # pool.map surfaces the first failing case in submission order.
     if parallel == 1:
-        yield from map(_play_job, items)
+        yield from map(_guarded_play_job, items)
         return
     pool = ProcessPoolExecutor(max_workers=parallel, mp_context=multiprocessing.get_context("spawn"))
     try:
-        yield from pool.map(_play_job, items)
+        yield from pool.map(_guarded_play_job, items)
     finally:
         pool.shutdown(cancel_futures=True)
 

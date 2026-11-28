@@ -8,6 +8,7 @@ with every row group occupied and every non-action reference known.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import replace
 import math
 from pathlib import Path
@@ -479,6 +480,55 @@ class EntityTransformerTests(unittest.TestCase):
                 off = self.run_policy(policy, self.edited(full, group, row, field, value, known=False,
                                                           selector=selector))
                 self.assertFalse(torch.equal(on.logits, off.logits))
+        # Independent of the flags: an unresolved reference adds exactly zero. With that reference column
+        # known in the edited row only, zeroing its whole projection (weight and bias) changes nothing; an
+        # unmasked projection would add the projection of token 0 and differ.
+        twin = self.build()
+        twin.load_state_dict(policy.state_dict(), strict=True)
+        alone_cases = {
+            "-1": (full, "combat_cards", 2, "permanent_row", -1, "keep"),
+            "an action target in an unoccupied row": (full, "actions", 0, "target_row", 0, "enemies"),
+            "a non-token selector (map_nodes)": (full, "powers", 6, "owner_row", 0, "map_nodes"),
+            "into an empty trimmed group": (sparse, "known_draw", 9, "combat_card_row", 0, "keep"),
+        }
+        for name, (batch, group, row, field, value, selector) in alone_cases.items():
+            with self.subTest(zeroed_projection=name):
+                edited = self.alone(self.edited(batch, group, row, field, value, known=True, selector=selector),
+                                    group, row, field)
+                with self.zeroed_projection(twin, group, field):
+                    self.assert_same(self.run_policy(policy, edited), self.run_policy(twin, edited))
+        # The control: for a reference that resolves, zeroing its projection does change the outputs.
+        for group, row, field, value, selector in (("combat_cards", 2, "permanent_row", 3, "keep"),
+                                                   ("actions", 0, "target_row", 4, "enemies")):
+            with self.subTest(zeroed_control=f"{group}.{field}"):
+                edited = self.alone(self.edited(full, group, row, field, value, known=True, selector=selector),
+                                    group, row, field)
+                with self.zeroed_projection(twin, group, field):
+                    self.assertFalse(torch.equal(self.run_policy(policy, edited).logits,
+                                                 self.run_policy(twin, edited).logits))
+
+    def alone(self, batch, group: str, row: int, field: str):
+        """``batch`` with one reference column unknown in every row but ``row`` (of frame 0)."""
+        index = _field(self.schema.tensors[group], field)
+        flags = {key: tensor.clone() for key, tensor in batch.known.items()}
+        keep = flags[group][0, row, index].clone()
+        flags[group][0, :, index] = False
+        flags[group][0, row, index] = keep
+        return replace(batch, known=flags)
+
+    @contextlib.contextmanager
+    def zeroed_projection(self, policy, group_name: str, field: str):
+        """Zero one reference column's projection (weight and bias) for the duration, then restore it."""
+        group = self.plan.groups[group_name]
+        projection = policy.reference_projections[f"g{group.index}f{_field(self.schema.tensors[group_name], field)}"]
+        saved = {name: tensor.detach().clone() for name, tensor in projection.state_dict().items()}
+        with self.torch.no_grad():
+            projection.weight.zero_()
+            projection.bias.zero_()
+        try:
+            yield
+        finally:
+            projection.load_state_dict(saved)
 
     # --- actions ---------------------------------------------------------------------------
 

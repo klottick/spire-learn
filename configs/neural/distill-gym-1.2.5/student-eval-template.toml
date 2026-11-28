@@ -1,0 +1,60 @@
+# Student evaluation template (Task 9): a compact Standard distillation evaluation config.
+# panel_eval.panel_configs replaces the manifest, output, rollout and budgets per case; the same
+# template serves --panel selection and --panel boss (both are selection-split panels).
+# manifest_path is a placeholder like the baselines' (a standalone manifest); every case gets its own
+# selection manifest. This file grants no execution authority.
+schema = "spire-learn-neural-config-v1"
+mode = "standard-standalone"
+operation = "evaluate"
+split = "selection"
+partition = "selection"
+manifest_path = "../../cases/neural/standard-standalone-train.json"
+output_root = "../../../artifacts/development/neural-combat/runs/gym-1.2.5/student-eval"
+device = "cuda:0"
+
+[environment]
+gym_revision = "731fca0e0341d80e7cf08a8be7a03be1fa32c3f1"
+common_view_id = "spire-gym-combat-policy-view-v1"
+common_view_fingerprint = "4c73f7de04d7b2875f473f8034c1cbacf984ea2d52d0a9428289c30cf1dff463"
+standard_view_layout = "compact"
+standard_view_preset = "standard-combat-compact-v1"
+standard_view_fingerprint = "49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8"
+workers = 1
+
+[seeds]
+policy = 1103
+optimizer = 2207
+curriculum = 3301
+noncombat = 4409
+
+[model]
+embedding_width = 16
+hidden_width = 64
+max_parameters = 10000000
+value_heads = 3
+
+[rollout]
+rows = 1
+steps = 1
+
+[budgets]
+max_optimizer_steps = 1
+max_training_decisions = 1024
+max_environment_actions = 1024
+max_wall_seconds = 120.0
+max_turn_actions = 500
+
+[[accepted_identities]]
+model_id = "spire-learn-combat-ff-standard-v1"
+features_id = "spire-learn-combat-features-standard-v1"
+action_id = "spire-learn-combat-dispatch-v1"
+objective_id = "spire-learn-combat-distill-v1"
+
+[accepted_identities.accepted_raw_mode_mappings]
+standard-standalone = "spire-learn-standard-combat-compact-v1@49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8+gym-1.2.4"
+
+[accepted_identities.config_hashes]
+model = "70e30870de99753f202861dee764bfd1a27d9c9e1fc216e5ac4db055ebfe33d8"
+
+[runtime]
+gpu_uuid = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"

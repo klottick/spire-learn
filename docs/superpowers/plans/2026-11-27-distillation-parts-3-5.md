@@ -534,6 +534,17 @@ The spec was written on Gym v1.2.0. Each delta below replaces a spec statement o
 ### Task 9: S1 searches, final S1 and the readout (controller)
 
 - [ ] **Step 1: Budget.** Run one S1 pilot: one seed, the middle τ, learning rate 3e-4. Measure rows per second and peak VRAM. Fix `gradient_steps = round(6 × train_rows / BATCH_ROWS)`. Record a GPU-hours estimate for M2–M4. The prior estimate is 20–70 GPU-hours supervised plus about 25 for PPO and the diagnostic.
+- [ ] **Step 1b: Throughput profile** (added 2026-11-28 at the user's suggestion, after the pilot measured about 3,600 rows per second, with 0.12 s of a 0.14 s step spent in the model on a 356k-parameter net).
+  - **Profile.** Profile about 200 steps of `train_step` with `torch.profiler`, on the pilot's config and dataset, using the GPU with `gpu_wait`. Split the time into forward, backward, optimizer, host syncs and collation. Check the padding to full row capacity (`_restore_row_capacity`, versus `experimental_trim_compute`) and the per-step `.item()` finiteness syncs.
+  - **What may change.** Only changes that are numerically equivalent:
+    - on CPU, the loss and gradients on fixed batches must be identical (bitwise) to the current code;
+    - on CUDA, they must agree within 1e-5 relative.
+    - Each change gets a unit test that compares it against the current code.
+  - **What may not change.** No change to the model, the hashes, the targets or the losses.
+  - **Adopt** a change if it passes that test and makes training at least 1.5× faster on the pilot's config. Otherwise proceed unchanged.
+  - **The pilot.** It still counts as the 3e-4 run, because an adopted change is equivalent by test. Record the speed before and after.
+  - **The S2 and S3 transformers.** Profile them on their first Task 12 run, with the same rules.
+  - **Budget:** at most 1 GPU-hour of profiling.
 - [ ] **Step 2: Learning rate.** Try 1e-4, 3e-4 and 1e-3 at the middle τ and pick by regret. Candidates within one run-level SE (delta 11) of the best go to 3e-4 if it is among them, and otherwise to the smaller rate. The pilot counts as the 3e-4 run.
 - [ ] **Step 3: τ.** Train the other two candidates at the chosen learning rate and pick by delta 11. All students share the result.
 - [ ] **Step 4: Final S1.** Train two seeds. Evaluate them on the selection and boss panels, and on the run panel as `checkpoint:` players, which is reported only.

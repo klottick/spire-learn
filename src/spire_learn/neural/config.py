@@ -58,6 +58,16 @@ STANDARD_LEARNER_IDENTITY_IDS = (
     LEARNER_IDENTITY_IDS[2],
 )
 _STANDARD_MODES = frozenset({"standard-standalone", "standard-run"})
+# The entity transformer student (S2): a distillation student on standard-standalone decisions
+# only. Its model and features ids differ from every FF learner's, so no FF (or later S3)
+# checkpoint loads into it, nor it into them. The action dispatch identity is shared.
+TRANSFORMER_MODEL_ID = "spire-learn-combat-entity-transformer-v1"
+TRANSFORMER_FEATURES_ID = "spire-learn-combat-features-entity-v1"
+TRANSFORMER_LEARNER_IDENTITY_IDS = (TRANSFORMER_MODEL_ID, TRANSFORMER_FEATURES_ID, LEARNER_IDENTITY_IDS[2])
+TRANSFORMER_PARAMETER_CAP = 16_000_000  # delta 10; the FF cap stays 10,000,000
+NUMBER_ENCODINGS = ("bucket", "scaled", "sinusoidal")
+# The plan's sizes as (layers, width, heads); every size is pre-norm.
+TRANSFORMER_SIZES = {"small": (2, 128, 4), "medium": (4, 256, 8), "large": (6, 384, 8)}
 # Win/loss plus a potential-based enemy-HP term; requires the [objective] table.
 HP_SHAPED_OBJECTIVE_ID = "spire-learn-combat-winloss-hpshaped-v1"
 OBJECTIVE_IDS = (WINLOSS_OBJECTIVE_ID, HP_SHAPED_OBJECTIVE_ID)
@@ -330,11 +340,17 @@ def _identity(raw: object, *, model_hash: str, ppo_hash: str | None = None, cont
         config_hashes=hashes,
     )
     learner_ids = (identity.model_id, identity.features_id, identity.action_id)
-    if (learner_ids not in (LEARNER_IDENTITY_IDS[:3], STANDARD_LEARNER_IDENTITY_IDS)
+    if (learner_ids not in (LEARNER_IDENTITY_IDS[:3], STANDARD_LEARNER_IDENTITY_IDS, TRANSFORMER_LEARNER_IDENTITY_IDS)
             or identity.objective_id not in objective_ids):
         raise ValueError("identity must use the supported combat learner model/features/action/objective IDs")
     if learner_ids == STANDARD_LEARNER_IDENTITY_IDS and not set(mappings) <= _STANDARD_MODES:
         raise ValueError("the Standard learner identity declares only standard-standalone/standard-run mappings")
+    if learner_ids == TRANSFORMER_LEARNER_IDENTITY_IDS:
+        # A distillation student only (its PPO arm is deferred, delta 16), on standalone decisions.
+        if identity.objective_id != DISTILL_OBJECTIVE_ID:
+            raise ValueError(f"the entity transformer identity uses the {DISTILL_OBJECTIVE_ID} objective only")
+        if set(mappings) != {"standard-standalone"}:
+            raise ValueError("the entity transformer identity maps standard-standalone only")
     return identity
 
 
@@ -384,11 +400,69 @@ def _parse_ff_model(table: dict[str, object]) -> ModelConfig:
     return ModelConfig(**table)
 
 
+@dataclass(frozen=True)
+class TransformerConfig:
+    """The entity transformer's settings (the ``[transformer]`` table); no framework import.
+
+    ``layers`` pre-norm blocks of ``width`` with ``heads`` attention heads; ``number_encoding``
+    is how numeric columns enter a token (``bucket``, ``scaled`` or ``sinusoidal``, see
+    ``transformer``). ``value_heads`` is always 3 (outcome, HP kept, realised v2). The parameter
+    cap is ``TRANSFORMER_PARAMETER_CAP``, a constant rather than a setting.
+    """
+
+    layers: int
+    width: int
+    heads: int
+    number_encoding: str
+    value_heads: int = 3
+
+    def __post_init__(self) -> None:
+        for name in ("layers", "width", "heads"):
+            value = getattr(self, name)
+            if type(value) is not int or value <= 0:
+                raise ContractError(f"TransformerConfig {name} must be a positive integer")
+        if self.width % self.heads:
+            raise ContractError("TransformerConfig width must be a multiple of heads")
+        if not isinstance(self.number_encoding, str) or self.number_encoding not in NUMBER_ENCODINGS:
+            raise ContractError(f"TransformerConfig number_encoding must be one of {', '.join(NUMBER_ENCODINGS)}")
+        if type(self.value_heads) is not int or self.value_heads != 3:
+            raise ContractError("TransformerConfig value_heads must be 3")
+
+
+def transformer_size(name: str, number_encoding: str) -> TransformerConfig:
+    """The ``small``/``medium``/``large`` configuration with ``number_encoding``."""
+    if name not in TRANSFORMER_SIZES:
+        raise ValueError(f"unknown transformer size {name!r} (sizes: {', '.join(TRANSFORMER_SIZES)})")
+    layers, width, heads = TRANSFORMER_SIZES[name]
+    return TransformerConfig(layers=layers, width=width, heads=heads, number_encoding=number_encoding)
+
+
+_TRANSFORMER_FIELDS = {"layers", "width", "heads", "number_encoding", "value_heads"}
+
+
+def _parse_transformer(table: dict[str, object]) -> TransformerConfig:
+    return TransformerConfig(**_exact_keys(table, _TRANSFORMER_FIELDS, "transformer"))
+
+
 # Model-family tables an evaluation config may carry, keyed by TOML table name. ``model`` is the
-# feed-forward ModelConfig (its trim flags are handled by the loader); a later family registers
-# its own table here (``transformer``). PPO and calibration configs use [model] only.
+# feed-forward ModelConfig (its trim flags are handled by the loader); ``transformer`` is the
+# entity transformer's TransformerConfig. PPO and calibration configs use [model] only.
 KNOWN_MODEL_TABLES = ("model", "transformer")
-MODEL_FAMILY_TABLES: dict[str, Callable[[dict[str, object]], object]] = {"model": _parse_ff_model}
+MODEL_FAMILY_TABLES: dict[str, Callable[[dict[str, object]], object]] = {
+    "model": _parse_ff_model, "transformer": _parse_transformer,
+}
+# The learner (model, features, action) ids each model table may declare.
+MODEL_TABLE_LEARNERS: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "model": (LEARNER_IDENTITY_IDS[:3], STANDARD_LEARNER_IDENTITY_IDS),
+    "transformer": (TRANSFORMER_LEARNER_IDENTITY_IDS,),
+}
+
+
+def _check_table_learners(model_table: str, identities) -> None:
+    accepted = MODEL_TABLE_LEARNERS.get(model_table, ())
+    for identity in identities:
+        if (identity.model_id, identity.features_id, identity.action_id) not in accepted:
+            raise ValueError(f"the [{model_table}] model table does not configure learner {identity.model_id}")
 
 
 def _declares_distill(raw: object) -> bool:
@@ -654,6 +728,7 @@ def load_neural_config(path: Path, *, allow_experimental_trim_compute: bool = Fa
                        for item in identity_values)
     if any(mode not in identity.accepted_raw_mode_mappings for identity in identities):
         raise ValueError("every accepted identity must declare the selected raw mode")
+    _check_table_learners(model_table, identities)
     if common_omitted and any(not set(identity.accepted_raw_mode_mappings) <= _STANDARD_MODES
                               for identity in identities):
         raise ValueError("a config declaring an M10 raw mode must pin the common combat view")
@@ -834,9 +909,11 @@ class DistillConfig:
     runtime_gpu_uuid: str | None
     seed: int
     eval_every: int
-    model: ModelConfig
+    model: ModelConfig  # or TransformerConfig when model_table is "transformer"
     distill: DistillHyperparameters
     identity: NeuralIdentity
+    # The TOML table the student came from: "model" (the FF student) or "transformer".
+    model_table: str = "model"
 
 
 def _resolve(source: Path, value: object, name: str) -> Path:
@@ -856,8 +933,10 @@ def load_distill_config(path: Path) -> DistillConfig:
             raw = tomllib.load(stream)
     except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise ValueError(f"cannot read distillation config {source}: {exc}") from exc
+    # Exactly one student table: [model] (the FF student) or [transformer].
+    model_table = "transformer" if isinstance(raw, dict) and "transformer" in raw and "model" not in raw else "model"
     required = {"schema", "mode", "output_root", "device", "seed", "eval_every", "environment",
-                "model", "distill", "identity"}
+                model_table, "distill", "identity"}
     if isinstance(raw, dict) and raw.get("device") == "cuda:0":
         required.add("runtime")
     if not isinstance(raw, dict) or set(raw) != required:
@@ -895,10 +974,13 @@ def load_distill_config(path: Path) -> DistillConfig:
     if fingerprint != presets[preset]:
         raise ValueError("the compact Standard layout requires its preset's compact view fingerprint")
 
-    model_fields = {"embedding_width", "hidden_width", "max_parameters", "value_heads"}
-    model = ModelConfig(**_exact_keys(raw["model"], model_fields, "model"))
-    if model.value_heads != 3:
-        raise ValueError("a distillation student has three value heads (model.value_heads = 3)")
+    if model_table == "model":
+        model_fields = {"embedding_width", "hidden_width", "max_parameters", "value_heads"}
+        model = ModelConfig(**_exact_keys(raw["model"], model_fields, "model"))
+        if model.value_heads != 3:
+            raise ValueError("a distillation student has three value heads (model.value_heads = 3)")
+    else:
+        model = _parse_transformer(raw["transformer"])  # value_heads is always 3
     distill_raw = raw["distill"]
     distill_fields = set(_DISTILL_HASHED)
     if isinstance(distill_raw, dict) and "microbatch_rows" in distill_raw:
@@ -911,8 +993,10 @@ def load_distill_config(path: Path) -> DistillConfig:
         component_hashes={"model": model_config_hash(model),
                           DISTILL_HASH_KEY: distill_config_hash(hyperparameters)},
         objective_ids=(DISTILL_OBJECTIVE_ID,))
-    if (identity.model_id, identity.features_id, identity.action_id) != STANDARD_LEARNER_IDENTITY_IDS:
-        raise ValueError("the distillation student uses the Standard FF learner identity")
+    student = STANDARD_LEARNER_IDENTITY_IDS if model_table == "model" else TRANSFORMER_LEARNER_IDENTITY_IDS
+    if (identity.model_id, identity.features_id, identity.action_id) != student:
+        raise ValueError(f"the [{model_table}] distillation student uses the "
+                         f"{'Standard FF' if model_table == 'model' else 'entity transformer'} learner identity")
     if set(identity.accepted_raw_mode_mappings) != {"standard-standalone"}:
         raise ValueError("the distillation identity maps standard-standalone only")
 
@@ -926,7 +1010,7 @@ def load_distill_config(path: Path) -> DistillConfig:
         standard_view_preset=preset, standard_view_fingerprint=fingerprint, output_root=output_root,
         device=device, runtime_gpu_uuid=runtime_gpu_uuid, seed=seed, eval_every=eval_every,
         model=model, distill=hyperparameters,
-        identity=identity,
+        identity=identity, model_table=model_table,
     )
 
 
@@ -946,6 +1030,15 @@ __all__ = [
     "COMMON_VIEW_ID",
     "KNOWN_MODEL_TABLES",
     "MODEL_FAMILY_TABLES",
+    "MODEL_TABLE_LEARNERS",
+    "NUMBER_ENCODINGS",
+    "TRANSFORMER_FEATURES_ID",
+    "TRANSFORMER_LEARNER_IDENTITY_IDS",
+    "TRANSFORMER_MODEL_ID",
+    "TRANSFORMER_PARAMETER_CAP",
+    "TRANSFORMER_SIZES",
+    "TransformerConfig",
+    "transformer_size",
     "NeuralBudget",
     "NeuralConfig",
     "NEURAL_MODES",

@@ -3,8 +3,10 @@
 A ``ModelFamily`` gives one family's ``build`` (schema, config, keyword options; the FF family's
 is ``model.build_policy`` exactly), its ``config_type`` (the parsed model table), its
 ``parameter_cap`` and ``encode`` (public frames to the batch its ``forward`` takes). Families are
-keyed by every ``model_id`` they own. The FF family owns the M10 and Standard FF learners and is
-the only family registered here; Task 10 registers the transformer with ``register_model_family``.
+keyed by every ``model_id`` they own. The FF family owns the M10 and Standard FF learners; the
+entity transformer family (S2, ``transformer.build_transformer_policy``, ``TransformerConfig``, a
+16,000,000 parameter cap) owns ``spire-learn-combat-entity-transformer-v1``. Both are registered
+here; a later family registers with ``register_model_family``.
 
 ``build_family_policy`` builds through the registry and refuses a policy that lacks what the
 ``Collector`` and the evaluators use: ``act``, ``values`` and ``forward``, a
@@ -28,7 +30,10 @@ import time
 from typing import Any
 
 from spire_learn.contracts import ContractError
-from spire_learn.neural.config import LEARNER_IDENTITY_IDS, STANDARD_LEARNER_IDENTITY_IDS
+from spire_learn.neural.config import (
+    LEARNER_IDENTITY_IDS, STANDARD_LEARNER_IDENTITY_IDS, TRANSFORMER_MODEL_ID, TRANSFORMER_PARAMETER_CAP,
+    TransformerConfig,
+)
 from spire_learn.neural.contracts import ModelConfig
 
 FF_PARAMETER_CAP = 10_000_000
@@ -90,6 +95,24 @@ FF_FAMILY = ModelFamily(
 _FAMILIES: dict[str, ModelFamily] = {model_id: FF_FAMILY for model_id in FF_FAMILY.model_ids}
 
 
+def _transformer_build(schema, model_config, **options):
+    from spire_learn.neural.transformer import build_transformer_policy
+
+    return build_transformer_policy(schema, model_config, **options)
+
+
+# The entity transformer reads the same public EncodedBatch as FF (encode_frames); it tokenises the
+# occupied rows itself, so trimmed and full batches give the same outputs.
+TRANSFORMER_FAMILY = ModelFamily(
+    family_id="transformer",
+    model_ids=(TRANSFORMER_MODEL_ID,),
+    config_type=TransformerConfig,
+    parameter_cap=TRANSFORMER_PARAMETER_CAP,
+    build=_transformer_build,
+    encode=_ff_encode,
+)
+
+
 def registered_model_ids() -> tuple[str, ...]:
     return tuple(sorted(_FAMILIES))
 
@@ -103,6 +126,9 @@ def register_model_family(family: ModelFamily) -> None:
         raise ContractError(f"model ids already have a registered family: {', '.join(taken)}")
     for model_id in family.model_ids:
         _FAMILIES[model_id] = family
+
+
+register_model_family(TRANSFORMER_FAMILY)
 
 
 def model_family(model_id: str) -> ModelFamily:
@@ -217,7 +243,7 @@ def time_batch1_forward(policy: Any, family: ModelFamily, frame, schema, *, devi
 
 
 __all__ = [
-    "FF_FAMILY", "FF_PARAMETER_CAP", "ModelFamily", "POLICY_IDENTITY_ATTRIBUTES", "POLICY_METHODS",
+    "FF_FAMILY", "FF_PARAMETER_CAP", "ModelFamily", "TRANSFORMER_FAMILY", "POLICY_IDENTITY_ATTRIBUTES", "POLICY_METHODS",
     "build_family_policy", "check_family_config", "check_policy", "median_forward_seconds", "model_family",
     "reflex_argmax", "register_model_family", "registered_model_ids", "time_batch1_forward",
 ]

@@ -60,8 +60,11 @@ def _transformer_family(**changes):
 
 class ModelFamilyTests(unittest.TestCase):
     def test_ff_family_unchanged(self):
-        # Both FF learners map to the one FF family: ModelConfig, the 10M cap, build_policy.
-        self.assertEqual(families.registered_model_ids(), tuple(sorted(FF_IDS)))
+        # Both FF learners map to the one FF family: ModelConfig, the 10M cap, build_policy. The only
+        # other registered families are the entity transformers S2 and S3 (tests/unit/test_transformer_config.py).
+        self.assertEqual(families.registered_model_ids(),
+                         tuple(sorted((*FF_IDS, "spire-learn-combat-entity-transformer-v1",
+                                      "spire-learn-combat-entity-transformer-cardmeta-v1"))))
         for model_id in FF_IDS:
             family = families.model_family(model_id)
             self.assertIs(family, families.FF_FAMILY)

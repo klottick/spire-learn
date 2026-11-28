@@ -74,8 +74,9 @@ def _write(folder: Path, name: str, text: str) -> Path:
     return path
 
 
-def _identity_toml(*, objective=DISTILL_OBJECTIVE_ID, hashes: dict[str, str], table="identity") -> str:
-    model_id, features_id, action_id = STANDARD_LEARNER_IDENTITY_IDS
+def _identity_toml(*, objective=DISTILL_OBJECTIVE_ID, hashes: dict[str, str], table="identity",
+                   learner=STANDARD_LEARNER_IDENTITY_IDS) -> str:
+    model_id, features_id, action_id = learner
     lines = [f"[{table}]" if table == "identity" else f"[[{table}]]",
              f'model_id = "{model_id}"', f'features_id = "{features_id}"', f'action_id = "{action_id}"',
              f'objective_id = "{objective}"', "", f"[{table}.accepted_raw_mode_mappings]",
@@ -102,7 +103,8 @@ def distill_toml(*, model=STUDENT, hyper=HYPER, seed=1, eval_every=1000,
 
 
 def eval_toml(folder: Path, *, model_table: str | None = None, hashes=None, ppo=False,
-              objective=DISTILL_OBJECTIVE_ID, operation="evaluate", split="selection") -> str:
+              objective=DISTILL_OBJECTIVE_ID, operation="evaluate", split="selection",
+              learner=STANDARD_LEARNER_IDENTITY_IDS) -> str:
     """The v1.2.5 compact template as a selection-split distillation evaluation config."""
     manifest = json.loads((ROOT / "configs/cases/neural/standard-standalone-train.json").read_text())
     if split == "selection":
@@ -128,7 +130,7 @@ def eval_toml(folder: Path, *, model_table: str | None = None, hashes=None, ppo=
         before, _, after = head.partition("[model]\n")
         head = before + model_table + after[after.index("\n\n") + 2:]
     hashes = hashes or {"model": model_config_hash(STUDENT)}
-    return head + _identity_toml(objective=objective, hashes=hashes, table="accepted_identities")
+    return head + _identity_toml(objective=objective, hashes=hashes, table="accepted_identities", learner=learner)
 
 
 def write_chunk(root: Path, first: int, count: int, rows=lambda index: 3, validation_rows=lambda index: 1) -> Path:
@@ -348,10 +350,12 @@ class EvaluationConfigTests(unittest.TestCase):
                 load_neural_config(_write(folder, "ppo.toml", eval_toml(
                     folder, objective="spire-learn-combat-winloss-v1")))
 
+            # The seam itself, with a stand-in parser (the real [transformer] table: test_transformer_config).
             transformer_table = "[transformer]\nlayers = 2\nwidth = 128\nheads = 4\n\n"
             text = eval_toml(folder, model_table=transformer_table, hashes={"model": model_config_hash(
-                FakeTransformerConfig(2, 128, 4))})
-            with self.assertRaisesRegex(ValueError, "no registered model family"):
+                FakeTransformerConfig(2, 128, 4))}, learner=config_module.TRANSFORMER_LEARNER_IDENTITY_IDS)
+            with patch.dict(config_module.MODEL_FAMILY_TABLES, {"model": config_module._parse_ff_model}, clear=True), \
+                    self.assertRaisesRegex(ValueError, "no registered model family"):
                 load_neural_config(_write(folder, "transformer.toml", text))
             with patch.dict(config_module.MODEL_FAMILY_TABLES,
                             {"transformer": lambda table: FakeTransformerConfig(**table)}):

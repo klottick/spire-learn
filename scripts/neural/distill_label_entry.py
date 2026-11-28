@@ -63,6 +63,7 @@ from spire_learn.neural.contracts import ModelConfig
 from spire_learn.neural.scenario_support import content_sha256, json_value
 from spire_learn.neural.search_one_move import terminal_score
 from spire_learn.neural.search_value import RootContext
+from spire_learn.neural.worker_faults import WorkerFault, fault_from  # noqa: F401
 from spire_learn.neural.search_view import ROOT_REFUSAL_CLASSES, View
 from spire_learn.neural.standard_stream import run_split
 
@@ -355,13 +356,23 @@ def _label_job(item):
                            player=player)
 
 
+def _guarded_label_job(item):
+    """Run the job; re-raise any exception as a picklable WorkerFault naming the case."""
+    try:
+        return _label_job(item)
+    except Exception as error:
+        job = item[0]
+        raise fault_from(error, "label", {"shard": job.shard, "local": job.local, "run_id": job.run_id}) from None
+
+
 def _results(items, parallel):
+    # pool.map surfaces the first failing case in submission order.
     if parallel == 1:
-        yield from map(_label_job, items)
+        yield from map(_guarded_label_job, items)
         return
     pool = ProcessPoolExecutor(max_workers=parallel, mp_context=multiprocessing.get_context("spawn"))
     try:
-        yield from pool.map(_label_job, items)
+        yield from pool.map(_guarded_label_job, items)
     finally:
         pool.shutdown(cancel_futures=True)
 

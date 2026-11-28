@@ -1185,7 +1185,8 @@ class _ScriptedReports:
 class BaselineEvalByteIdentityTests(unittest.TestCase):
     """Pins every byte the baseline's panel evaluation writes, recorded before panel_eval was extracted."""
 
-    # Recorded at 65e198d, with baseline_entry._evaluate still inline.
+    # Recorded at 65e198d, with baseline_entry._evaluate still inline. Task 13's summary['training_stream']
+    # is removed before hashing (and checked), so these still pin every other byte.
     PINS = {
         "selection": "44fc90297c679f8c87a0681e7caa30c1c2a7e05b6c146ccfe12df645fa474dba",
         "boss": "b02fa1d9d652d8f10e98f33149d126aa62ab59d26467ab04b51fde020d4a2bad",
@@ -1243,6 +1244,16 @@ class BaselineEvalByteIdentityTests(unittest.TestCase):
         path.write_text(json.dumps(plan))
         return plan, path
 
+    def _strip_training_stream(self, output: Path) -> dict:
+        """Remove the one Task 13 summary key, rewriting summary.json exactly as the entry formats it."""
+        path = output / "summary.json"
+        text = path.read_text()
+        summary = json.loads(text)
+        self.assertEqual(json.dumps(summary, indent=2, sort_keys=True) + "\n", text)
+        stream = summary.pop("training_stream")
+        path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+        return stream
+
     def test_baseline_eval_outputs_unchanged(self):
         digests = {}
         with tempfile.TemporaryDirectory() as directory:
@@ -1255,6 +1266,11 @@ class BaselineEvalByteIdentityTests(unittest.TestCase):
             output = Path(directory) / "selection"
             output.mkdir()
             baseline_entry.run_baseline(ROOT, plan_path, output, dependencies=deps, clock=clock)
+            # Task 13 adds only summary['training_stream']; everything else keeps the recorded bytes.
+            self.assertEqual(self._strip_training_stream(output), {
+                "window": "second_half", "window_start_learned_decisions": 202752,
+                "window_end_learned_decisions": 405504, "segments": 49, "segments_without_fight_metrics": 49,
+                "victories": 0, "deaths": 0, "escaped": 0, "settled": 0, "settled_win_rate": None})
             digests["selection"] = _output_digest(output, {directory: "<TMP>"}, log)
 
         with tempfile.TemporaryDirectory() as directory:
@@ -1270,6 +1286,7 @@ class BaselineEvalByteIdentityTests(unittest.TestCase):
                                         reevaluate=prior, panel="boss")
             # The prior summary embeds the temp path, so its recorded sha256 varies per run.
             prior_sha256 = hashlib.sha256((prior / "summary.json").read_bytes()).hexdigest()
+            self.assertNotIn("training_stream", json.loads((output / "summary.json").read_text()))
             digests["boss"] = _output_digest(output, {directory: "<TMP>", prior_sha256: "<PRIOR>"}, log)
         self.assertEqual(digests, self.PINS)
 
@@ -1598,6 +1615,264 @@ class StudentEvalSummaryTests(unittest.TestCase):
         selected = config.accepted_identities[0]
         self.assertEqual(selected.objective_id, "spire-learn-combat-distill-v1")
         self.assertEqual(check_family_config(selected.model_id, config.model).family_id, "FF")
+
+
+
+class _BranchFakes(_Fakes):
+    """``_Fakes`` that accept warm-start preflights, publish checkpoint directories, start at a shard
+    and report scripted standalone fight counts per training segment (``fights(training_index)``)."""
+
+    def __init__(self, *, start_shard=0, fights=None, **kwargs):
+        super().__init__(**kwargs)
+        self.preflights, self.start_shard, self.fights = [], start_shard, fights
+        self.preflight_error = None
+
+    def preflight(self, checkpoint, identity, *, purpose):
+        self.preflights.append((str(checkpoint), purpose))
+        if self.preflight_error is not None and purpose == self.preflight_error:
+            raise ValueError(f"scripted {purpose} preflight refusal")
+
+    def run_stream_segment(self, config, **kwargs):
+        result = super().run_stream_segment(config, **kwargs)
+        training_index = len(self.segments) - 1
+        if result["checkpoint"] is not None:
+            Path(result["checkpoint"]).mkdir(exist_ok=True)
+            if training_index and self.fights is not None:
+                fights = self.fights(training_index)
+                result["report"] = SimpleNamespace(summary={} if fights is None else {
+                    "fights": {"standalone_fights": fights}})
+        if result.get("next_shard") is not None:
+            result["next_shard"] = {"shard_index": self.start_shard + result["next_shard"]["shard_index"]}
+        return result
+
+    def build_panel(self, recipe, *args, **kwargs):
+        return {**super().build_panel(recipe), "panel_sha256": "p" * 64, "manifest_sha256": "m" * 64}
+
+
+def _initial_checkpoint(directory) -> Path:
+    path = Path(directory) / "initial"
+    path.mkdir()
+    (path / "metadata.json").write_text('{"exported": true}\n')
+    (path / "model.pt").write_bytes(b"weights")
+    return path
+
+
+def _branch_plan(directory, **changes) -> tuple[dict, Path]:
+    plan = json.loads((ROOT / PLAN).read_text())
+    plan.update({"target_learned_decisions": 8192, "retain_near_decisions": []}, **changes)
+    path = Path(directory) / "branch-plan.json"
+    path.write_text(json.dumps(plan))
+    return plan, path
+
+
+def _branch_run(fakes, plan_path, output, **kwargs):
+    output.mkdir()
+    summary = baseline_entry.run_baseline(ROOT, plan_path, output, dependencies=fakes.deps(), clock=_Clock(),
+                                          **kwargs)
+    events = [json.loads(line) for line in (output / "progress.jsonl").read_text().splitlines()]
+    return summary, events
+
+
+class BranchedPlanTests(unittest.TestCase):
+    """Task 13 plan fields: initial_checkpoint, start_shard, decision_offset, evaluate; the stream win rate."""
+
+    def test_plan_field_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for changes, error in (({"initial_checkpoint": ""}, "initial_checkpoint"),
+                                   ({"initial_checkpoint": None}, "initial_checkpoint"),
+                                   ({"initial_checkpoint": "x", "start_shard": -1}, "start_shard"),
+                                   ({"initial_checkpoint": "x", "decision_offset": 1.0}, "decision_offset"),
+                                   ({"initial_checkpoint": "x", "start_shard": True}, "start_shard"),
+                                   ({"evaluate": "no"}, "evaluate"),
+                                   ({"start_shard": 3}, "branch from an initial_checkpoint"),
+                                   ({"decision_offset": 3}, "branch from an initial_checkpoint")):
+                with self.subTest(changes=changes):
+                    _, path = _branch_plan(directory, **changes)
+                    with self.assertRaisesRegex(ValueError, error):
+                        baseline_entry.load_plan(path)
+            _, path = _branch_plan(directory, initial_checkpoint="x", start_shard=0, decision_offset=0,
+                                   evaluate=True)
+            self.assertEqual(baseline_entry.load_plan(path)["start_shard"], 0)
+
+    def test_checkpoint_sha256_follows_the_label_entry_rule(self):
+        from spire_learn.neural.scenario_support import content_sha256
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = _initial_checkpoint(directory)
+            expected = content_sha256({name: hashlib.sha256((path / name).read_bytes()).hexdigest()
+                                       for name in ("metadata.json", "model.pt")})
+            self.assertEqual(baseline_entry.checkpoint_sha256(path), expected)
+            (path / "model.pt").write_bytes(b"other weights")
+            self.assertNotEqual(baseline_entry.checkpoint_sha256(path), expected)
+            with self.assertRaisesRegex(ValueError, "not a checkpoint directory"):
+                baseline_entry.checkpoint_sha256(Path(directory) / "missing")
+
+    def test_initial_checkpoint_preflight_and_provenance(self):
+        fakes = _BranchFakes(panel_cases=2)
+        with tempfile.TemporaryDirectory() as directory:
+            initial = _initial_checkpoint(directory)
+            sha256 = baseline_entry.checkpoint_sha256(initial)
+            plan, plan_path = _branch_plan(directory, initial_checkpoint=str(initial))
+            summary, events = _branch_run(fakes, plan_path, Path(directory) / "out")
+        # Preflighted for warm start and evaluation before anything trains; no fresh weights are made.
+        self.assertEqual(fakes.preflights[:2], [(str(initial), "warm_start"), (str(initial), "evaluate")])
+        self.assertFalse(any(entry[0] in ("save", "load_checkpoint") for entry in fakes.log))
+        self.assertFalse(any(entry[0] == "create_runtime" and entry[1].get("purpose") == "train"
+                             for entry in fakes.log))
+        self.assertEqual(summary["checkpoints"][0],
+                         {"label": "fresh-initial", "path": str(initial), "learned_decisions": 0})
+        self.assertEqual(summary["initial_checkpoint"], {"path": str(initial), "plan_path": str(initial),
+                                                         "sha256": sha256, "learned_decisions": 0})
+        accepted = next(event for event in events if event["event"] == "initial_checkpoint_accepted")
+        self.assertEqual((accepted["checkpoint"], accepted["sha256"]), (str(initial), sha256))
+        self.assertNotIn("fresh_initial_saved", [event["event"] for event in events])
+        # Qualification and the first segment warm-start from it.
+        self.assertEqual([(call["purpose"], call["parent"]) for call in fakes.segments[:2]],
+                         [("warm_start", str(initial)), ("warm_start", str(initial))])
+        # Evaluated as checkpoint 0 and paired with the final checkpoint.
+        self.assertEqual(summary["evaluations"]["fresh-initial"]["checkpoint"], str(initial))
+        self.assertEqual(summary["paired_fresh_vs_final"]["paired_cases"], 2)
+        self.assertEqual(summary["result"], "complete")
+
+        for purpose in ("warm_start", "evaluate"):
+            fakes = _BranchFakes(panel_cases=2)
+            fakes.preflight_error = purpose
+            with self.subTest(refused=purpose), tempfile.TemporaryDirectory() as directory:
+                initial = _initial_checkpoint(directory)
+                _, plan_path = _branch_plan(directory, initial_checkpoint=str(initial))
+                summary, _ = _branch_run(fakes, plan_path, Path(directory) / "out")
+                self.assertEqual(summary["stop_reason"], "fault")
+                self.assertIn(f"{purpose} preflight refusal", summary["fault"]["message"])
+                self.assertEqual(fakes.segments, [])
+                self.assertEqual(summary["checkpoints"], [])
+                self.assertEqual(summary["result"], "incomplete")
+
+    def test_start_shard_and_offset(self):
+        fakes = _BranchFakes(panel_cases=1, start_shard=297)
+        offset = 1216512
+        with tempfile.TemporaryDirectory() as directory:
+            initial = _initial_checkpoint(directory)
+            _, plan_path = _branch_plan(directory, initial_checkpoint=str(initial), start_shard=297,
+                                        decision_offset=offset, retain_near_decisions=[offset + 4096])
+            summary, _ = _branch_run(fakes, plan_path, Path(directory) / "out")
+        prepared = [(entry[1], entry[3]) for entry in fakes.log if entry[0] == "prepare"]
+        self.assertEqual(prepared, [("shard-297-initial", 297), ("qualification", 297),
+                                    ("train-0-shard-297", 297), ("train-1-shard-298", 298)])
+        # The target counts from the offset: 8192 more decisions, two segments of 4096.
+        self.assertEqual((summary["stop_reason"], summary["segments"]), ("target_reached", 2))
+        self.assertEqual(summary["learned_decisions"], offset + 8192)
+        labels = {row["label"]: row["learned_decisions"] for row in summary["checkpoints"]}
+        self.assertEqual(labels, {"fresh-initial": offset, "final": offset + 8192,
+                                  f"near-{offset + 4096}": offset + 4096})
+        self.assertEqual(summary["initial_checkpoint"]["learned_decisions"], offset)
+        # The runner's own limits still count from the warm start (no offset).
+        self.assertEqual([call["max_env"] for call in fakes.segments[1:]], [4096, 8192])
+        self.assertEqual(set(summary["evaluations"]), {"final", "fresh-initial", f"near-{offset + 4096}"})
+        self.assertEqual(summary["result"], "complete")
+
+    def test_evaluate_false_skips_panels(self):
+        fakes = _BranchFakes(panel_cases=2)
+        with tempfile.TemporaryDirectory() as directory:
+            plan, plan_path = _branch_plan(directory, evaluate=False, additional_panels=[
+                "configs/neural/curriculum-v2/recipe.json"])
+            summary, events = _branch_run(fakes, plan_path, Path(directory) / "out")
+            written = json.loads((Path(directory) / "out/summary.json").read_text())
+            self.assertFalse((Path(directory) / "out/panel").exists())
+            # A pilot output cannot be reevaluated.
+            with self.assertRaisesRegex(ValueError, "evaluate false"):
+                baseline_entry.load_prior(Path(directory) / "out", plan, Path(directory) / "new")
+        self.assertEqual(fakes.evaluated, [])
+        self.assertFalse(any(entry[0] == "create_runtime" and entry[1].get("purpose") == "evaluate"
+                             for entry in fakes.log))
+        self.assertEqual((summary["stop_reason"], summary["evaluations"]), ("target_reached", {}))
+        self.assertEqual(summary["evaluation_skipped"], "plan_evaluate_false")
+        self.assertNotIn("additional_panels", summary)
+        self.assertEqual(summary["result"], "complete")
+        self.assertEqual(written["result"], "complete")
+        self.assertIn("evaluation_skipped", [event["event"] for event in events])
+        # Without evaluations the result still needs the target.
+        fakes = _BranchFakes(panel_cases=2, missing_checkpoint_at=2)
+        with tempfile.TemporaryDirectory() as directory:
+            _, plan_path = _branch_plan(directory, evaluate=False)
+            summary, _ = _branch_run(fakes, plan_path, Path(directory) / "out")
+        self.assertEqual((summary["stop_reason"], summary["result"]), ("segment_without_checkpoint", "incomplete"))
+        self.assertEqual(fakes.evaluated, [])
+
+    def test_plan_fields_survive_reevaluate(self):
+        offset = 4096 * 10
+        with tempfile.TemporaryDirectory() as directory:
+            initial = _initial_checkpoint(directory)
+            plan, plan_path = _branch_plan(directory, initial_checkpoint=str(initial), start_shard=7,
+                                           decision_offset=offset, evaluate=True)
+            fakes = _BranchFakes(panel_cases=2, start_shard=7, fights=lambda index: {
+                "victories": 2, "deaths": 1, "escaped": 0})
+            first, _ = _branch_run(fakes, plan_path, Path(directory) / "train")
+            fakes = _BranchFakes(panel_cases=2, start_shard=7)
+            summary, events = _branch_run(fakes, plan_path, Path(directory) / "boss",
+                                          reevaluate=Path(directory) / "train", panel="boss")
+            written = json.loads((Path(directory) / "boss/summary.json").read_text())
+            # A changed initial checkpoint is refused before any evaluation.
+            (initial / "model.pt").write_bytes(b"replaced")
+            refused_fakes = _BranchFakes(panel_cases=2, start_shard=7)
+            refused, _ = _branch_run(refused_fakes, plan_path, Path(directory) / "refused",
+                                     reevaluate=Path(directory) / "train", panel="boss")
+        self.assertEqual(fakes.segments, [])
+        for key in ("start_shard", "decision_offset", "evaluate", "initial_checkpoint"):
+            self.assertEqual(written["plan"][key], plan[key], key)
+        for key in ("initial_checkpoint", "training_stream", "checkpoints", "learned_decisions"):
+            self.assertEqual(summary[key], first[key], key)
+        self.assertEqual(summary["training_stream"]["settled_win_rate"], 2 / 3)
+        self.assertIn(("prepare", "reevaluation-identity", "train", 7, "template.toml"), fakes.log)
+        # Once in the reevaluation preflight, then once per boss case; never for a warm start.
+        self.assertEqual([row for row in fakes.preflights if row[0] == str(initial)],
+                         [(str(initial), "evaluate")] * 3)
+        self.assertEqual(summary["evaluations"]["fresh-initial"]["checkpoint"], str(initial))
+        self.assertEqual(summary["panel"], "boss")
+        self.assertEqual(summary["result"], "complete")
+        self.assertIn("reevaluation_started", [event["event"] for event in events])
+        self.assertEqual(refused["reevaluation_refused"], {"type": "Stop", "message": "initial_checkpoint_changed"})
+        self.assertEqual(refused_fakes.evaluated, [])
+        self.assertEqual(refused["result"], "incomplete")
+
+    def test_settled_win_rate_window(self):
+        plan = {"target_learned_decisions": 16384, "decision_offset": 100, "initial_checkpoint": "x"}
+        counts = [{"victories": 9, "deaths": 9, "escaped": 9}, {"victories": 9, "deaths": 0, "escaped": 0},
+                  {"victories": 3, "deaths": 1, "escaped": 2}, None, {"victories": 2, "deaths": 0, "escaped": 1}]
+        stream = [{"start": start, "end": start + 4096, "fights": fights}
+                  for start, fights in zip((0, 4096, 8192, 12288, 16384), counts)]
+        result = baseline_entry.settled_win_rate(stream, plan)
+        # Segments starting at or after half the target (8192); escapes are neither wins nor losses.
+        self.assertEqual(result, {
+            "window": "second_half", "window_start_learned_decisions": 100 + 8192,
+            "window_end_learned_decisions": 100 + 20480, "segments": 3, "segments_without_fight_metrics": 1,
+            "victories": 5, "deaths": 1, "escaped": 3, "settled": 6, "settled_win_rate": 5 / 6})
+        empty = baseline_entry.settled_win_rate(stream[:2], plan)
+        self.assertEqual((empty["segments"], empty["settled_win_rate"], empty["window_end_learned_decisions"]),
+                         (0, None, None))
+        odd = baseline_entry.settled_win_rate([{"start": 1, "end": 2, "fights": counts[1]},
+                                               {"start": 2, "end": 3, "fights": counts[2]}],
+                                              {"target_learned_decisions": 3})
+        self.assertEqual((odd["window_start_learned_decisions"], odd["segments"], odd["victories"]), (2, 1, 3))
+        # Malformed or missing fight metrics are counted, never read as zero.
+        for fights in ({"victories": True, "deaths": 0, "escaped": 0}, {"victories": -1, "deaths": 0, "escaped": 0},
+                       {"victories": 1, "deaths": 0}, None):
+            report = SimpleNamespace(summary={"fights": {"standalone_fights": fights}})
+            self.assertIsNone(baseline_entry._fight_counts(report))
+        self.assertIsNone(baseline_entry._fight_counts(SimpleNamespace(summary={})))
+        # In a run: four training segments of 4096 against a 16384 target, so segments 3 and 4.
+        fakes = _BranchFakes(panel_cases=1, fights=lambda index: {
+            "victories": index, "deaths": 1, "escaped": 1, "completed": index + 2})
+        with tempfile.TemporaryDirectory() as directory:
+            _, plan_path = _branch_plan(directory, target_learned_decisions=16384)
+            summary, _ = _branch_run(fakes, plan_path, Path(directory) / "out")
+            written = json.loads((Path(directory) / "out/summary.json").read_text())
+        self.assertEqual(summary["segments"], 4)
+        stream = written["training_stream"]
+        self.assertEqual((stream["segments"], stream["victories"], stream["deaths"], stream["escaped"]),
+                         (2, 7, 2, 2))
+        self.assertEqual(stream["settled_win_rate"], 7 / 9)
+        self.assertEqual((stream["window_start_learned_decisions"], stream["window_end_learned_decisions"]),
+                         (8192, 16384))
 
 
 if __name__ == "__main__":

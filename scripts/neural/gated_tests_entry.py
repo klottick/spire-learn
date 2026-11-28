@@ -206,6 +206,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--transformer-cardmeta": "tests.neural.test_transformer_cardmeta",
         # The committed card-metadata snapshot against the pinned Gym's live descriptor, and S3 on the real snapshot.
         "--card-metadata-live": "tests.integration.test_card_metadata_live",
+        # The S1 -> PPO export and the critic scale (numpy and torch); the module's refusal class is stdlib.
+        "--distill-export": "tests.neural.test_distill_export.DistillExportTests",
     }
     if len(argv) == 1 and argv[0] in native_suites:
         if os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") != "1":

@@ -45,7 +45,7 @@ class S1ConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, field):
                     load_distill_config(path)
             path = self._copy(root, re.sub(r'distill = "[0-9a-f]{64}"', 'distill = "PLACEHOLDER"', text))
-            with self.assertRaises(ValueError):
+            with self.assertRaisesRegex(ValueError, "component hash disagrees"):
                 load_distill_config(path)
 
     def test_filled_s1_search_configs(self):

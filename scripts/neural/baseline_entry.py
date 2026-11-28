@@ -10,6 +10,23 @@ is replayed.
 ``--reevaluate PRIOR_OUTPUT`` skips training: it copies the prior summary's training
 record verbatim and re-runs only panel evaluation on its recorded checkpoints,
 writing to the new ``--output`` and never into the prior directory.
+
+Optional plan fields (absent means the historical fresh-weights baseline, byte for byte):
+
+- ``initial_checkpoint``: a checkpoint path (relative to ``--root``) that replaces the fresh
+  weights. It is preflighted for ``warm_start`` and ``evaluate``, recorded with its
+  ``checkpoint_sha256`` in ``summary['initial_checkpoint']``, warm-started by qualification and
+  the first segment, and evaluated as checkpoint 0 under the label ``fresh-initial``.
+- ``start_shard`` (default 0): qualification and training start at this stream shard.
+- ``decision_offset`` (default 0): learned-decision counts start here, so checkpoint 0 records
+  ``learned_decisions = decision_offset`` and training stops at ``decision_offset +
+  target_learned_decisions``. Both need ``initial_checkpoint``.
+- ``evaluate`` (default true): false skips every panel evaluation and the result does not
+  require evaluations (training pilots). Such a plan cannot be reevaluated.
+
+``summary['training_stream']`` is the settled training-stream win rate (victories over
+victories plus deaths of the standalone fights each training segment reports) over the second
+half of the run: the segments that start at or after half of the learned-decision target.
 """
 from __future__ import annotations
 
@@ -36,6 +53,36 @@ from spire_learn.neural.panel_eval import (  # noqa: E402  (after the sys.path s
 
 PLAN_SCHEMA = 'spire-learn-baseline-plan-v1'
 MIN_FREE_BYTES = 30 * 2**30
+EVALUATION_DISABLED = 'plan_evaluate_false'
+
+
+def checkpoint_sha256(path: Path) -> str:
+    """``distill_label_entry.checkpoint_sha256``'s rule: the canonical hash of {file name: file sha256}.
+
+    Every regular file of the checkpoint directory is covered, so the payloads and metadata are pinned.
+    """
+    from spire_learn.neural.scenario_support import content_sha256
+    path = Path(path)
+    if not path.is_dir():
+        raise ValueError(f'checkpoint {path} is not a checkpoint directory')
+    files = {}
+    for child in sorted(path.iterdir()):
+        if child.is_file():
+            digest = hashlib.sha256()
+            with child.open('rb') as stream:
+                for block in iter(lambda: stream.read(1 << 20), b''):
+                    digest.update(block)
+            files[child.name] = digest.hexdigest()
+    return content_sha256(files)
+
+
+def _branch(plan: Mapping) -> tuple[str | None, int, int]:
+    """(initial_checkpoint, start_shard, decision_offset) with the plan's defaults."""
+    return plan.get('initial_checkpoint'), plan.get('start_shard', 0), plan.get('decision_offset', 0)
+
+
+def _evaluates(plan: Mapping) -> bool:
+    return plan.get('evaluate', True)
 
 
 def _evaluation_order(plan: Mapping) -> tuple[str, ...]:
@@ -132,6 +179,17 @@ def load_plan(path: Path) -> dict:
         if plan.get('runner_timeout_seconds', 0) < needed:
             raise ValueError('runner_timeout_seconds must cover the total wall, the maximum GPU wait, '
                              'one poll and 1200 s of slack')
+    if 'initial_checkpoint' in plan and (not isinstance(plan['initial_checkpoint'], str)
+                                         or not plan['initial_checkpoint'].strip()):
+        raise ValueError('initial_checkpoint must be a non-empty checkpoint path')
+    for key in ('start_shard', 'decision_offset'):
+        if key in plan and (type(plan[key]) is not int or plan[key] < 0):
+            raise ValueError(f'{key} must be a non-negative integer')
+    if 'evaluate' in plan and type(plan['evaluate']) is not bool:
+        raise ValueError('evaluate must be true or false')
+    initial, start_shard, offset = _branch(plan)
+    if initial is None and (start_shard or offset):
+        raise ValueError('start_shard and decision_offset branch from an initial_checkpoint')
     return plan
 
 
@@ -222,7 +280,7 @@ _EVALUABLE_STOPS = frozenset({'target_reached', 'training_wall', 'stream_exhaust
 SUMMARY_SCHEMA = 'spire-learn-baseline-summary-v1'
 # Copied verbatim from a prior summary by ``--reevaluate``; nothing here is recomputed.
 _TRAINING_RECORD = ('stop_reason', 'learned_decisions', 'segments', 'checkpoints', 'config_sha256',
-                    'device', 'fault')
+                    'device', 'fault', 'initial_checkpoint', 'training_stream')
 
 
 def load_prior(prior: Path, plan: Mapping, output: Path) -> tuple[dict, str]:
@@ -233,6 +291,8 @@ def load_prior(prior: Path, plan: Mapping, output: Path) -> tuple[dict, str]:
     Training must have stopped evaluably and all recorded checkpoint paths must exist.
     """
     prior, output = Path(prior), Path(output)
+    if not _evaluates(plan):
+        raise ValueError('a plan with evaluate false has no panel evaluation to reevaluate')
     if not prior.is_absolute():
         raise ValueError('reevaluate path must be absolute')
     prior_resolved, output_resolved = prior.resolve(strict=True), output.resolve()
@@ -313,6 +373,8 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
         summary['reevaluated_from_summary_sha256'] = previous_sha256
 
     training_template = template
+    initial = _branch(plan)[0]
+    initial_path = None if initial is None else root / initial
 
     def prepare(name: str, *, split: str, shard_index: int):
         destination = prepared / name
@@ -339,12 +401,16 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
                 stream.write(_toml(document))
         if previous is None:
             fresh_path = _train_and_label(summary, deps, plan, prepare, storage_stop, budget, gate,
-                                          clock, journal, output)
+                                          clock, journal, output, initial=initial_path)
         else:
             journal.write('reevaluation_started', prior=str(reevaluate), prior_summary_sha256=previous_sha256,
                           stop_reason=summary['stop_reason'], learned_decisions=summary['learned_decisions'])
             fresh_path = _reevaluation_preflight(summary, deps, plan, prepare, storage_stop, journal)
-        if fresh_path is not None and summary['stop_reason'] in _EVALUABLE_STOPS:
+        if (fresh_path is not None and summary['stop_reason'] in _EVALUABLE_STOPS
+                and not _evaluates(plan)):
+            summary['evaluation_skipped'] = EVALUATION_DISABLED
+            journal.write('evaluation_skipped', reason=EVALUATION_DISABLED)
+        elif fresh_path is not None and summary['stop_reason'] in _EVALUABLE_STOPS:
             _evaluate_all(summary, deps, plan, root, template, recipe_path, output, budget, gate, clock,
                           journal, storage_stop, panel_kind=panel)
         else:
@@ -362,11 +428,14 @@ def run_baseline(root: Path, plan_path: Path, output: Path, *,
     return summary
 
 
-def _train_and_label(summary, deps, plan, prepare, storage_stop, budget, gate, clock, journal, output):
+def _train_and_label(summary, deps, plan, prepare, storage_stop, budget, gate, clock, journal, output, *,
+                     initial=None):
     """Train, label retained checkpoints and return the fresh-initial path (or None)."""
     recorded: list[dict] = []
+    stream: list[dict] = []
     try:
-        _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock, journal, output)
+        _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock, journal, output,
+               initial=initial, stream=stream)
     except _Stop as stop:
         summary['stop_reason'] = stop.reason
     except Exception as error:
@@ -382,6 +451,7 @@ def _train_and_label(summary, deps, plan, prepare, storage_stop, budget, gate, c
             chosen = _nearest(recorded, near)
             if chosen is not None and chosen is not final:
                 summary['checkpoints'].append({'label': f'near-{near}', **chosen})
+    summary['training_stream'] = settled_win_rate(stream, plan)
     journal.write('training_stopped', stop_reason=summary['stop_reason'],
                   learned_decisions=summary['learned_decisions'])
     return fresh_path
@@ -394,10 +464,19 @@ def _reevaluation_preflight(summary, deps, plan, prepare, storage_stop, journal)
         reason = storage_stop()
         if reason is not None:
             raise _Stop(reason)
-        # The same identity the training run used to preflight its fresh-initial checkpoint.
-        config = prepare('reevaluation-identity', split='train', shard_index=0)
+        # The same identity (and start shard) the training run used to preflight its checkpoint 0.
+        initial, start_shard, _ = _branch(plan)
+        config = prepare('reevaluation-identity', split='train', shard_index=start_shard)
         if config.environment_revision != plan['gym_revision']:
             raise _Stop('template_revision_differs_from_plan')
+        if initial is not None:
+            # Checkpoint 0 is the plan's initial checkpoint, unchanged since training recorded it.
+            record = summary.get('initial_checkpoint')
+            fresh = next((row for row in summary['checkpoints'] if row['label'] == 'fresh-initial'), None)
+            if not isinstance(record, Mapping) or fresh is None or fresh['path'] != record.get('path'):
+                raise _Stop('initial_checkpoint_record_missing')
+            if checkpoint_sha256(Path(record['path'])) != record.get('sha256'):
+                raise _Stop('initial_checkpoint_changed')
         for row in summary['checkpoints']:
             label = row['label']
             deps['preflight'](Path(row['path']), config.accepted_identities[0], purpose='evaluate')
@@ -448,6 +527,8 @@ def _evaluate_all(summary, deps, plan, root, template, recipe_path, output, budg
 
 def _result(summary, plan) -> str:
     evaluated = summary['evaluations']
+    if not _evaluates(plan):
+        return 'complete' if summary['stop_reason'] == 'target_reached' else 'incomplete'
     return ('complete' if summary['stop_reason'] == 'target_reached'
             and 'evaluation_fault' not in summary and 'reevaluation_refused' not in summary
             and all(evaluated.get(row['label'], {}).get('status') == 'complete'
@@ -460,16 +541,72 @@ def _result(summary, plan) -> str:
             else 'incomplete')
 
 
-def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock, journal, output) -> None:
+def _accept_initial(summary, deps, plan, config, initial: Path, journal) -> Path:
+    """Checkpoint 0 from the plan: preflighted for warm start and evaluation, then recorded with its sha256."""
+    offset = _branch(plan)[2]
+    identity = config.accepted_identities[0]
+    deps['preflight'](initial, identity, purpose='warm_start')
+    deps['preflight'](initial, identity, purpose='evaluate')
+    sha256 = checkpoint_sha256(initial)
+    summary['initial_checkpoint'] = {'path': str(initial), 'plan_path': plan['initial_checkpoint'],
+                                     'sha256': sha256, 'learned_decisions': offset}
+    summary['checkpoints'].append({'label': 'fresh-initial', 'path': str(initial), 'learned_decisions': offset})
+    journal.write('initial_checkpoint_accepted', checkpoint=initial, sha256=sha256, learned_decisions=offset)
+    return initial
+
+
+def _fight_counts(report) -> dict | None:
+    """The segment's standalone fight counts, or None when the report carries no usable metrics."""
+    fights = ((getattr(report, 'summary', None) or {}).get('fights') or {}).get('standalone_fights')
+    if not isinstance(fights, Mapping):
+        return None
+    counts = {key: fights.get(key) for key in ('victories', 'deaths', 'escaped')}
+    if any(type(value) is not int or value < 0 for value in counts.values()):
+        return None
+    return counts
+
+
+def settled_win_rate(stream, plan: Mapping) -> dict:
+    """Settled win rate over the segments starting at or after half of the target (pure).
+
+    ``stream`` rows carry ``start``/``end`` (learned decisions relative to ``decision_offset``) and
+    ``fights`` (``_fight_counts``). Escapes are neither wins nor losses; segments without fight
+    metrics are counted, never treated as zero.
+    """
+    offset, target = _branch(plan)[2], plan['target_learned_decisions']
+    window = [row for row in stream if 2 * row['start'] >= target]
+    measured = [row['fights'] for row in window if row['fights'] is not None]
+    totals = {key: sum(counts[key] for counts in measured) for key in ('victories', 'deaths', 'escaped')}
+    settled = totals['victories'] + totals['deaths']
+    return {'window': 'second_half', 'window_start_learned_decisions': offset + (target + 1) // 2,
+            'window_end_learned_decisions': offset + window[-1]['end'] if window else None,
+            'segments': len(window), 'segments_without_fight_metrics': len(window) - len(measured),
+            **totals, 'settled': settled,
+            'settled_win_rate': totals['victories'] / settled if settled else None}
+
+
+def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock, journal, output, *,
+           initial=None, stream=None) -> None:
+    stream = [] if stream is None else stream
+    _, start_shard, offset = _branch(plan)
     reason = storage_stop()
     if reason is not None:
         raise _Stop(reason)
-    # Fresh-initial: untrained weights saved once; every later segment descends from them.
-    config = prepare('shard-0-initial', split='train', shard_index=0)
+    config = prepare(f'shard-{start_shard}-initial', split='train', shard_index=start_shard)
     if config.environment_revision != plan['gym_revision']:
         raise _Stop('template_revision_differs_from_plan')
     summary['config_sha256'] = config.config_sha256
     summary['device'] = getattr(config, 'device', None)
+    if initial is not None:
+        fresh_path = _accept_initial(summary, deps, plan, config, Path(initial), journal)
+    else:
+        fresh_path = _save_fresh_initial(summary, deps, config, gate, journal, output)
+    _qualify_and_train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock, journal,
+                       fresh_path, start_shard, offset, stream)
+
+
+def _save_fresh_initial(summary, deps, config, gate, journal, output) -> Path:
+    # Fresh-initial: untrained weights saved once; every later segment descends from them.
     fresh_path = output / 'fresh-initial'
     gate.wait(config, 'fresh_initial')
     runtime = deps['create_runtime'](config, purpose='train')
@@ -488,9 +625,13 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, c
         raise _Stop('fresh_initial_roundtrip_mismatch')
     summary['checkpoints'].append({'label': 'fresh-initial', 'path': str(fresh_path), 'learned_decisions': 0})
     journal.write('fresh_initial_saved', checkpoint=fresh_path)
+    return fresh_path
 
+
+def _qualify_and_train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, clock, journal,
+                       fresh_path, start_shard, offset, stream) -> None:
     # Qualification: one short warm start validates scenarios, sampling and updates natively.
-    config = prepare('qualification', split='train', shard_index=0)
+    config = prepare('qualification', split='train', shard_index=start_shard)
     gate.wait(config, 'qualification')
     try:
         result = deps['run_stream_segment'](config, purpose='warm_start', checkpoint=fresh_path,
@@ -505,7 +646,7 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, c
     journal.write('qualification_passed', checkpoint=result['checkpoint'],
                   learned_decisions=result['saved_prefix']['learned_decisions'])
 
-    parent, purpose, shard_index, prefix = fresh_path, 'warm_start', 0, None
+    parent, purpose, shard_index, prefix = fresh_path, 'warm_start', start_shard, None
     while True:
         if clock() >= budget.training:
             raise _Stop('training_wall')
@@ -530,12 +671,15 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, c
                 summary['fault'] = {'type': 'SegmentFailure', 'message': str(report_summary.get('status'))}
                 raise _Stop('segment_fault')
             raise _Stop('segment_without_checkpoint')
-        previous = (prefix or {}).get('learned_decisions', 0)
+        # The runner counts from the warm start; the plan's decision_offset places that on the run.
+        previous = offset + (prefix or {}).get('learned_decisions', 0)
         prefix = result['saved_prefix']
-        decisions = prefix['learned_decisions']
+        decisions = offset + prefix['learned_decisions']
         row = {'path': str(result['checkpoint']), 'learned_decisions': decisions,
                'shard_index': shard_index, 'segment': summary['segments']}
         recorded.append(row)
+        stream.append({'start': previous - offset, 'end': decisions - offset,
+                       'fights': _fight_counts(result['report'])})
         summary['learned_decisions'] = decisions
         progress = {}
         if plan.get('max_turn_actions') is not None:
@@ -545,7 +689,7 @@ def _train(summary, deps, plan, prepare, storage_stop, recorded, budget, gate, c
         if decisions <= previous:
             raise _Stop('training_wall' if clock() >= budget.training else 'segment_without_progress')
         parent, purpose = result['checkpoint'], 'resume'
-        if decisions >= plan['target_learned_decisions']:
+        if decisions - offset >= plan['target_learned_decisions']:
             raise _Stop('target_reached')
         if result['next_shard'] is None:
             raise _Stop('stream_exhausted')

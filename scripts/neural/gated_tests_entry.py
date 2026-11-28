@@ -202,6 +202,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--student-eval": "tests.neural.test_model.StudentEvalTests",
         # The entity transformer (S2): build, tokens, references, scoring, checkpoints, the runtime path.
         "--transformer": "tests.neural.test_transformer",
+        # The S1 -> PPO export and the critic scale (numpy and torch); the module's refusal class is stdlib.
+        "--distill-export": "tests.neural.test_distill_export.DistillExportTests",
     }
     if len(argv) == 1 and argv[0] in native_suites:
         if os.environ.get("SPIRE_LEARN_RUN_NATIVE_INTEGRATION") != "1":

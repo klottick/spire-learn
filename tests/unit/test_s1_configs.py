@@ -23,39 +23,50 @@ from scripts.neural.student_eval_entry import check_template, load_plan  # noqa:
 FOLDER = ROOT / "configs/neural/distill-gym-1.2.5"
 R1_MODEL_HASH = "4fb628e06bf4952847795ac5d8548d12dfeede4c97e874ab843857ae0f91cd2f"
 R1_TEMPLATE = ROOT / "configs/neural/baseline-standard-1.2.4/template.toml"
+MIDDLE_TAU = 0.021474358974358898  # distill/tau-dataset-v1/tau.json p50
+S1_GRADIENT_STEPS = 17120
 STUDENT = ModelConfig(embedding_width=16, hidden_width=64, max_parameters=10_000_000, value_heads=3)
 
 
 class S1ConfigTests(unittest.TestCase):
-    def test_training_config_refuses_each_placeholder(self):
+    def _copy(self, root: Path, text: str) -> Path:
+        path = root / "s1.toml"
+        path.write_text(text.replace('output_root = "../../../', f'output_root = "{ROOT}/'))
+        return path
+
+    def test_loader_refuses_each_placeholder(self):
         text = (FOLDER / "s1-pilot.toml").read_text()
-        self.assertEqual(len(re.findall(r'"PLACEHOLDER"', text)), 3)
-        with self.assertRaisesRegex(ValueError, "distill.tau"):
-            load_distill_config(FOLDER / "s1-pilot.toml")
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            path = root / "s1-pilot.toml"
-            tau_only = text.replace('tau = "PLACEHOLDER"', "tau = 0.05")
-            path.write_text(tau_only.replace('output_root = "../../../', f'output_root = "{ROOT}/'))
-            with self.assertRaisesRegex(ValueError, "distill.gradient_steps"):
+            for pattern, field in ((r"tau = [0-9.]+", "distill.tau"),
+                                   (r"gradient_steps = [0-9]+", "distill.gradient_steps")):
+                key = pattern.split(" ")[0]
+                path = self._copy(root, re.sub(pattern, f'{key} = "PLACEHOLDER"', text, count=1))
+                with self.assertRaisesRegex(ValueError, field):
+                    load_distill_config(path)
+            path = self._copy(root, re.sub(r'distill = "[0-9a-f]{64}"', 'distill = "PLACEHOLDER"', text))
+            with self.assertRaisesRegex(ValueError, "component hash disagrees"):
                 load_distill_config(path)
 
-    def test_filled_training_config_loads_with_the_pilot_settings(self):
-        text = (FOLDER / "s1-pilot.toml").read_text()
-        hyper = DistillHyperparameters(tau=0.05, learning_rate=0.0003, batch_rows=512, gradient_steps=18000,
-                                       data_fraction=1.0)
-        filled = (text.replace('tau = "PLACEHOLDER"', "tau = 0.05")
-                  .replace('gradient_steps = "PLACEHOLDER"', "gradient_steps = 18000")
-                  .replace('distill = "PLACEHOLDER"', f'distill = "{distill_config_hash(hyper)}"'))
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "s1-pilot.toml"
-            path.write_text(filled.replace('output_root = "../../../', f'output_root = "{ROOT}/'))
-            config = load_distill_config(path)
-        self.assertEqual(config.model, STUDENT)
-        self.assertEqual((config.seed, config.eval_every, config.device), (1, 1000, "cuda:0"))
-        self.assertEqual((config.distill.learning_rate, config.distill.batch_rows, config.distill.data_fraction),
-                         (0.0003, 512, 1.0))
-        self.assertEqual(config.identity.model_id, "spire-learn-combat-ff-standard-v1")
+    def test_filled_s1_search_configs(self):
+        """Pilot (3e-4) and the learning-rate search: the middle tau, delta 12's steps, one seed."""
+        import tomllib
+        pilot = tomllib.loads((FOLDER / "s1-pilot.toml").read_text())
+        for name, rate in (("s1-pilot", 0.0003), ("s1-lr-1e-4", 0.0001), ("s1-lr-1e-3", 0.001)):
+            with self.subTest(name=name):
+                config = load_distill_config(FOLDER / f"{name}.toml")
+                hyper = DistillHyperparameters(tau=MIDDLE_TAU, learning_rate=rate, batch_rows=512,
+                                               gradient_steps=S1_GRADIENT_STEPS, data_fraction=1.0)
+                self.assertEqual(config.distill, hyper)
+                self.assertEqual(config.model, STUDENT)
+                self.assertEqual((config.seed, config.eval_every, config.device), (1, 1000, "cuda:0"))
+                self.assertEqual(config.identity.model_id, "spire-learn-combat-ff-standard-v1")
+                document = tomllib.loads((FOLDER / f"{name}.toml").read_text())
+                self.assertEqual(document["identity"]["config_hashes"]["distill"], distill_config_hash(hyper))
+                self.assertTrue(document["output_root"].endswith(f"/distill/train/{name}"))
+                for key in ("environment", "model", "runtime", "schema", "mode", "seed"):
+                    self.assertEqual(document[key], pilot[key])
+        self.assertEqual(S1_GRADIENT_STEPS, round(6 * 1_460_864 / 512))
 
     def test_model_matches_r1_apart_from_value_heads(self):
         r1 = _canonical_hash(model_config_hash_payload(ModelConfig(16, 64, 10_000_000)))

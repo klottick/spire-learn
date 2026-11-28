@@ -1,15 +1,9 @@
 # S1 distillation training config (Task 9): the current FF network, spire-learn-combat-ff-standard-v1,
 # with PPO baseline r1's model settings plus three value heads. This file grants no execution authority.
 #
-# THIS CONFIG IS NOT RUNNABLE UNTIL FILLED. Three values are PLACEHOLDERs and load_distill_config
-# refuses the file while any remains (tau and gradient_steps are not numbers; the identity distill
-# hash is checked against the authored settings):
-#   tau             the MIDDLE tau candidate: the 50th percentile of strictly positive gaps between the
-#                   top two distinct teacher values, on the pilot's training rows only, floored at 0.01
-#                   (delta 11). It comes from the pilot shards, so it is not known yet.
-#   gradient_steps  round(6 * train_rows / batch_rows), fixed once from the S1 pilot (delta 12).
-#   config_hashes.distill  distill_config_hash(DistillHyperparameters(...)) of the filled [distill].
-# Fill all three together; the model hash below is already final.
+# The S1 pilot (Task 9 step 1): seed 1, the middle tau, learning rate 3e-4. It also counts as the
+# 3e-4 run of the learning-rate search (step 2). Dataset: distill/dataset-v1/dataset.json
+# (sha256 f1af38cb…, 32 chunks, 1,460,864 train rows; chunk 1168 excluded, Gym bead spire-3zm).
 schema = "spire-learn-distill-config-v1"
 mode = "standard-standalone"
 output_root = "../../../artifacts/development/neural-combat/distill/train/s1-pilot"
@@ -30,10 +24,10 @@ max_parameters = 10000000
 value_heads = 3
 
 [distill]
-tau = "PLACEHOLDER"  # middle tau from the pilot shards (delta 11); refused until a positive number
+tau = 0.021474358974358898  # middle tau candidate (delta 11), from distill/tau-dataset-v1/tau.json
 learning_rate = 0.0003
 batch_rows = 512
-gradient_steps = "PLACEHOLDER"  # round(6 * train_rows / 512); refused until a positive integer
+gradient_steps = 17120  # round(6 * 1460864 train rows / 512) (delta 12)
 data_fraction = 1.0
 
 [identity]
@@ -47,7 +41,7 @@ standard-standalone = "spire-learn-standard-combat-compact-v1@49cd162afb9710bc6a
 
 [identity.config_hashes]
 model = "70e30870de99753f202861dee764bfd1a27d9c9e1fc216e5ac4db055ebfe33d8"
-distill = "PLACEHOLDER"  # distill_config_hash of the filled [distill] table
+distill = "38d0f40c84a3dcfb9a3bea2c4254ae25ccc697b5bb756561c3e76bd89798bee2"
 
 [runtime]
 gpu_uuid = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"

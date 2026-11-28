@@ -1,0 +1,43 @@
+# S1 learning-rate search (Task 9 step 2): as s1-pilot.toml (seed 1, the middle tau) but learning
+# rate 1e-4. This file grants no execution authority.
+schema = "spire-learn-distill-config-v1"
+mode = "standard-standalone"
+output_root = "../../../artifacts/development/neural-combat/distill/train/s1-lr-1e-4"
+device = "cuda:0"
+seed = 1
+eval_every = 1000
+
+[environment]
+gym_revision = "731fca0e0341d80e7cf08a8be7a03be1fa32c3f1"
+standard_view_layout = "compact"
+standard_view_preset = "standard-combat-compact-v1"
+standard_view_fingerprint = "49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8"
+
+[model]
+embedding_width = 16
+hidden_width = 64
+max_parameters = 10000000
+value_heads = 3
+
+[distill]
+tau = 0.021474358974358898  # middle tau candidate (delta 11), from distill/tau-dataset-v1/tau.json
+learning_rate = 0.0001
+batch_rows = 512
+gradient_steps = 17120  # round(6 * 1460864 train rows / 512) (delta 12)
+data_fraction = 1.0
+
+[identity]
+model_id = "spire-learn-combat-ff-standard-v1"
+features_id = "spire-learn-combat-features-standard-v1"
+action_id = "spire-learn-combat-dispatch-v1"
+objective_id = "spire-learn-combat-distill-v1"
+
+[identity.accepted_raw_mode_mappings]
+standard-standalone = "spire-learn-standard-combat-compact-v1@49cd162afb9710bc6a27ed78eb6ef6dd84af83ae20317e0fffb106b5963ec3e8+gym-1.2.4"
+
+[identity.config_hashes]
+model = "70e30870de99753f202861dee764bfd1a27d9c9e1fc216e5ac4db055ebfe33d8"
+distill = "e0fe470dde6d8ca836753fc643460da268b80055652c9b9ec880364b8614c8fe"
+
+[runtime]
+gpu_uuid = "GPU-c05e0ce3-c1c2-0c54-14e6-8a4a2eccaa1d"
